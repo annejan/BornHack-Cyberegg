@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+// Code is for NRF52840
 use hello_graphics::{
     board, draw_graphics,
     fw::epd::{EpdBus, EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
@@ -13,11 +14,6 @@ use ssd1680::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-// Display dimensions, for this display always the same
-// const ROWS: u16 = 152;
-// const COLS: u8 = 152;
-
-// Code is for NRF52840
 // Example to port: https://github.com/mbv/esp32-ssd1680/blob/main/src/main.rs
 
 // Pin assignments SSD1680 EDP
@@ -28,11 +24,10 @@ async fn main(_spawner: Spawner) {
 
     // EPD display buffers
     let dimension = EpdConfig::to_dimensions();
-    const BUF_SIZE: usize = EpdConfig::BUF_SIZE;
-    static BLACK_BUF: StaticCell<[u8; BUF_SIZE]> = StaticCell::new();
-    static RED_BUF: StaticCell<[u8; BUF_SIZE]> = StaticCell::new();
-    let black_buffer = BLACK_BUF.init([0; BUF_SIZE]);
-    let red_buffer = RED_BUF.init([0; BUF_SIZE]);
+    static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    let black_buffer = BLACK_BUF.init([0; EpdConfig::BUF_SIZE]);
+    let red_buffer = RED_BUF.init([0; EpdConfig::BUF_SIZE]);
 
     // LED (Low active)
     let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);

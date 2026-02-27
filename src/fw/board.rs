@@ -3,6 +3,12 @@
 /// Board pin assignments for NRF52840 with SSD1680 EPD
 
 /// Macro to extract a board pin by name
+/// 
+/// Pins configured for **Cyber Ægg Prototype V2 board**
+/// 
+/// # Example usage:
+/// 
+/// let charge_pin = board!(p, charge);
 #[macro_export]
 #[rustfmt::skip]
 macro_rules! board {
@@ -18,7 +24,7 @@ macro_rules! board {
     ($p:expr, led_blue)   => { $p.P0_02 };
 
     // EPD display (SDD1680)
-    ($p:expr, epd_busy)   => { $p.P0_14 };
+    ($p:expr, epd_busy )  => { $p.P0_14 };
     ($p:expr, epd_reset)  => { $p.P0_11 };
     ($p:expr, epd_dc)     => { $p.P0_12 };
     ($p:expr, epd_csn)    => { $p.P1_09 };

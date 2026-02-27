@@ -1,0 +1,22 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "target": "thumbv7em-none-eabihf",
+          "features": ["embassy"],
+          "noDefaultFeatures": true,
+          "allTargets": true,
+          "buildScripts": {
+            "enable": false,
+          },
+        },
+        "checkOnSave": true,
+        "check": {
+          "command": "check",
+          "extraArgs": ["--bin", "embassy", "--features", "embassy"],
+        },
+      },
+    },
+  },
+}

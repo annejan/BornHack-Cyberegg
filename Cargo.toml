@@ -76,7 +76,7 @@ embassy = [
 ]
 
 [workspace]
-harness = false
+# harness = false
 
 [lib]
 harness = false
