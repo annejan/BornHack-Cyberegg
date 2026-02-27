@@ -2,7 +2,7 @@
 #![no_main]
 
 use hello_graphics::{
-    draw_graphics,
+    board, draw_graphics,
     fw::epd::{EpdBus, EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
 };
 
@@ -34,36 +34,23 @@ async fn main(_spawner: Spawner) {
     let black_buffer = BLACK_BUF.init([0; BUF_SIZE]);
     let red_buffer = RED_BUF.init([0; BUF_SIZE]);
 
-    // Pin assignments
-
     // LED (Low active)
-    let mut led_red = Output::new(p.P1_07, Level::High, OutputDrive::Standard);
-    let mut _led_green = Output::new(p.P1_15, Level::High, OutputDrive::Standard);
-    let mut _led_blue = Output::new(p.P0_02, Level::High, OutputDrive::Standard);
-    // LEDs will be tested later
+    let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
 
-    let busy_pin = p.P0_14;
-    let resetn_pin = p.P0_11;
-    let dc_pin = p.P0_12;
-    let csn_pin = p.P1_09;
-    // let sck_pin = Output::new(p.P0_08, Level::Low, OutputDrive::Standard);
-    let sck_pin = p.P0_08;
-    let mosi_pin = p.P0_27;
-
-    let test_str = "test";
-
-    defmt::info!("{}", test_str);
-    defmt::info!("{}", test_str);
+    defmt::info!("Init EPD");
 
     static BUS_CELL: StaticCell<EpdBus> = StaticCell::new();
-    let bus = BUS_CELL.init(init_epd_bus(p.SPI3, sck_pin, mosi_pin));
-
+    let bus = BUS_CELL.init(init_epd_bus(
+        board!(p, epd_spi),
+        board!(p, epd_sck),
+        board!(p, epd_mosi),
+    ));
     let mut display: EpdGfx<'_> = init_epd(
         bus,
-        busy_pin,
-        resetn_pin,
-        dc_pin,
-        csn_pin,
+        board!(p, epd_busy),
+        board!(p, epd_reset),
+        board!(p, epd_dc),
+        board!(p, epd_csn),
         dimension,
         black_buffer,
         red_buffer,
@@ -73,7 +60,10 @@ async fn main(_spawner: Spawner) {
     let _ = display.reset().await;
     display.clear(WHITE);
 
+    defmt::info!("EPD initialized");
+    defmt::info!("Draw graphics");
     draw_graphics(&mut display).unwrap();
+    defmt::info!("Entering main loop...");
 
     loop {
         led_red.set_low();
