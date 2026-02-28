@@ -2,14 +2,17 @@
 #![no_main]
 
 // Code is for NRF52840
+use embassy_executor::Spawner;
+use embassy_nrf::gpio::Pull;
+use embassy_nrf::{
+    gpio::{Level, Output, OutputDrive},
+    gpiote::{InputChannel, InputChannelPolarity},
+};
+use embassy_time::Timer;
 use hello_graphics::{
     board, draw_graphics,
     fw::epd::{EpdBus, EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
 };
-
-use embassy_executor::Spawner;
-use embassy_nrf::gpio::{Level, Output, OutputDrive};
-use embassy_time::Timer;
 use ssd1680::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -31,6 +34,8 @@ async fn main(_spawner: Spawner) {
 
     // LED (Low active)
     let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
+    let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
+    let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
 
     defmt::info!("Init EPD");
 
@@ -60,15 +65,48 @@ async fn main(_spawner: Spawner) {
     draw_graphics(&mut display).unwrap();
     defmt::info!("Entering main loop...");
 
-    loop {
-        led_red.set_low();
-        Timer::after_millis(50).await;
-        led_red.set_high();
-        Timer::after_millis(4950).await;
+    // Configure button input channels
+    let mut ch_can = InputChannel::new(
+        p.GPIOTE_CH0,
+        board!(p, btn_can),
+        Pull::Up,
+        InputChannelPolarity::Toggle,
+    );
+    let mut ch_exe = InputChannel::new(
+        p.GPIOTE_CH1,
+        board!(p, btn_exe),
+        Pull::Up,
+        InputChannelPolarity::Toggle,
+    );
 
-        let _ = display.reset().await;
-        let _ = display.update().await;
-        defmt::info!("Updated EPD");
-        let _ = display.deep_sleep().await.unwrap();
-    }
+    // Button press handlers that test LEDs
+    let button1 = async {
+        loop {
+            ch_can.wait().await;
+            led_green.set_level(ch_can.pin().get_level());
+        }
+    };
+
+    let button2 = async {
+        loop {
+            ch_exe.wait().await;
+            led_blue.set_level(ch_exe.pin().get_level());
+        }
+    };
+
+    let main_loop = async {
+        loop {
+            led_red.set_low();
+            Timer::after_millis(50).await;
+            led_red.set_high();
+            Timer::after_millis(4950).await;
+
+            let _ = display.reset().await;
+            let _ = display.update().await;
+            defmt::info!("Updated EPD");
+            let _ = display.deep_sleep().await.unwrap();
+        }
+    };
+
+    embassy_futures::join::join3(main_loop, button1, button2).await;
 }

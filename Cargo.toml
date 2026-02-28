@@ -56,7 +56,8 @@ opt-level = "s" # or "z" for even smaller size
 lto = true
 
 [features]
-default = ["simulator"]
+# default = ["simulator"]
+default = ["embassy"]
 simulator = ["embedded-graphics-simulator"]
 embassy = [
     "cortex-m",
