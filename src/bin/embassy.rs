@@ -7,7 +7,8 @@ use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_time::Timer;
-use hello_graphics::DISPLAY_STATE;
+use hello_graphics::fw::sx1262::run_lora_test;
+use hello_graphics::{DISPLAY_STATE, health_err, update_health, with_health};
 use hello_graphics::{
     board, draw_graphics,
     fw::epd::{EpdBus, EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
@@ -65,7 +66,14 @@ async fn main(_spawner: Spawner) {
 
     defmt::info!("EPD initialized");
     defmt::info!("Draw graphics");
-    draw_graphics(&mut display).unwrap();
+    let health_str = with_health!(|h| h.to_string());
+    match draw_graphics(&mut display, &health_str) {
+        Ok(_) => {}
+        Err(_) => {
+            health_err!(epd, "Failed to draw graphics");
+            // Continue with the rest of the program, error is set
+        }
+    }
     defmt::info!("Entering main loop...");
 
     // Configure button input channels
@@ -95,34 +103,53 @@ async fn main(_spawner: Spawner) {
             // Handle the specific button that was pressed (active low)
             match index {
                 0 => {
+                    update_health!(|f| f.buttons.up.seen_low = true);
                     led_green.set_low();
                     defmt::info!("Cancel button {}", btn_can.is_low());
                     btn_can.wait_for_rising_edge().await;
                     led_green.set_high();
+                    update_health!(|f| f.buttons.up.seen_high = true);
                 }
                 1 => {
                     led_blue.set_low();
                     defmt::info!("Execute button pressed");
+                    update_health!(|f| f.buttons.execute.seen_low = true);
                     btn_exe.wait_for_rising_edge().await;
                     led_blue.set_high();
+                    update_health!(|f| f.buttons.execute.seen_high = true);
                 }
                 2 => {
                     DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up());
                     defmt::info!("Menu up");
+                    update_health!(|f| f.buttons.up.seen_low = true);
+                    joy_up.wait_for_rising_edge().await;
+                    update_health!(|f| f.buttons.up.seen_high = true);
                 }
                 3 => {
                     DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down());
                     defmt::info!("Menu down");
+                    update_health!(|f| f.buttons.down.seen_low = true);
+                    joy_down.wait_for_rising_edge().await;
+                    update_health!(|f| f.buttons.down.seen_high = true);
                 }
                 4 => {
                     defmt::info!("Joystick left");
+                    update_health!(|f| f.buttons.left.seen_low = true);
+                    joy_up.wait_for_rising_edge().await;
+                    update_health!(|f| f.buttons.left.seen_high = true);
                 }
                 5 => {
                     defmt::info!("Joystick right");
+                    update_health!(|f| f.buttons.right.seen_low = true);
+                    joy_down.wait_for_rising_edge().await;
+                    update_health!(|f| f.buttons.right.seen_high = true);
                 }
                 6 => {
                     DISPLAY_STATE.lock(|f| f.borrow_mut().set_fire_button(joy_fire.is_low()));
                     defmt::info!("Joystick fire: {}", joy_fire.is_low());
+                    update_health!(|f| f.buttons.fire.seen_low = true);
+                    joy_fire.wait_for_rising_edge().await;
+                    update_health!(|f| f.buttons.fire.seen_high = true);
                 }
                 _ => unreachable!(),
             }
@@ -144,8 +171,24 @@ async fn main(_spawner: Spawner) {
             let _ = display.update().await;
             defmt::info!("Updated EPD");
             let _ = display.deep_sleep().await.unwrap();
+
+            // Also print health state to the console
+            let health_str = with_health!(|f| f.to_string());
+            defmt::info!("Health: {}", health_str.as_str());
         }
     };
 
-    embassy_futures::join::join3(main_loop, run_nfc, buttons).await;
+    let run_lora = run_lora_test(
+        board!(p, lora_spi),
+        board!(p, lora_sck),
+        board!(p, lora_mosi),
+        board!(p, lora_miso),
+        board!(p, lora_rst),
+        board!(p, lora_nss),
+        board!(p, lora_busy),
+        board!(p, lora_dio1),
+        board!(p, lora_rf_sw),
+    );
+
+    embassy_futures::join::join4(main_loop, run_nfc, run_lora, buttons).await;
 }

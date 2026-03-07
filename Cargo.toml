@@ -43,6 +43,10 @@ embassy-embedded-hal = { version = "0.5.0", optional = true }
 defmt-rtt = { version = "1.0.0", optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 ssd1680 = { version = "0.16", path = "./vendor/ssd1680", optional = true }
+sx126x = { version = "0.3.0", optional = true }
+embedded-hal = { version = "1.0", optional = true }
+embedded-hal-bus = { version = "0.2", optional = true }
+heapless = { version = "0.9.2", optional = true }
 
 [profile.dev]
 debug = 2
@@ -69,10 +73,14 @@ embassy = [
     "embassy-nrf",
     "embassy-sync",
     "embassy-time",
+    "embedded-hal",
+    "embedded-hal-bus",
     "fixed",
+    "heapless",
     "panic-probe",
     "ssd1680",
     "static_cell",
+    "sx126x",
 ]
 
 # [workspace]

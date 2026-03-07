@@ -11,7 +11,7 @@ use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
     pixelcolor::BinaryColor,
     prelude::*,
-    primitives::{Circle, PrimitiveStyle},
+    primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 
@@ -23,6 +23,7 @@ use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 use std::sync::Mutex;
 
 pub const FOREGROUND_COLOR: BinaryColor = BinaryColor::Off;
+pub const BACKGROUND_COLOR: BinaryColor = BinaryColor::On;
 
 // Have a struct here that tracks the state of the display
 // this struct needs to be async safe
@@ -132,7 +133,7 @@ macro_rules! with_display_state_mut {
 }
 
 /// Draw your graphics to any display that implements DrawTarget
-pub fn draw_graphics<D>(display: &mut D) -> Result<(), D::Error>
+pub fn draw_graphics<D>(display: &mut D, health_str: &str) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = BinaryColor>,
 {
@@ -148,8 +149,17 @@ where
         .into_styled(PrimitiveStyle::with_fill(FOREGROUND_COLOR))
         .draw(display)?;
 
+    // Bottom 20 pixels of the screen white using rectangle
+    Rectangle::new(Point::new(0, 108), Size::new(152, 44))
+        .into_styled(PrimitiveStyle::with_fill(BACKGROUND_COLOR))
+        .draw(display)?;
+    Rectangle::new(Point::new(0, 108), Size::new(152, 44))
+        .into_styled(PrimitiveStyle::with_stroke(FOREGROUND_COLOR, 2))
+        .draw(display)?;
+
     // Put text "HELLO GRAPHICS" on the display, centered in white
     let text_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+    let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BinaryColor::Off);
     let item_text =
         // DISPLAY_STATE.lock(|f| -> &'static str { f.borrow().get_current_menu_item().unwrap() });
         with_display_state!(| state: &Ref<'_, DisplayState<3>> | state.get_current_menu_item().unwrap());
@@ -160,6 +170,14 @@ where
         centered,
     );
     text.draw(display)?;
+    // Print health status string and print it in the bottom left corner
+    let health = Text::with_text_style(
+        health_str,
+        Point::new(10, 128),
+        text_style_inverted,
+        TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
+    );
+    health.draw(display)?;
 
     Ok(())
 }

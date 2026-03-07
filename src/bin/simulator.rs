@@ -15,7 +15,7 @@ fn main() -> Result<(), core::convert::Infallible> {
     let mut display: SimulatorDisplay<BinaryColor> = SimulatorDisplay::new(Size::new(152, 152));
     let mut window = Window::new("Hello Graphics", &OutputSettings::default());
 
-    draw_graphics(&mut display).unwrap();
+    draw_graphics(&mut display, "test123\ntest").unwrap();
 
     with_display_state_mut!(|state: &mut DisplayState<3>| {
         state.set_menu_pos(0);
@@ -69,7 +69,7 @@ fn main() -> Result<(), core::convert::Infallible> {
             }
         }
         if need_redraw {
-            draw_graphics(&mut display);
+            draw_graphics(&mut display, "test123\ntest")?;
             need_redraw = false;
         }
     }
