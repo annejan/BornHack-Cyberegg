@@ -130,7 +130,7 @@ pub fn init_epd<'a>(
     let controller = ssd1680::Interface::new(spi_dev, busy_in, dc_out, resetn_out);
     let config = Builder::new()
         .dimensions(dimension)
-        .rotation(Rotation::Rotate270)
+        .rotation(Rotation::Rotate0)
         .lut(&LUT)
         .build()
         .unwrap();

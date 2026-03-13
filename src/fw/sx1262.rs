@@ -11,7 +11,8 @@ use embassy_nrf::{
     spim::{self, Frequency, InterruptHandler, Spim},
 };
 use embassy_time::Timer;
-use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
+use embassy_time::Delay;
+use embedded_hal_bus::spi::ExclusiveDevice;
 
 use sx126x::SX126x;
 use sx126x::conf::Config as LoRaConfig;
@@ -37,7 +38,7 @@ pub enum LoraError {
 
 pub struct SimpleLoRa<'a> {
     lora: SX126x<
-        ExclusiveDevice<Spim<'a>, Output<'a>, NoDelay>,
+        ExclusiveDevice<Spim<'a>, Output<'a>, Delay>,
         Output<'a>,
         Input<'a>,
         Output<'a>,
@@ -79,7 +80,7 @@ impl<'a> SimpleLoRa<'a> {
         // ExclusiveDevice combines the SPI bus + CS pin into a SpiDevice, as required by sx126x 0.3.
         // AlwaysHigh is a dummy DIO1 for the sx126x struct; real async DIO1 waiting is done below
         // via lora_dio1.wait_for_rising_edge() so the executor is not blocked.
-        let spi_dev = ExclusiveDevice::new_no_delay(spim, nss).unwrap();
+        let spi_dev = ExclusiveDevice::new(spim, nss, Delay).unwrap();
 
         let conf = build_config();
         let mut lora = SX126x::new(spi_dev, (nreset, busy, ant, AlwaysHigh));

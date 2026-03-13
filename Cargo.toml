@@ -48,6 +48,10 @@ embedded-hal = { version = "1.0", optional = true }
 embedded-hal-bus = { version = "0.2", optional = true }
 heapless = { version = "0.9.2", optional = true }
 
+[package.metadata.tools]
+# cargo install uf2conv
+uf2conv = "0.1"
+
 [profile.dev]
 debug = 2
 opt-level = 1
