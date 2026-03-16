@@ -7,6 +7,7 @@ use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_time::Timer;
+use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::sx1262::run_lora_test;
 use hello_graphics::{
     board, draw_graphics,
@@ -96,6 +97,7 @@ async fn main(_spawner: Spawner) {
     let joy_right = Input::new(board!(p, joy_right), Pull::Up);
     let joy_fire = Input::new(board!(p, joy_fire), Pull::Up);
 
+    let mut button_rcvr = BTN_WATCH.receiver().unwrap();
     let buttons = run_buttons(
         btn_can, btn_exe, joy_up, joy_down, joy_left, joy_right, joy_fire,
     );
@@ -110,7 +112,7 @@ async fn main(_spawner: Spawner) {
         OutputDrive::Standard,
     ));
     // buzzer.play_melody(melodies::IMPERIAL_MARCH).await;
-    buzzer.play_melody(melodies::STARTUP).await;
+    //buzzer.play_melody(melodies::STARTUP).await;
 
     // Blink all three LEDs once to signal firmware has started
     led_red.set_low();
@@ -122,9 +124,13 @@ async fn main(_spawner: Spawner) {
     led_blue.set_high();
     Timer::after_millis(200).await;
 
+    // Number of fast B&W updates before a full tricolor refresh.
+    const FAST_UPDATES_PER_FULL: u32 = 60;
+
     defmt::info!("Entering main loop...");
     // Blink and EPD test
     let main_loop = async {
+        let mut loop_count: u32 = 0;
         loop {
             // Red blink = loop heartbeat
             let _ = display.clear(WHITE);
@@ -139,14 +145,22 @@ async fn main(_spawner: Spawner) {
             defmt::info!("Health: {}", health_str.as_str());
 
             let _ = display.reset().await;
-            let _ = display.update().await;
+            if loop_count % (FAST_UPDATES_PER_FULL + 1) == FAST_UPDATES_PER_FULL {
+                defmt::info!("Full tricolor refresh");
+                let _ = display.update().await;
+            } else {
+                defmt::info!("Fast B&W refresh");
+                let _ = display.update_ghost().await;
+            }
+            loop_count = loop_count.wrapping_add(1);
 
             let _ = display.deep_sleep().await;
 
             led_red.set_low();
             Timer::after_millis(50).await;
             led_red.set_high();
-            Timer::after_millis(4950).await;
+            // Timer::after_millis(950).await;
+            button_rcvr.changed().await;
         }
     };
 

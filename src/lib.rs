@@ -186,7 +186,7 @@ where
     // Animated red dot
     let dot_pos = Point::new(((circle_post * 40) + 15) as i32, 10);
     Circle::with_center(dot_pos, 10)
-        .into_styled(PrimitiveStyle::with_fill(RED))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
     let position = Point::new(76, 76);

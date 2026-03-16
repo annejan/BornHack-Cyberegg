@@ -1,5 +1,6 @@
 use crate::{DISPLAY_STATE, update_health};
 use embassy_nrf::gpio::Input;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
 
 macro_rules! update_button_health {
     ($pin:expr, $field:ident) => {
@@ -11,6 +12,8 @@ macro_rules! update_button_health {
     };
 }
 
+pub static BTN_WATCH: Watch<CriticalSectionRawMutex, u8, 2> = Watch::new();
+
 pub async fn run_buttons(
     mut btn_can: Input<'_>,
     mut btn_exe: Input<'_>,
@@ -20,8 +23,9 @@ pub async fn run_buttons(
     mut joy_right: Input<'_>,
     mut joy_fire: Input<'_>,
 ) {
+    let mut btn_sender: Sender<CriticalSectionRawMutex, u8, 2> = BTN_WATCH.sender();
     loop {
-        let (_, index) = embassy_futures::select::select_array([
+        let (btn, index) = embassy_futures::select::select_array([
             btn_can.wait_for_any_edge(),
             btn_exe.wait_for_any_edge(),
             joy_up.wait_for_any_edge(),
@@ -36,14 +40,21 @@ pub async fn run_buttons(
         match index {
             0 => {
                 defmt::info!("Cancel button {}", btn_can.is_low());
+                if btn_can.is_low() {
+                    btn_sender.send(index as u8);
+                }
                 update_button_health!(btn_can, cancel);
             }
             1 => {
                 defmt::info!("Execute button pressed");
+                if btn_exe.is_low() {
+                    btn_sender.send(index as u8);
+                }
                 update_button_health!(btn_exe, execute);
             }
             2 => {
                 if joy_up.is_low() {
+                    btn_sender.send(index as u8);
                     DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up());
                 }
                 defmt::info!("Menu up");
@@ -51,6 +62,7 @@ pub async fn run_buttons(
             }
             3 => {
                 if joy_down.is_low() {
+                    btn_sender.send(index as u8);
                     DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down());
                 }
                 defmt::info!("Menu down");
