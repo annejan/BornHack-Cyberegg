@@ -21,8 +21,12 @@ cortex-m-rt = { version = "0.7" }
 cfg-if = "1.0.0"
 embassy-time = { version = "0.5.0", features = [
     "defmt",
-    "defmt-timestamp-uptime",
 ], optional = true }
+embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread", "defmt"], optional = true }
+embassy-usb = { version = "0.5.1", features = ["defmt"], optional = true }
+embassy-usb-dfu = { version = "0.2.0", features = ["dfu", "cortex-m", "defmt"], optional = true }
+embassy-futures = { version = "0.1.2", optional = true }
+static_cell = { version = "2", optional = true }
 
 [features]
 defmt = [
@@ -30,6 +34,15 @@ defmt = [
     "dep:defmt-rtt",
     "embassy-boot-nrf/defmt",
     "embassy-nrf/defmt",
+]
+dfu = [
+    "defmt",
+    "dep:embassy-executor",
+    "dep:embassy-usb",
+    "dep:embassy-usb-dfu",
+    "dep:embassy-futures",
+    "dep:embassy-time",
+    "dep:static_cell",
 ]
 # softdevice = [
 #     "embassy-boot-nrf/softdevice",

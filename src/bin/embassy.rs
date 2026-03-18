@@ -2,10 +2,14 @@
 #![no_main]
 
 // Code is for NRF52840
+use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_executor::Spawner;
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
+use embassy_nrf::nvmc::Nvmc;
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::sx1262::run_lora_test;
@@ -29,7 +33,9 @@ use {defmt_rtt as _, panic_probe as _};
 async fn feed_watchdog() -> ! {
     let mut ticker = Ticker::every(Duration::from_secs(1));
     loop {
-        embassy_nrf::pac::WDT.rr(0).write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
+        embassy_nrf::pac::WDT
+            .rr(0)
+            .write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
         ticker.next().await;
     }
 }
@@ -121,7 +127,7 @@ async fn main(_spawner: Spawner) {
         OutputDrive::Standard,
     ));
     // buzzer.play_melody(melodies::IMPERIAL_MARCH).await;
-    //buzzer.play_melody(melodies::STARTUP).await;
+    buzzer.play_melody(melodies::STARTUP).await;
 
     // Blink all three LEDs once to signal firmware has started
     led_red.set_low();
@@ -135,6 +141,17 @@ async fn main(_spawner: Spawner) {
 
     // Number of fast B&W updates before a full tricolor refresh.
     const FAST_UPDATES_PER_FULL: u32 = 60;
+
+    // All peripherals initialised successfully — commit this firmware so the
+    // bootloader doesn't roll it back on the next reset.
+    {
+        let flash = Mutex::<NoopRawMutex, _>::new(core::cell::RefCell::new(Nvmc::new(p.NVMC)));
+        let fw_config = FirmwareUpdaterConfig::from_linkerfile_blocking(&flash, &flash);
+        let mut aligned = AlignedBuffer([0u8; 4]);
+        let mut updater = BlockingFirmwareUpdater::new(fw_config, &mut aligned.0);
+        let _ = updater.mark_booted();
+        defmt::info!("Firmware marked as booted");
+    }
 
     defmt::info!("Entering main loop...");
     // Blink and EPD test

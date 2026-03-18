@@ -1,9 +1,10 @@
 ELF = target/thumbv7em-none-eabihf/debug/embassy
+BIN = target/thumbv7em-none-eabihf/debug/embassy.bin
 
 # App flash base matches the ACTIVE slot in memory.x (after the embassy-boot bootloader)
 FLASH_BASE = 0x0000D000
 
-.PHONY: fw sim flash monitor bl bl-flash
+.PHONY: fw sim flash monitor bl bl-flash dfu-flash
 
 # Build the app firmware (debug)
 fw:
@@ -45,3 +46,10 @@ bl-flash:
 	probe-rs download --chip nRF52840_xxAA \
 	    bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 	@echo "Bootloader programmed. Run 'make flash' to install the app."
+
+# Flash the app firmware over USB DFU.
+# Hold the execute button while powering on to enter DFU mode (red LED blinks).
+dfu-flash:
+	cargo fw
+	arm-none-eabi-objcopy -O binary $(ELF) $(BIN)
+	dfu-util -D $(BIN)

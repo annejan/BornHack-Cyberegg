@@ -39,6 +39,7 @@ embassy-executor = { version = "0.9", features = [
     "defmt",
 ], optional = true }
 embassy-embedded-hal = { version = "0.5.0", optional = true }
+embassy-boot-nrf = { version = "0.10.0", optional = true }
 # embassy-rp = { version = "0.2", features = ["time-driver"], optional = true }
 defmt-rtt = { version = "1.0.0", features = ["disable-blocking-mode"], optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
@@ -83,6 +84,7 @@ embassy = [
     "fixed",
     "heapless",
     "panic-probe",
+    "embassy-boot-nrf",
     "ssd1680",
     "static_cell",
     "sx126x",

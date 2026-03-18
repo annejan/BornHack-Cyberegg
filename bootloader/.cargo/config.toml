@@ -15,5 +15,5 @@ rustflags = [
 DEFMT_LOG = "info"
 
 [alias]
-bl       = "build --release --features defmt"
-bl-flash = "run --release --features defmt"
+bl       = "build --release --features dfu"
+bl-flash = "run --release --features dfu"
