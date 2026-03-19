@@ -17,3 +17,10 @@ pub fn init() {
 pub fn get() -> [u8; 2] {
     *DEVICE_ID.try_get().expect("device_id::init() not called")
 }
+
+/// Return the device ID as four uppercase ASCII hex bytes, e.g. `b"A3F7"`.
+pub fn get_bytes() -> [u8; 4] {
+    let [id0, id1] = get();
+    let h = |n: u8| if n < 10 { b'0' + n } else { b'A' + n - 10 };
+    [h(id0 >> 4), h(id0 & 0xF), h(id1 >> 4), h(id1 & 0xF)]
+}

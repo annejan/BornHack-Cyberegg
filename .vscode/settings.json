@@ -11,6 +11,9 @@
         "--bin",
         "embassy"
     ],
+    "vim.handleKeys": {
+        "<C-p>": false
+    },
     "cSpell.words": [
         "addrs",
         "defmt",

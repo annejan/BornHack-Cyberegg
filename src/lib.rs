@@ -14,6 +14,10 @@ use embedded_graphics::{
     primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
+#[cfg(feature = "embassy")]
+use fw::device_id::get_bytes as get_device_id;
+#[cfg(feature = "simulator")]
+fn get_device_id() -> [u8; 4] { *b"A3F7" }
 // Embassy: re-export TriColor from ssd1680 hardware driver
 #[cfg(feature = "embassy")]
 pub use ssd1680::graphics::{BLACK, RED, TriColor, WHITE};
@@ -56,6 +60,8 @@ pub use tricolor::{BLACK, RED, TriColor, WHITE};
 // Conditional imports based on feature
 #[cfg(feature = "embassy")]
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
+#[cfg(feature = "embassy")]
+use trouble_host::prelude::ad_types::DEVICE_ID;
 
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
@@ -184,7 +190,7 @@ where
         .build();
 
     // Animated red dot
-    let dot_pos = Point::new(((circle_post * 40) + 15) as i32, 10);
+    let dot_pos = Point::new(((circle_post * 40) + 15) as i32, 7);
     Circle::with_center(dot_pos, 10)
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
@@ -208,6 +214,14 @@ where
     let item_text =
         // DISPLAY_STATE.lock(|f| -> &'static str { f.borrow().get_current_menu_item().unwrap() });
         with_display_state!(| state: &Ref<'_, DisplayState<3>> | state.get_current_menu_item().unwrap());
+    let id_text = get_device_id();
+    Text::with_text_style(
+        unsafe { core::str::from_utf8_unchecked(&id_text) },
+        Point::new(110, 28),
+        text_style_inverted,
+        TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
+    )
+    .draw(display)?;
     let text = Text::with_text_style(
         item_text,
         display.bounding_box().center(),

@@ -191,13 +191,12 @@ async fn nus_peripheral_loop<C>(
     // Build the device name: "Cyber Ægg XXYY" where XXYY is the two-byte device ID in hex.
     // Flags (3 B) + name (16 B) = 19 B — fits within the 31-byte adv packet limit.
     // The 128-bit NUS UUID (18 B) goes into scan_data so the total doesn't overflow.
-    let [id0, id1] = crate::fw::device_id::get();
-    let h = |n: u8| if n < 10 { b'0' + n } else { b'A' + n - 10 };
     // "Cyber Ægg XXYY" — Æ (U+00C6) is 0xC3 0x86 in UTF-8, total 15 bytes.
+    let id = crate::fw::device_id::get_bytes();
     let name: [u8; 15] = [
         b'C', b'y', b'b', b'e', b'r', b' ',
         0xC3, 0x86, b'g', b'g', b' ',
-        h(id0 >> 4), h(id0 & 0xF), h(id1 >> 4), h(id1 & 0xF),
+        id[0], id[1], id[2], id[3],
     ];
     // Safety: all bytes are valid UTF-8 (ASCII + the two-byte Æ sequence above).
     let name_str = unsafe { core::str::from_utf8_unchecked(&name) };
