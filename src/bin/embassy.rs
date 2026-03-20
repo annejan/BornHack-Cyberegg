@@ -11,9 +11,10 @@ use embassy_nrf::nvmc::Nvmc;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
+use hello_graphics::fw::battery::init as init_battery;
 use hello_graphics::fw::ble::{init_ble, run_ble_peripheral};
-use hello_graphics::fw::device_id;
 use hello_graphics::fw::button::BTN_WATCH;
+use hello_graphics::fw::device_id;
 use hello_graphics::fw::flash::{QspiIrqs, flash_task, init_qspi};
 use hello_graphics::fw::sx1262::run_lora_test;
 use hello_graphics::{
@@ -185,6 +186,16 @@ async fn main(spawner: Spawner) {
     ));
     buzzer.play_melody(melodies::STARTUP).await;
     defmt::info!("Buzzer initialized, startup melody played");
+
+    defmt::info!("Initializing battery monitor");
+    match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await {
+        Ok(()) => {
+            defmt::info!("Battery monitor initialized");
+        }
+        Err(e) => {
+            defmt::error!("Battery monitor initialization failed: {:?}", e);
+        }
+    };
 
     // White light blink indicating we can enter the main loop
     led_red.set_low();

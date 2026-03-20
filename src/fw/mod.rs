@@ -1,3 +1,4 @@
+pub mod battery;
 pub mod ble;
 pub mod device_id;
 pub mod board;
