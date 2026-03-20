@@ -17,7 +17,11 @@ use embedded_graphics::{
 #[cfg(feature = "embassy")]
 use fw::device_id::get_bytes as get_device_id;
 #[cfg(feature = "simulator")]
-fn get_device_id() -> [u8; 4] { *b"A3F7" }
+fn get_device_id() -> [u8; 4] {
+    *b"A3F7"
+}
+#[cfg(feature = "embassy")]
+use heapless::format;
 // Embassy: re-export TriColor from ssd1680 hardware driver
 #[cfg(feature = "embassy")]
 pub use ssd1680::graphics::{BLACK, RED, TriColor, WHITE};
@@ -60,8 +64,8 @@ pub use tricolor::{BLACK, RED, TriColor, WHITE};
 // Conditional imports based on feature
 #[cfg(feature = "embassy")]
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
-#[cfg(feature = "embassy")]
-use trouble_host::prelude::ad_types::DEVICE_ID;
+// #[cfg(feature = "embassy")]
+// use trouble_host::prelude::ad_types::DEVICE_ID;
 
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
@@ -177,7 +181,7 @@ macro_rules! with_display_state_mut {
 static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 
 /// Draw your graphics to any display that implements DrawTarget
-pub fn draw_graphics<D>(display: &mut D, health_str: &str) -> Result<(), D::Error>
+pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
@@ -190,13 +194,13 @@ where
         .build();
 
     // Animated red dot
-    let dot_pos = Point::new(((circle_post * 40) + 15) as i32, 7);
+    let dot_pos = Point::new(((circle_post * 20) + 15) as i32, 7);
     Circle::with_center(dot_pos, 10)
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
     let position = Point::new(76, 76);
-    Circle::with_center(position, 125)
+    Circle::with_center(position, 110)
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
@@ -214,10 +218,19 @@ where
     let item_text =
         // DISPLAY_STATE.lock(|f| -> &'static str { f.borrow().get_current_menu_item().unwrap() });
         with_display_state!(| state: &Ref<'_, DisplayState<3>> | state.get_current_menu_item().unwrap());
+
+    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    Text::with_text_style(
+        &bat_text,
+        Point::new(110, 16),
+        text_style_inverted,
+        TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
+    )
+    .draw(display)?;
     let id_text = get_device_id();
     Text::with_text_style(
         unsafe { core::str::from_utf8_unchecked(&id_text) },
-        Point::new(110, 28),
+        Point::new(110, 30),
         text_style_inverted,
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
     )

@@ -10,7 +10,7 @@ use nrf_sdc::{self as sdc, SoftdeviceController};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
-use crate::fw::flash::{BOND_CMD_CHANNEL, INITIAL_BONDS, BondCmd};
+use crate::fw::bonds::{BOND_CMD_CHANNEL, INITIAL_BONDS, BondCmd};
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG

@@ -1,12 +1,14 @@
 pub mod battery;
 pub mod ble;
-pub mod device_id;
 pub mod board;
-pub mod flash;
+pub mod bonds;
 pub mod button;
 pub mod buzzer;
+pub mod device_id;
 pub mod epd;
 pub mod health;
 pub mod iso14443;
+pub mod kv;
 pub mod nfct;
+pub mod storage;
 pub mod sx1262;

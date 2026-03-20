@@ -11,11 +11,12 @@ use embassy_nrf::nvmc::Nvmc;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
-use hello_graphics::fw::battery::init as init_battery;
+use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
 use hello_graphics::fw::ble::{init_ble, run_ble_peripheral};
+use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
-use hello_graphics::fw::flash::{QspiIrqs, flash_task, init_qspi};
+use hello_graphics::fw::kv;
 use hello_graphics::fw::sx1262::run_lora_test;
 use hello_graphics::{
     board, draw_graphics,
@@ -61,31 +62,28 @@ async fn main(spawner: Spawner) {
     let _ps_sync = Output::new(board!(p, ps_sync), Level::Low, OutputDrive::Standard);
 
     // -----------------------------------------------------------------------
-    // QSPI flash — must come before BLE so bonds are loaded before advertising.
+    // KV store (QSPI flash) — must come before BLE so bonds are loaded first.
     // -----------------------------------------------------------------------
-    let qspi = match init_qspi(
+    match kv::init(
         p.QSPI,
-        QspiIrqs,
         board!(p, flash_sck),
         board!(p, flash_csn),
         board!(p, flash_io0),
         board!(p, flash_io1),
         board!(p, flash_io2),
         board!(p, flash_io3),
-    ) {
-        Ok(q) => q,
+    )
+    .await
+    {
+        Ok(()) => {}
         Err(id) => defmt::panic!(
             "QSPI flash not reachable (JEDEC ID: {:02X} {:02X} {:02X})",
             id[0],
             id[1],
             id[2]
         ),
-    };
-    // flash_task takes ownership; it needs 'static so we use a StaticCell.
-    static QSPI_STORAGE: StaticCell<embassy_nrf::qspi::Qspi<'static>> = StaticCell::new();
-    // Safety: main never returns, so 'static is valid here.
-    let qspi_static: embassy_nrf::qspi::Qspi<'static> = unsafe { core::mem::transmute(qspi) };
-    spawner.must_spawn(flash_task(qspi_static));
+    }
+    spawner.must_spawn(bond_task());
 
     // -----------------------------------------------------------------------
     // BLE (MPSL + SDC + TrouBLE peripheral task)
@@ -188,14 +186,17 @@ async fn main(spawner: Spawner) {
     defmt::info!("Buzzer initialized, startup melody played");
 
     defmt::info!("Initializing battery monitor");
-    match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await {
-        Ok(()) => {
+    let battery_monitor = match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await {
+        Ok(monitor) => {
             defmt::info!("Battery monitor initialized");
+            monitor
         }
         Err(e) => {
             defmt::error!("Battery monitor initialization failed: {:?}", e);
+            return;
         }
     };
+    spawner.must_spawn(battery_task(battery_monitor));
 
     // White light blink indicating we can enter the main loop
     led_red.set_low();
@@ -225,7 +226,8 @@ async fn main(spawner: Spawner) {
         loop {
             let _ = display.clear(WHITE);
             let health_str = with_health!(|f| f.to_string());
-            match draw_graphics(&mut display, &health_str) {
+            let bat_str = battery::read_pct();
+            match draw_graphics(&mut display, &health_str, &bat_str) {
                 Ok(_) => {}
                 Err(_) => {
                     health_err!(epd, "Failed to draw graphics");

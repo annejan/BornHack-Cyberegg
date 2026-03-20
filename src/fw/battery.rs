@@ -12,7 +12,19 @@
 //!
 //! # Usage
 //!
-//! Call `init()` once at startup, then call `read_mv().await` from any async task.
+//! Once at startup:
+//! ```
+//! let monitor = battery::init(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await?;
+//! spawner.must_spawn(battery::battery_task(monitor));
+//! ```
+//!
+//! From any task (sync, no await needed):
+//! ```
+//! let pct = battery::read_pct();
+//! let mv  = battery::read_mv();
+//! ```
+
+use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
 
 use embassy_nrf::{
     Peri,
@@ -20,33 +32,51 @@ use embassy_nrf::{
     peripherals,
     saadc::{self, Config, Saadc},
 };
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 
 embassy_nrf::bind_interrupts!(pub struct BatteryIrqs {
     SAADC => saadc::InterruptHandler;
 });
 
 // ---------------------------------------------------------------------------
+// Cached state — updated by battery_task, read by anyone synchronously
+// ---------------------------------------------------------------------------
+
+static CACHED_MV:  AtomicU16 = AtomicU16::new(0);
+static CACHED_PCT: AtomicU8  = AtomicU8::new(0);
+
+/// Read the last measured battery voltage in millivolts.
+/// Returns 0 until the first measurement has completed.
+pub fn read_mv() -> u16 {
+    CACHED_MV.load(Ordering::Relaxed)
+}
+
+/// Read the last measured battery state-of-charge as a percentage (0–100).
+/// Returns 0 until the first measurement has completed.
+pub fn read_pct() -> u8 {
+    CACHED_PCT.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
 // BatteryMonitor — owns the peripherals, reborrowed on each measurement
 // ---------------------------------------------------------------------------
 
 pub struct BatteryMonitor {
-    saadc: Peri<'static, peripherals::SAADC>,
-    vbat: Peri<'static, peripherals::P0_31>,
+    saadc:   Peri<'static, peripherals::SAADC>,
+    vbat:    Peri<'static, peripherals::P0_31>,
     vbat_rd: Output<'static>,
 }
 
 impl BatteryMonitor {
     fn new(
-        saadc: Peri<'static, peripherals::SAADC>,
-        vbat: Peri<'static, peripherals::P0_31>,
+        saadc:   Peri<'static, peripherals::SAADC>,
+        vbat:    Peri<'static, peripherals::P0_31>,
         vbat_rd: Peri<'static, peripherals::P0_07>,
     ) -> Self {
         Self {
             saadc,
             vbat,
-            // Keep the divider disabled (high) until a measurement is requested.
+            // Keep the divider disabled (high) between measurements.
             vbat_rd: Output::new(vbat_rd, Level::High, OutputDrive::Standard),
         }
     }
@@ -54,7 +84,7 @@ impl BatteryMonitor {
     async fn read_mv(&mut self) -> u16 {
         // Enable the voltage divider and let the RC network settle.
         self.vbat_rd.set_low();
-        Timer::after_millis(1).await;
+        Timer::after_millis(5).await;
 
         let ch_cfg = saadc::ChannelConfig::single_ended(self.vbat.reborrow());
         let mut saadc = Saadc::new(
@@ -86,21 +116,21 @@ const VBAT_MAX_MV: u16 = 4300;
 /// (millivolts, percent) pairs, sorted ascending by voltage.
 /// Edit this table to recalibrate for a different cell chemistry or pack.
 static BATTERY_CURVE: &[(u16, u8)] = &[
-    (3300, 0),
-    (3400, 5),
-    (3500, 10),
-    (3600, 15),
-    (3650, 20),
-    (3700, 30),
-    (3750, 40),
-    (3800, 50),
-    (3850, 60),
-    (3900, 70),
-    (3950, 75),
-    (4000, 80),
-    (4050, 85),
-    (4100, 90),
-    (4150, 95),
+    (3300,   0),
+    (3400,   5),
+    (3500,  10),
+    (3600,  15),
+    (3650,  20),
+    (3700,  30),
+    (3750,  40),
+    (3800,  50),
+    (3850,  60),
+    (3900,  70),
+    (3950,  75),
+    (4000,  80),
+    (4050,  85),
+    (4100,  90),
+    (4150,  95),
     (4200, 100),
 ];
 
@@ -110,18 +140,13 @@ fn mv_to_pct(mv: u16) -> u8 {
     let &(lo_mv, lo_pct) = BATTERY_CURVE.first().unwrap();
     let &(hi_mv, hi_pct) = BATTERY_CURVE.last().unwrap();
 
-    if mv <= lo_mv {
-        return lo_pct;
-    }
-    if mv >= hi_mv {
-        return hi_pct;
-    }
+    if mv <= lo_mv { return lo_pct; }
+    if mv >= hi_mv { return hi_pct; }
 
     for window in BATTERY_CURVE.windows(2) {
         let (a_mv, a_pct) = window[0];
         let (b_mv, b_pct) = window[1];
         if mv <= b_mv {
-            // Linear interpolation, all integer arithmetic.
             let num = (mv - a_mv) as u32 * (b_pct - a_pct) as u32;
             let den = (b_mv - a_mv) as u32;
             return a_pct + (num / den) as u8;
@@ -131,7 +156,7 @@ fn mv_to_pct(mv: u16) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
-// Async-safe singleton
+// Error type
 // ---------------------------------------------------------------------------
 
 /// Voltage is outside the expected range for a single Li-ion cell.
@@ -143,50 +168,54 @@ pub enum BatteryError {
     TooHigh(u16),
 }
 
-static MONITOR: Mutex<CriticalSectionRawMutex, Option<BatteryMonitor>> = Mutex::new(None);
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-/// Initialise the battery monitor and perform a sanity-check measurement.
+/// Perform the first measurement, populate the cache, and return a
+/// `BatteryMonitor` to hand off to [`battery_task`].
 ///
-/// Logs the measured voltage and returns `Err(BatteryError)` if it falls
-/// outside [3000 mV, 4300 mV].  Call once at startup from the main task.
+/// Returns `Err(BatteryError)` if the measured voltage is outside
+/// [3000 mV, 4300 mV]; the cache is still populated so callers can
+/// choose to continue with a warning rather than panicking.
 pub async fn init(
-    saadc: Peri<'static, peripherals::SAADC>,
-    vbat: Peri<'static, peripherals::P0_31>,
+    saadc:   Peri<'static, peripherals::SAADC>,
+    vbat:    Peri<'static, peripherals::P0_31>,
     vbat_rd: Peri<'static, peripherals::P0_07>,
-) -> Result<(), BatteryError> {
+) -> Result<BatteryMonitor, BatteryError> {
     let mut monitor = BatteryMonitor::new(saadc, vbat, vbat_rd);
     let mv = monitor.read_mv().await;
 
+    CACHED_MV.store(mv, Ordering::Relaxed);
+    CACHED_PCT.store(mv_to_pct(mv), Ordering::Relaxed);
+
     defmt::info!("Battery: {} mV ({}%)", mv, mv_to_pct(mv));
 
-    let result = if mv < VBAT_MIN_MV {
+    if mv < VBAT_MIN_MV {
         defmt::warn!("Battery voltage too low: {} mV", mv);
-        Err(BatteryError::TooLow(mv))
-    } else if mv > VBAT_MAX_MV {
+        return Err(BatteryError::TooLow(mv));
+    }
+    if mv > VBAT_MAX_MV {
         defmt::warn!("Battery voltage too high: {} mV", mv);
-        Err(BatteryError::TooHigh(mv))
-    } else {
-        Ok(())
-    };
+        return Err(BatteryError::TooHigh(mv));
+    }
 
-    *MONITOR.lock().await = Some(monitor);
-    result
+    Ok(monitor)
 }
 
-/// Read the battery voltage in millivolts.  Panics if `init()` has not been called.
-pub async fn read_mv() -> u16 {
-    MONITOR
-        .lock()
-        .await
-        .as_mut()
-        .expect("battery::init() not called")
-        .read_mv()
-        .await
-}
+/// Background task that wakes once per minute, measures the battery, and
+/// updates the cached values read by [`read_mv`] and [`read_pct`].
+///
+/// Spawn this task after calling [`init`].
+#[embassy_executor::task]
+pub async fn battery_task(mut monitor: BatteryMonitor) {
+    loop {
+        Timer::after(Duration::from_secs(60)).await;
 
-/// Read the battery state-of-charge as a percentage (0–100).
-/// Uses linear interpolation between entries in `BATTERY_CURVE`.
-/// Panics if `init()` has not been called.
-pub async fn read_pct() -> u8 {
-    mv_to_pct(read_mv().await)
+        let mv = monitor.read_mv().await;
+        CACHED_MV.store(mv, Ordering::Relaxed);
+        CACHED_PCT.store(mv_to_pct(mv), Ordering::Relaxed);
+
+        defmt::debug!("Battery: {} mV ({}%)", mv, mv_to_pct(mv));
+    }
 }
