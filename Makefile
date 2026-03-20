@@ -1,19 +1,30 @@
-ELF = target/thumbv7em-none-eabihf/debug/embassy
-BIN = target/thumbv7em-none-eabihf/debug/embassy.bin
+ELF     = target/thumbv7em-none-eabihf/debug/embassy
+BIN     = target/thumbv7em-none-eabihf/debug/embassy.bin
+BIN_REL = target/thumbv7em-none-eabihf/release/embassy.bin
+ELF_REL = target/thumbv7em-none-eabihf/release/embassy
 
 # App flash base matches the ACTIVE slot in memory.x (after the embassy-boot bootloader)
 FLASH_BASE = 0x0000D000
 
-.PHONY: fw sim flash monitor bl bl-flash dfu-flash
+.PHONY: fw fw-release sim flash flash-release monitor bl bl-flash dfu-flash
 
 # Build the app firmware (debug)
 fw:
 	cargo fw
 
-# Build and flash the app firmware via SWD
+# Build the app firmware (release)
+fw-release:
+	cargo fw-release
+
+# Build and flash the debug firmware via SWD
 flash:
 	cargo fw
 	probe-rs download --chip nRF52840_xxAA $(ELF)
+
+# Build and flash the release firmware via SWD
+flash-release:
+	cargo fw-release
+	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
 
 # Run the simulator
 sim:
@@ -53,3 +64,9 @@ dfu-flash:
 	cargo fw
 	arm-none-eabi-objcopy -O binary $(ELF) $(BIN)
 	dfu-util -D $(BIN)
+
+
+dfu-flash-release:
+	cargo fw-release
+	arm-none-eabi-objcopy -O binary $(ELF_REL) $(BIN_REL)
+	dfu-util -D $(BIN_REL)
