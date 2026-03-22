@@ -140,8 +140,6 @@ pub struct NusServer {
 // BLE peripheral runner
 // ---------------------------------------------------------------------------
 
-const DEVICE_ADDR: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xBA, 0xBE, 0x01];
-
 type BleResources = HostResources<DefaultPacketPool, 1, 2>;
 
 #[embassy_executor::task]
@@ -153,7 +151,7 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>) {
     // The nrf-sdc 0.4 API borrows `rng` for the SDC lifetime, making it unavailable here.
     // See Cargo.toml comment on dev-disable-csprng-seed-requirement for context.
     let stack = trouble_host::new(sdc, resources)
-        .set_random_address(Address::random(DEVICE_ADDR));
+        .set_random_address(Address::random(crate::fw::device_id::get_ble_addr()));
 
     stack.set_io_capabilities(IoCapabilities::NoInputNoOutput);
 
