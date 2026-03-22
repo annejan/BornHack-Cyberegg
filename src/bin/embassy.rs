@@ -17,12 +17,12 @@ use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
 use hello_graphics::fw::kv;
-use hello_graphics::fw::sx1262::run_lora_test;
+use hello_graphics::fw::sx1262::run_meshcore_listener;
 use hello_graphics::{
     board, draw_graphics,
     fw::button::run_buttons,
     fw::buzzer::{Buzzer, melodies},
-    fw::epd::{EpdBus, EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
+    fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
     fw::nfct::run_nfct,
 };
 use hello_graphics::{health_err, with_health};
@@ -136,12 +136,11 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(500).await;
     defmt::info!("Init EPD");
 
-    static BUS_CELL: StaticCell<EpdBus> = StaticCell::new();
-    let bus = BUS_CELL.init(init_epd_bus(
+    let bus = init_epd_bus(
         board!(p, epd_spi),
         board!(p, epd_sck).into(),
         board!(p, epd_mosi).into(),
-    ));
+    );
     let mut display: EpdGfx<'_> = init_epd(
         bus,
         board!(p, epd_busy).into(),
@@ -183,6 +182,7 @@ async fn main(spawner: Spawner) {
         OutputDrive::Standard,
     ));
     buzzer.play_melody(melodies::STARTUP).await;
+    // buzzer.play_melody(melodies::IMPERIAL_MARCH).await;
     defmt::info!("Buzzer initialized, startup melody played");
 
     defmt::info!("Initializing battery monitor");
@@ -254,7 +254,7 @@ async fn main(spawner: Spawner) {
         }
     };
 
-    let run_lora = run_lora_test(
+    let run_lora = run_meshcore_listener(
         board!(p, lora_spi),
         board!(p, lora_sck).into(),
         board!(p, lora_mosi).into(),

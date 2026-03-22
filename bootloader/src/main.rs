@@ -219,7 +219,7 @@ fn main() -> ! {
 
     // Normal boot path — start watchdog and boot the active firmware.
     let mut wdt_config = wdt::Config::default();
-    wdt_config.timeout_ticks = 32768 * 5; // 5 s timeout
+    wdt_config.timeout_ticks = 32768 * 20; // 20 s timeout
     wdt_config.action_during_sleep = SleepConfig::RUN;
     wdt_config.action_during_debug_halt = HaltConfig::PAUSE;
 

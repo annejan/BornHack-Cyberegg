@@ -38,7 +38,6 @@ embassy-executor = { version = "0.9", features = [
     "executor-interrupt",
     "defmt",
 ], optional = true }
-embassy-embedded-hal = { version = "0.5.0", optional = true }
 embassy-boot-nrf = { version = "0.10.0", optional = true }
 # embassy-rp = { version = "0.2", features = ["time-driver"], optional = true }
 defmt-rtt = { version = "1.0.0", features = ["disable-blocking-mode"], optional = true }
@@ -46,7 +45,7 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 ssd1680 = { version = "0.16", path = "./vendor/ssd1680", optional = true }
 sx126x = { version = "0.3.0", optional = true }
 embedded-hal = { version = "1.0", optional = true }
-embedded-hal-bus = { version = "0.2", optional = true }
+embedded-hal-bus = { version = "0.2", features = ["async"], optional = true }
 heapless = { version = "0.9.2", optional = true }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = ["nrf52840"], optional = true }
 nrf-sdc  = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = ["nrf52840", "peripheral"], optional = true }
@@ -55,7 +54,8 @@ nrf-sdc  = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363
 # seeding trouble-host. This is safe for now because we do not initiate pairing.
 # TODO: seed the SM properly before enabling bonding in production.
 trouble-host = { version = "0.6", features = ["defmt", "security", "dev-disable-csprng-seed-requirement"], optional = true }
-tickv = { version = "2.0", optional = true }
+tickv    = { version = "2.0", optional = true }
+meshcore = { path = "./vendor/meshcore", optional = true }
 
 
 [package.metadata.tools]
@@ -69,8 +69,10 @@ lto = false
 
 [profile.release]
 debug = 2
-opt-level = "s" # or "z" for even smaller size
+opt-level = "z"
 lto = true
+codegen-units = 1
+panic = "abort"
 
 [features]
 # default = ["simulator"]
@@ -81,7 +83,6 @@ embassy = [
     "cortex-m-rt",
     "defmt",
     "defmt-rtt",
-    "embassy-embedded-hal",
     "embassy-executor",
     "embassy-futures",
     "embassy-nrf",
@@ -100,6 +101,7 @@ embassy = [
     "nrf-sdc",
     "trouble-host",
     "tickv",
+    "meshcore",
 ]
 
 # [workspace]

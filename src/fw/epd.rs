@@ -1,12 +1,10 @@
-use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::peripherals;
 use embassy_nrf::spim::{Config, Frequency, InterruptHandler, Spim};
 use embassy_nrf::{Peri, bind_interrupts};
+use embedded_hal_bus::spi::ExclusiveDevice;
 
 use core::convert::Infallible;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::mutex::Mutex;
 use ssd1680::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
 use {defmt_rtt as _, panic_probe as _};
 
@@ -33,13 +31,10 @@ bind_interrupts!(struct Irqs {
     SPIM3 => InterruptHandler<peripherals::SPI3>;
 });
 
-pub type EpdBus<'a> = Mutex<NoopRawMutex, Spim<'a>>;
 pub type EpdGfx<'a> = GraphicDisplay<
     'a,
     Interface<
-        SpiDevice<'a, NoopRawMutex, Spim<'a>, Output<'a>>,
-        embassy_nrf::spim::Error,
-        core::convert::Infallible,
+        ExclusiveDevice<Spim<'a>, Output<'a>, embassy_time::Delay>,
         Input<'a>,
         Output<'a>,
         Output<'a>,
@@ -61,11 +56,10 @@ pub fn init_epd_bus<'a>(
     spi: Peri<'a, peripherals::SPI3>,
     sck_pin: Peri<'a, AnyPin>,
     mosi_pin: Peri<'a, AnyPin>,
-) -> EpdBus<'a> {
+) -> Spim<'a> {
     let mut cfg = Config::default();
     cfg.frequency = Frequency::M1;
-    let spim = Spim::new_txonly(spi, Irqs, sck_pin, mosi_pin, cfg);
-    Mutex::<NoopRawMutex, _>::new(spim)
+    Spim::new_txonly(spi, Irqs, sck_pin, mosi_pin, cfg)
 }
 
 /// Initialize the EPD display
@@ -87,7 +81,7 @@ pub fn init_epd_bus<'a>(
 /// A graphics display object that can be used to draw graphics
 ///
 pub fn init_epd<'a>(
-    bus: &'a EpdBus<'a>,
+    bus: Spim<'a>,
     busy_pin: Peri<'a, AnyPin>,
     resetn_pin: Peri<'a, AnyPin>,
     dc_pin: Peri<'a, AnyPin>,
@@ -104,7 +98,7 @@ pub fn init_epd<'a>(
     let busy_in = Input::new(busy_pin, Pull::Down);
 
     // Initialize the SPI peripheral to communicate with the EPD
-    let spi_dev = SpiDevice::new(bus, csn_out);
+    let spi_dev = ExclusiveDevice::new(bus, csn_out, embassy_time::Delay).unwrap();
 
     // Initialize the SSD1680 display
     let controller = ssd1680::Interface::new(spi_dev, busy_in, dc_out, resetn_out);
