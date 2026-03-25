@@ -2,12 +2,11 @@ ELF         = target/thumbv7em-none-eabihf/debug/embassy
 BIN         = target/thumbv7em-none-eabihf/debug/embassy.bin
 BIN_REL     = target/thumbv7em-none-eabihf/release/embassy.bin
 ELF_REL     = target/thumbv7em-none-eabihf/release/embassy
-ELF_ECHO    = target/thumbv7em-none-eabihf/debug/ble_echo
 
 # App flash base matches the ACTIVE slot in memory.x (after the embassy-boot bootloader)
 FLASH_BASE = 0x0000D000
 
-.PHONY: fw fw-release sim flash flash-release flash-echo monitor bl bl-flash dfu-flash
+.PHONY: fw fw-release sim flash flash-release monitor bl bl-flash dfu-flash
 
 # Build the app firmware (debug)
 fw:
@@ -26,11 +25,6 @@ flash:
 flash-release:
 	cargo fw-release
 	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
-
-# Build and flash the BLE echo test binary via SWD
-flash-echo:
-	cargo ble-echo
-	probe-rs download --chip nRF52840_xxAA $(ELF_ECHO)
 
 # Run the simulator
 sim:
