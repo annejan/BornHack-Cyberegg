@@ -60,7 +60,7 @@ impl MeshCoreConfig {
         bandwidth: LoRaBandWidth::BW62,
         coding_rate: LoraCodingRate::CR4_5,
         sync_word: 0x1424, // RADIOLIB_SX126X_SYNC_WORD_PRIVATE
-        tx_power_dbm: 14,
+        tx_power_dbm: 22,
         preamble_len: 8,
         tcxo: None, // External 32 MHz crystal on XTA/XTB — no DIO3 TCXO control needed
     };
@@ -74,39 +74,39 @@ impl MeshCoreConfig {
     /// 6 = CR 4/6, …).  The sx126x hardware encoding (CR4_5 = 1, …) is handled here.
     pub fn from_radio_params(p: &crate::fw::settings::RadioParams) -> Self {
         Self {
-            frequency_hz:  p.freq_hz,
+            frequency_hz: p.freq_hz,
             spread_factor: match p.sf {
-                5  => LoRaSpreadFactor::SF5,
-                6  => LoRaSpreadFactor::SF6,
-                7  => LoRaSpreadFactor::SF7,
-                9  => LoRaSpreadFactor::SF9,
+                5 => LoRaSpreadFactor::SF5,
+                6 => LoRaSpreadFactor::SF6,
+                7 => LoRaSpreadFactor::SF7,
+                9 => LoRaSpreadFactor::SF9,
                 10 => LoRaSpreadFactor::SF10,
                 11 => LoRaSpreadFactor::SF11,
                 12 => LoRaSpreadFactor::SF12,
-                _  => LoRaSpreadFactor::SF8,   // default / SF8
+                _ => LoRaSpreadFactor::SF8, // default / SF8
             },
             bandwidth: match p.bw_hz {
-                0      ..=9_999    => LoRaBandWidth::BW7,
-                10_000 ..=14_999   => LoRaBandWidth::BW10,
-                15_000 ..=19_999   => LoRaBandWidth::BW15,
-                20_000 ..=30_999   => LoRaBandWidth::BW20,
-                31_000 ..=40_999   => LoRaBandWidth::BW31,
-                41_000 ..=61_999   => LoRaBandWidth::BW41,
-                62_000 ..=124_999  => LoRaBandWidth::BW62,
-                125_000..=249_999  => LoRaBandWidth::BW125,
-                250_000..=499_999  => LoRaBandWidth::BW250,
-                _                  => LoRaBandWidth::BW500,
+                0..=9_999 => LoRaBandWidth::BW7,
+                10_000..=14_999 => LoRaBandWidth::BW10,
+                15_000..=19_999 => LoRaBandWidth::BW15,
+                20_000..=30_999 => LoRaBandWidth::BW20,
+                31_000..=40_999 => LoRaBandWidth::BW31,
+                41_000..=61_999 => LoRaBandWidth::BW41,
+                62_000..=124_999 => LoRaBandWidth::BW62,
+                125_000..=249_999 => LoRaBandWidth::BW125,
+                250_000..=499_999 => LoRaBandWidth::BW250,
+                _ => LoRaBandWidth::BW500,
             },
             coding_rate: match p.cr {
                 6 => LoraCodingRate::CR4_6,
                 7 => LoraCodingRate::CR4_7,
                 8 => LoraCodingRate::CR4_8,
-                _ => LoraCodingRate::CR4_5,  // protocol cr=5 → CR 4/5
+                _ => LoraCodingRate::CR4_5, // protocol cr=5 → CR 4/5
             },
-            sync_word:    Self::UK_NARROW_BAND.sync_word,
+            sync_word: Self::UK_NARROW_BAND.sync_word,
             tx_power_dbm: p.tx_power,
             preamble_len: Self::UK_NARROW_BAND.preamble_len,
-            tcxo:         Self::UK_NARROW_BAND.tcxo,
+            tcxo: Self::UK_NARROW_BAND.tcxo,
         }
     }
 }
@@ -114,6 +114,31 @@ impl MeshCoreConfig {
 // ---------------------------------------------------------------------------
 
 const F_XTAL: u32 = 32_000_000; // 32 MHz crystal
+
+// Extension trait that adds RF-switch helpers directly to the SX126x type used
+// in this module, so callers don't need to remember which set_ant_enabled() value
+// means RX vs TX.
+trait RfSwitch {
+    fn rf_switch_rx(&mut self);
+    fn rf_switch_tx(&mut self);
+}
+
+impl<'a> RfSwitch
+    for SX126x<
+        ExclusiveDevice<Spim<'a>, Output<'a>, Delay>,
+        Output<'a>,
+        Input<'a>,
+        Output<'a>,
+        AlwaysHigh,
+    >
+{
+    fn rf_switch_rx(&mut self) {
+        self.set_ant_enabled(true).ok();
+    }
+    fn rf_switch_tx(&mut self) {
+        self.set_ant_enabled(false).ok();
+    }
+}
 
 bind_interrupts!(struct Irqs {
     SPI2 => InterruptHandler<peripherals::SPI2>;
@@ -171,10 +196,14 @@ impl<'a> SimpleLoRa<'a> {
         let mut lora = SX126x::new(spi_dev, (nreset, busy, ant, AlwaysHigh));
         lora.init(conf)
             .map_err(|_| LoraError::Spi("lora init failed"))?;
+        match lora.set_dio2_as_rf_switch_ctrl(true) {
+            Ok(_) => (),
+            Err(_) => return Err(LoraError::Spi("lora set_dio2_as_rf_switch_ctrl failed")),
+        };
 
         lora.set_rx(RxTxTimeout::continuous_rx())
             .map_err(|_| LoraError::Spi("lora set_rx failed"))?;
-        lora.set_ant_enabled(false).ok(); // RF switch → RX path (LOW)
+        lora.rf_switch_rx();
 
         let mut radio = SimpleLoRa {
             lora,
@@ -197,16 +226,6 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.write_register(Register::RxGain, &[value]).ok();
     }
 
-    /// Route the RF switch to the RX path (pin LOW).
-    fn rf_switch_rx(&mut self) {
-        self.lora.set_ant_enabled(true).ok();
-    }
-
-    /// Route the RF switch to the TX path (pin HIGH).
-    fn rf_switch_tx(&mut self) {
-        self.lora.set_ant_enabled(false).ok();
-    }
-
     /// Wait for the chip to enter RX mode (0x05), polling every 50 ms for up to 500 ms.
     /// Returns true if RX mode is confirmed.
     pub async fn ensure_rx(&mut self) -> bool {
@@ -215,7 +234,7 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.wait_on_busy().ok();
         self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
         self.apply_rx_gain();
-        self.rf_switch_rx();
+        self.lora.rf_switch_rx();
 
         for _ in 0..10u8 {
             Timer::after_millis(50).await;
@@ -303,13 +322,13 @@ impl<'a> SimpleLoRa<'a> {
             .set_rx(RxTxTimeout::continuous_rx())
             .map_err(|_| LoraError::Timeout)?;
         self.apply_rx_gain();
-        self.rf_switch_rx();
+        self.lora.rf_switch_rx();
 
         Ok(result)
     }
 
     pub async fn send_message(&mut self, message: &[u8]) -> Result<(), LoraError> {
-        self.rf_switch_tx();
+        self.lora.rf_switch_tx();
 
         self.lora.write_buffer(0x00, message).unwrap();
         let packet_params = LoRaPacketParams::default()
@@ -329,7 +348,7 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.wait_on_busy().ok();
         self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
         self.apply_rx_gain();
-        self.rf_switch_rx();
+        self.lora.rf_switch_rx();
 
         Ok(())
     }
@@ -350,9 +369,12 @@ pub(super) fn build_lora_config(config: &MeshCoreConfig) -> LoRaConfig {
         .set_power_dbm(config.tx_power_dbm)
         .set_ramp_time(RampTime::Ramp200u);
 
+    // SX1262 datasheet Table 13-21: pa_duty_cycle=0x04 + hp_max=0x07 → +22 dBm max
+    // hp_max defaults to 0x00 which caps the PA to its minimum output power.
     let pa_config = PaConfig::default()
         .set_device_sel(SX1262)
-        .set_pa_duty_cycle(0x04);
+        .set_pa_duty_cycle(0x04)
+        .set_hp_max(0x07);
 
     let dio1_irq_mask = IrqMask::none()
         .combine(TxDone)
