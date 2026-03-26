@@ -328,6 +328,12 @@ impl<'a> SimpleLoRa<'a> {
 
         self.dio1.wait_for_rising_edge().await;
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
+
+        // Re-arm continuous RX immediately so receive_packet() doesn't spend
+        // 15 s in standby waiting for the timeout before calling set_rx().
+        self.lora.wait_on_busy().ok();
+        self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
+        self.apply_rx_gain();
         self.rf_switch_rx();
 
         Ok(())

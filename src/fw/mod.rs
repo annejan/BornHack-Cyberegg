@@ -14,4 +14,5 @@ pub mod kv;
 pub mod nfct;
 pub mod storage;
 pub mod meshcore;
+pub mod msg_queue;
 pub mod sx1262;

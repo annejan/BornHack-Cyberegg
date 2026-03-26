@@ -247,7 +247,7 @@ pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<3>>> =
 /// Last decoded LoRa group-text message, updated by the meshcore listener task.
 #[cfg(feature = "embassy")]
 pub struct LoraMessage {
-    pub channel: &'static str,
+    pub channel: heapless::String<32>,
     pub sender: heapless::String<32>,
     pub text: heapless::String<128>,
     pub timestamp: u32,
@@ -310,6 +310,35 @@ pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new
 /// Fired by the menu to request the BLE task to wipe and re-seed the channel store.
 #[cfg(feature = "embassy")]
 pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the meshcore task whenever a new message is pushed to `msg_queue`.
+/// The BLE task listens for this to send an unsolicited `0x83` notification.
+#[cfg(feature = "embassy")]
+pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the BLE task after a `SET_CHANNEL` or channel reset so that the
+/// meshcore task reloads its channel table from KV.
+#[cfg(feature = "embassy")]
+pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// An outgoing channel message queued by the BLE task for the meshcore task to transmit.
+#[cfg(feature = "embassy")]
+pub struct TxChannelMsg {
+    pub channel_idx: u8,
+    pub timestamp:   u32,
+    pub text:        heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
+}
+
+/// Queue from the BLE companion task to the meshcore task for outgoing channel messages.
+///
+/// Depth 16: at slow LoRa settings (SF12 / narrow BW) each packet takes several seconds,
+/// so a burst of pasted messages must not overflow before they can be drained.
+#[cfg(feature = "embassy")]
+pub static TX_MSG_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TxChannelMsg,
+    16,
+> = embassy_sync::channel::Channel::new();
 
 // Macro for embassy - immutable access
 #[cfg(feature = "embassy")]
@@ -524,7 +553,7 @@ where
             }
             Some(ref msg) => {
                 // Row 1: channel name (bold)
-                Text::with_text_style(msg.channel, Point::new(4, 14), style_bold, bottom)
+                Text::with_text_style(msg.channel.as_str(), Point::new(4, 14), style_bold, bottom)
                     .draw(display)?;
 
                 // Row 2: sender nickname (bold)

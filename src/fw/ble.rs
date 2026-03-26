@@ -18,7 +18,7 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
 use crate::fw::bonds::{BOND_CMD_CHANNEL, INITIAL_BONDS, BondCmd};
-use crate::fw::channels;
+use crate::fw::{channels, msg_queue};
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG
@@ -380,179 +380,251 @@ async fn nus_peripheral_loop<C>(
             }
         };
 
+        // Clear any stale signal, then re-arm if there are undelivered messages.
+        crate::MESSAGES_WAITING_SIGNAL.reset();
+        if !msg_queue::is_empty() {
+            crate::MESSAGES_WAITING_SIGNAL.signal(());
+        }
+
         loop {
-            match gatt_conn.next().await {
-                GattConnectionEvent::Disconnected { reason } => {
-                    defmt::info!("BLE: disconnected (reason {:?})", defmt::Debug2Format(&reason));
-                    crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
-                    crate::BLE_PAIRING_SIGNAL.signal(());
-                    break;
+            use embassy_futures::select::{Either, select};
+
+            match select(gatt_conn.next(), crate::MESSAGES_WAITING_SIGNAL.wait()).await {
+                // -----------------------------------------------------------
+                // New messages arrived while connected — push 0x83 to app.
+                // -----------------------------------------------------------
+                Either::Second(()) => {
+                    defmt::info!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
+                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
+                    let len = companion::encode(&companion::Response::MessagesWaiting, &mut buf);
+                    notify_once(&server, &gatt_conn, &buf[..len]).await;
                 }
-                GattConnectionEvent::PassKeyDisplay(key) => {
-                    defmt::info!("BLE: pairing passkey: {:06}", key.value());
-                    crate::BLE_PASSKEY.store(key.value(), Ordering::Relaxed);
-                    crate::BLE_PAIRING_SIGNAL.signal(());
-                }
-                GattConnectionEvent::PairingComplete { bond, security_level } => {
-                    defmt::info!("BLE: pairing complete (level {:?})", defmt::Debug2Format(&security_level));
-                    crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
-                    crate::BLE_PAIRING_SIGNAL.signal(());
-                    if let Some(info) = bond {
-                        defmt::info!("BLE: new bond — persisting");
-                        let _ = bond_tx.try_send(BondCmd::Save(info));
+
+                // -----------------------------------------------------------
+                // GATT event
+                // -----------------------------------------------------------
+                Either::First(event) => match event {
+                    GattConnectionEvent::Disconnected { reason } => {
+                        defmt::info!("BLE: disconnected (reason {:?})", defmt::Debug2Format(&reason));
+                        crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                        crate::BLE_PAIRING_SIGNAL.signal(());
+                        break;
                     }
-                }
-                GattConnectionEvent::PairingFailed(e) => {
-                    defmt::warn!("BLE: pairing failed: {:?}", defmt::Debug2Format(&e));
-                    crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
-                    crate::BLE_PAIRING_SIGNAL.signal(());
-                }
-                GattConnectionEvent::Gatt { event: GattEvent::Write(write) } => {
-                    if write.handle() == server.nus.rx.handle {
-                        // Require authenticated encryption before processing companion commands.
-                        // security_level() covers both SMP pairing AND LTK-based bonded
-                        // reconnections — it is updated on EncryptionChangeV1 by the SM.
-                        let sec = gatt_conn.raw().security_level().unwrap_or(SecurityLevel::NoEncryption);
-                        if !sec.authenticated() {
-                            defmt::warn!("companion: write without authenticated encryption (level {:?}) — sending INSUFFICIENT_AUTHENTICATION",
-                                defmt::Debug2Format(&sec));
-                            // Reject with ATT error 0x05 so the phone's BLE stack knows
-                            // to initiate pairing, then automatically retries the write.
-                            if let Ok(reply) = write.reject(AttErrorCode::INSUFFICIENT_AUTHENTICATION) {
-                                reply.send().await;
-                            }
-                            continue;
+                    GattConnectionEvent::PassKeyDisplay(key) => {
+                        defmt::info!("BLE: pairing passkey: {:06}", key.value());
+                        crate::BLE_PASSKEY.store(key.value(), Ordering::Relaxed);
+                        crate::BLE_PAIRING_SIGNAL.signal(());
+                    }
+                    GattConnectionEvent::PairingComplete { bond, security_level } => {
+                        defmt::info!("BLE: pairing complete (level {:?})", defmt::Debug2Format(&security_level));
+                        crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                        crate::BLE_PAIRING_SIGNAL.signal(());
+                        if let Some(info) = bond {
+                            defmt::info!("BLE: new bond — persisting");
+                            let _ = bond_tx.try_send(BondCmd::Save(info));
                         }
-                        let data = write.data();
-
-                        // Declare before the match so its lifetime covers `response`.
-                        let device_name = crate::fw::device_id::get_bytes();
-                        let response = match companion::cmd::parse(data) {
-                            Err(_) => {
-                                defmt::warn!("companion: empty write");
-                                companion::Response::Error(companion::ErrorCode::Generic)
-                            }
-
-                            Ok(companion::cmd::Command::AppStart) => {
-                                defmt::info!("companion: APP_START → SELF_INFO");
-                                companion::Response::SelfInfo(companion::SelfInfo {
-                                    adv_type: 1,       // ChatNode
-                                    tx_power: ctx.tx_power,
-                                    max_tx_power: 22,
-                                    pub_key: &ctx.pub_key,
-                                    lat: 0,
-                                    lon: 0,
-                                    multi_acks: 0,
-                                    adv_location_policy: 0,
-                                    telemetry_mode: 0,
-                                    manual_add_contacts: 0,
-                                    frequency_hz: ctx.frequency_hz,
-                                    bandwidth_hz: ctx.bandwidth_hz,
-                                    spreading_factor: ctx.spreading_factor,
-                                    coding_rate: ctx.coding_rate,
-                                    name: &device_name,
-                                })
-                            }
-
-                            Ok(companion::cmd::Command::DeviceQuery) => {
-                                defmt::info!("companion: DEVICE_QUERY → DEVICE_INFO");
-                                companion::Response::DeviceInfo(companion::DeviceInfo {
-                                    fw_version: 3,
-                                    max_contacts_raw: 10,  // 20 contacts
-                                    max_channels: channels::NUM_CHANNELS as u8,
-                                    ble_pin: {
-                                        let v = crate::BLE_PASSKEY.load(Ordering::Relaxed);
-                                        if v == u32::MAX { 0 } else { v }
-                                    },
-                                    fw_build: b"dev",
-                                    model: b"BornHack Cyber\xC3\x86gg",
-                                    version: b"0.1.0",
-                                    client_repeat: false,
-                                    path_hash_mode: 0,
-                                })
-                            }
-
-                            Ok(companion::cmd::Command::GetBattery) => {
-                                let mv = crate::fw::battery::read_mv();
-                                let pct = crate::fw::battery::read_pct();
-                                defmt::info!("companion: GET_BATT → BATTERY {} mV {}%", mv, pct);
-                                companion::Response::Battery {
-                                    mv,
-                                    used_kb: 0,
-                                    total_kb: 8192,
+                    }
+                    GattConnectionEvent::PairingFailed(e) => {
+                        defmt::warn!("BLE: pairing failed: {:?}", defmt::Debug2Format(&e));
+                        crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                        crate::BLE_PAIRING_SIGNAL.signal(());
+                    }
+                    GattConnectionEvent::Gatt { event: GattEvent::Write(write) } => {
+                        if write.handle() == server.nus.rx.handle {
+                            let sec = gatt_conn.raw().security_level().unwrap_or(SecurityLevel::NoEncryption);
+                            if !sec.authenticated() {
+                                defmt::warn!("companion: unauthenticated write — sending INSUFFICIENT_AUTHENTICATION");
+                                if let Ok(reply) = write.reject(AttErrorCode::INSUFFICIENT_AUTHENTICATION) {
+                                    reply.send().await;
                                 }
+                                continue;
                             }
 
-                            Ok(companion::cmd::Command::SyncNextMessage)
-                            | Ok(companion::cmd::Command::GetContacts) => {
-                                defmt::info!("companion: msg/contact query → NO_MORE_MSGS");
-                                companion::Response::NoMoreMsgs
-                            }
+                            let data = write.data();
 
-                            Ok(companion::cmd::Command::GetChannel(idx)) => {
-                                if idx as usize >= channels::NUM_CHANNELS {
-                                    defmt::info!("companion: GET_CHANNEL {=u8} → out of range", idx);
+                            // Pre-pop for SYNC_NEXT_MESSAGE (0x0A) before building the
+                            // response, so the owned message outlives the match.
+                            let popped = if data.first() == Some(&0x0A) {
+                                msg_queue::pop().await
+                            } else {
+                                None
+                            };
+
+                            // Declare before the match so its lifetime covers `response`.
+                            let device_name = crate::fw::device_id::get_bytes();
+                            let response = match companion::cmd::parse(data) {
+                                Err(_) => {
+                                    defmt::warn!("companion: empty write");
+                                    companion::Response::Error(companion::ErrorCode::Generic)
+                                }
+
+                                Ok(companion::cmd::Command::AppStart) => {
+                                    defmt::info!("companion: APP_START → SELF_INFO");
+                                    companion::Response::SelfInfo(companion::SelfInfo {
+                                        adv_type: 1,
+                                        tx_power: ctx.tx_power,
+                                        max_tx_power: 22,
+                                        pub_key: &ctx.pub_key,
+                                        lat: 0,
+                                        lon: 0,
+                                        multi_acks: 0,
+                                        adv_location_policy: 0,
+                                        telemetry_mode: 0,
+                                        manual_add_contacts: 0,
+                                        frequency_hz: ctx.frequency_hz,
+                                        bandwidth_hz: ctx.bandwidth_hz,
+                                        spreading_factor: ctx.spreading_factor,
+                                        coding_rate: ctx.coding_rate,
+                                        name: &device_name,
+                                    })
+                                }
+
+                                Ok(companion::cmd::Command::DeviceQuery) => {
+                                    defmt::info!("companion: DEVICE_QUERY → DEVICE_INFO");
+                                    companion::Response::DeviceInfo(companion::DeviceInfo {
+                                        fw_version: 3,
+                                        max_contacts_raw: 10,
+                                        max_channels: channels::NUM_CHANNELS as u8,
+                                        ble_pin: {
+                                            let v = crate::BLE_PASSKEY.load(Ordering::Relaxed);
+                                            if v == u32::MAX { 0 } else { v }
+                                        },
+                                        fw_build: b"dev",
+                                        model: b"BornHack Cyber\xC3\x86gg",
+                                        version: b"0.1.0",
+                                        client_repeat: false,
+                                        path_hash_mode: 0,
+                                    })
+                                }
+
+                                Ok(companion::cmd::Command::GetBattery) => {
+                                    let mv = crate::fw::battery::read_mv();
+                                    let pct = crate::fw::battery::read_pct();
+                                    defmt::info!("companion: GET_BATT → BATTERY {} mV {}%", mv, pct);
+                                    companion::Response::Battery {
+                                        mv,
+                                        used_kb: 0,
+                                        total_kb: 8192,
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SyncNextMessage) => {
+                                    match popped {
+                                        Some(ref msg) => {
+                                            let remaining = msg_queue::count();
+                                            defmt::info!(
+                                                "companion: SYNC_NEXT_MESSAGE → ch={=u8} ts={=u32} ({=u16} remaining)",
+                                                msg.channel_idx, msg.timestamp, remaining
+                                            );
+                                            // If more messages are queued, signal so the BLE
+                                            // loop sends another 0x83 after this response.
+                                            if remaining > 0 {
+                                                crate::MESSAGES_WAITING_SIGNAL.signal(());
+                                            }
+                                            companion::Response::ChannelMsgRecvV3(companion::ChannelMsgV3 {
+                                                rf_info: [msg.rssi.unsigned_abs().min(255) as u8, 0, 0],
+                                                channel: msg.channel_idx,
+                                                path_len: msg.path_len,
+                                                text_type: msg.text_type,
+                                                timestamp: msg.timestamp,
+                                                text: &msg.text,
+                                            })
+                                        }
+                                        None => {
+                                            defmt::info!("companion: SYNC_NEXT_MESSAGE → NO_MORE_MSGS");
+                                            companion::Response::NoMoreMsgs
+                                        }
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::GetContacts) => {
+                                    defmt::info!("companion: GET_CONTACTS → NO_MORE_MSGS");
                                     companion::Response::NoMoreMsgs
-                                } else {
-                                    let (name, key) = channels::get(idx).await
-                                        .unwrap_or(([0u8; 32], [0u8; 16]));
-                                    let empty = name == [0u8; 32] && key == [0u8; 16];
-                                    defmt::info!("companion: GET_CHANNEL {=u8} → {}", idx,
-                                        if empty { "empty" } else { "found" });
-                                    companion::Response::ChannelInfo(companion::ChannelInfo { index: idx, name, key })
                                 }
-                            }
 
-                            Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
-                                defmt::info!("companion: SEND_SELF_ADVERT mode={=u8} → OK", mode);
-                                // TODO: queue LoRa advert transmission
-                                companion::Response::Ok
-                            }
+                                Ok(companion::cmd::Command::GetChannel(idx)) => {
+                                    if idx as usize >= channels::NUM_CHANNELS {
+                                        defmt::info!("companion: GET_CHANNEL {=u8} → out of range", idx);
+                                        companion::Response::NoMoreMsgs
+                                    } else {
+                                        let (name, key) = channels::get(idx).await
+                                            .unwrap_or(([0u8; 32], [0u8; 16]));
+                                        let empty = name == [0u8; 32] && key == [0u8; 16];
+                                        defmt::info!("companion: GET_CHANNEL {=u8} → {}",
+                                            idx, if empty { "empty" } else { "found" });
+                                        companion::Response::ChannelInfo(companion::ChannelInfo { index: idx, name, key })
+                                    }
+                                }
 
-                            Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
-                                defmt::info!("companion: SET_DEVICE_TIME ts={=u32} → OK", ts);
-                                companion::Response::Ok
-                            }
-
-                            Ok(companion::cmd::Command::SetChannel { index, name: ch_name, key: ch_key }) => {
-                                if channels::set(index, ch_name, ch_key).await {
-                                    defmt::info!("companion: SET_CHANNEL idx={=u8} → stored", index);
+                                Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
+                                    defmt::info!("companion: SEND_SELF_ADVERT mode={=u8} → OK", mode);
                                     companion::Response::Ok
-                                } else {
-                                    defmt::warn!("companion: SET_CHANNEL idx={=u8} out of range", index);
-                                    companion::Response::Error(companion::ErrorCode::IndexOutOfRange)
                                 }
+
+                                Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
+                                    defmt::info!("companion: SET_DEVICE_TIME ts={=u32} → OK", ts);
+                                    companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::SetChannel { index, name: ch_name, key: ch_key }) => {
+                                    if channels::set(index, ch_name, ch_key).await {
+                                        defmt::info!("companion: SET_CHANNEL idx={=u8} → stored", index);
+                                        crate::CHANNELS_CHANGED_SIGNAL.signal(());
+                                        companion::Response::Ok
+                                    } else {
+                                        defmt::warn!("companion: SET_CHANNEL idx={=u8} out of range", index);
+                                        companion::Response::Error(companion::ErrorCode::IndexOutOfRange)
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SendChannelMessage { channel, timestamp, text }) => {
+                                    let mut v: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+                                    let _ = v.extend_from_slice(&text[..text.len().min(msg_queue::MAX_TEXT)]);
+                                    match crate::TX_MSG_CHANNEL.try_send(crate::TxChannelMsg {
+                                        channel_idx: channel,
+                                        timestamp,
+                                        text: v,
+                                    }) {
+                                        Ok(()) => {
+                                            defmt::info!("companion: SEND_CHANNEL_MSG ch={=u8} → queued for TX", channel);
+                                            companion::Response::Ok
+                                        }
+                                        Err(_) => {
+                                            defmt::warn!("companion: SEND_CHANNEL_MSG ch={=u8} → TX queue full", channel);
+                                            companion::Response::Error(companion::ErrorCode::InsufficientStorage)
+                                        }
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SetFloodScope(key)) => {
+                                    match key {
+                                        Some(k) => defmt::info!("companion: SET_FLOOD_SCOPE key={:02X} → OK", k),
+                                        None    => defmt::info!("companion: SET_FLOOD_SCOPE (clear) → OK"),
+                                    }
+                                    companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::Unknown(b)) => {
+                                    defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
+                                    companion::Response::Error(companion::ErrorCode::InvalidCommand)
+                                }
+                            };
+
+                            let mut resp_buf = [0u8; companion::MAX_RESPONSE_LEN];
+                            let resp_len = companion::encode(&response, &mut resp_buf);
+
+                            // Acknowledge the write BEFORE sending the notification.
+                            match write.accept() {
+                                Ok(reply) => reply.send().await,
+                                Err(e) => defmt::warn!("companion: write.accept() failed: {:?}", defmt::Debug2Format(&e)),
                             }
-
-                            Ok(companion::cmd::Command::SendChannelMessage { channel, .. }) => {
-                                defmt::info!("companion: SEND_CHANNEL_MSG ch={=u8} → OK (not transmitted)", channel);
-                                // TODO: queue LoRa channel message transmission
-                                companion::Response::MsgSent
-                            }
-
-                            Ok(companion::cmd::Command::Unknown(b)) => {
-                                defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
-                                companion::Response::Error(companion::ErrorCode::InvalidCommand)
-                            }
-                        };
-
-                        let mut resp_buf = [0u8; companion::MAX_RESPONSE_LEN];
-                        let resp_len = companion::encode(&response, &mut resp_buf);
-
-                        // Acknowledge the write BEFORE sending notifications.
-                        // The phone waits for the ATT Write Response before it
-                        // will process any incoming notifications; reversing the
-                        // order causes the "Connecting…" stall.
-                        match write.accept() {
-                            Ok(reply) => reply.send().await,
-                            Err(e) => defmt::warn!("companion: write.accept() failed: {:?}", defmt::Debug2Format(&e)),
+                            notify_once(&server, &gatt_conn, &resp_buf[..resp_len]).await;
+                        } else if let Ok(reply) = write.accept() {
+                            reply.send().await;
                         }
-                        notify_once(&server, &gatt_conn, &resp_buf[..resp_len]).await;
-                    } else if let Ok(reply) = write.accept() {
-                        reply.send().await;
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 

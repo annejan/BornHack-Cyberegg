@@ -8,10 +8,35 @@ use embassy_time::Timer;
 use super::device_identity::DeviceIdentity;
 use super::health::SYSTEM_HEALTH;
 use super::sx1262::{MeshCoreConfig, SimpleLoRa};
+use super::{channels, msg_queue};
 use crate::{health_err, update_health};
-use meshcore::channel::KnownChannel;
+use meshcore::channel::hash_from_key;
 use meshcore::contacts::Contacts;
 use meshcore::dedup::{MsgHashRing, msg_hash};
+
+// ---------------------------------------------------------------------------
+// Loaded channel table
+// ---------------------------------------------------------------------------
+
+struct LoadedChannel {
+    slot_idx: u8,
+    name:     [u8; 32],
+    key:      [u8; 16],
+    hash:     u8,
+}
+
+async fn load_channels() -> heapless::Vec<LoadedChannel, { channels::NUM_CHANNELS }> {
+    let mut v = heapless::Vec::new();
+    for i in 0..channels::NUM_CHANNELS as u8 {
+        if let Some((name, key)) = channels::get(i).await {
+            let hash = hash_from_key(&key);
+            let name_str = core::str::from_utf8(&name).unwrap_or("?").trim_end_matches('\0');
+            defmt::info!("  channel slot {=u8}: hash={=u8} name={=str}", i, hash, name_str);
+            let _ = v.push(LoadedChannel { slot_idx: i, name, key, hash });
+        }
+    }
+    v
+}
 
 static CONTACTS: Mutex<CriticalSectionRawMutex, RefCell<Contacts<20>>> =
     Mutex::new(RefCell::new(Contacts::new()));
@@ -78,18 +103,41 @@ pub async fn run_meshcore_listener<'a>(
     );
     defmt::info!("MeshCore identity pub_key: {=[u8]:02x}", &identity.pub_key[..]);
 
-    let channels = [
-        KnownChannel::public(),
-        KnownChannel::hashtag("#test"),
-        KnownChannel::hashtag("#prut"),
-        KnownChannel::hashtag("#gezellig"),
-        KnownChannel::hashtag("#leiden"),
-    ];
+    let mut loaded_channels = load_channels().await;
+    defmt::info!("MeshCore: loaded {} channel(s) from KV", loaded_channels.len());
 
     let mut raw = [0u8; 255];
 
     loop {
-        match lora.receive_packet(&mut raw).await {
+        // Reload channel table if the BLE task updated a channel.
+        if crate::CHANNELS_CHANGED_SIGNAL.signaled() {
+            crate::CHANNELS_CHANGED_SIGNAL.reset();
+            loaded_channels = load_channels().await;
+            defmt::info!("MeshCore: reloaded {} channel(s) from KV", loaded_channels.len());
+        }
+
+        // Drain any already-queued outgoing messages before entering RX.
+        while let Ok(req) = crate::TX_MSG_CHANNEL.try_receive() {
+            send_grp_txt(&mut lora, &loaded_channels, req).await;
+        }
+
+        // Race: receive the next LoRa packet OR a new TX request arrives.
+        // This keeps TX latency to the radio air-time only, instead of up to
+        // the full 15-second receive_packet timeout.
+        use embassy_futures::select::{Either, select};
+        let rx_result = match select(
+            lora.receive_packet(&mut raw),
+            crate::TX_MSG_CHANNEL.receive(),
+        ).await {
+            Either::Second(tx_req) => {
+                // A TX request interrupted RX — send it immediately and loop.
+                send_grp_txt(&mut lora, &loaded_channels, tx_req).await;
+                continue;
+            }
+            Either::First(result) => result,
+        };
+
+        match rx_result {
             Ok(None) => { /* timeout or CRC error — already re-armed */ }
 
             Ok(Some((len, rssi))) => {
@@ -108,8 +156,9 @@ pub async fn run_meshcore_listener<'a>(
                     Ok(msg) => {
                         update_health!(|h| h.lora.set_ok("Packet received."));
                         use meshcore::packet::PayloadType;
+                        let path_len = msg.path.len() as u8;
                         match msg.payload_type {
-                            PayloadType::GrpTxt => log_grp_txt(&msg.payload, rssi, &channels),
+                            PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, path_len, &loaded_channels).await,
                             PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, identity),
                             PayloadType::Advert => log_advert(&msg.payload, rssi),
                             PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
@@ -139,7 +188,7 @@ pub async fn run_meshcore_listener<'a>(
 // Per-type handlers
 // ---------------------------------------------------------------------------
 
-fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
+async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[LoadedChannel]) {
     use meshcore::payload::grp_txt;
 
     let grp = match grp_txt::deserialize(payload) {
@@ -154,10 +203,10 @@ fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
         Some(c) => c,
         None => {
             defmt::info!(
-                "MeshCore GrpTxt [channel={=u8} {=i16}dBm] (unknown channel): {=[u8]}",
+                "MeshCore GrpTxt [hash={=u8} {=i16}dBm] no matching channel (have: {=[u8]})",
                 grp.channel_hash,
                 rssi,
-                &grp.data[..]
+                &channels.iter().map(|c| c.hash).collect::<heapless::Vec<u8, 8>>()[..],
             );
             return;
         }
@@ -165,9 +214,9 @@ fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
 
     if grp_txt::verify_mac(&ch.key, &grp).is_err() {
         defmt::warn!(
-            "MeshCore GrpTxt [channel={=u8}] MAC mismatch on channel {=str}",
+            "MeshCore GrpTxt [channel={=u8}] MAC mismatch on channel hash={=u8}",
             grp.channel_hash,
-            ch.name
+            ch.slot_idx,
         );
         return;
     }
@@ -176,31 +225,34 @@ fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
         Ok(dec) => {
             let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
 
-            // Deduplicate: hash channel_hash + decrypted text + timestamp
-            // (stable across mesh hops — repeated relays don't change this data).
+            // Deduplicate: hash channel_hash + decrypted text + timestamp.
             let hash = msg_hash(grp.channel_hash, text.as_bytes(), dec.timestamp);
             let already_seen = MSG_SEEN.lock(|cell| {
                 let mut ring = cell.borrow_mut();
-                if ring.contains(hash) {
-                    true
-                } else {
-                    ring.insert(hash);
-                    false
-                }
+                if ring.contains(hash) { true } else { ring.insert(hash); false }
             });
             if already_seen {
-                defmt::debug!("GrpTxt: duplicate message suppressed (hash={=u32:#010x})", hash);
+                defmt::debug!("GrpTxt: duplicate suppressed (hash={=u32:#010x})", hash);
                 return;
             }
 
+            // Channel name as an owned string for logging and display.
+            let ch_name_str = core::str::from_utf8(&ch.name)
+                .unwrap_or("")
+                .trim_end_matches('\0');
+            let mut ch_name: heapless::String<32> = heapless::String::new();
+            let _ = ch_name.push_str(ch_name_str);
+
             defmt::info!(
-                "MeshCore GrpTxt [{=str} ts={=u32} {=i16}dBm]: {=str}",
-                ch.name,
+                "MeshCore GrpTxt [{=str} ts={=u32} {=i16}dBm path={=u8}]: {=str}",
+                ch_name.as_str(),
                 dec.timestamp,
                 rssi,
-                text
+                path_len,
+                text,
             );
 
+            // Update the on-screen LoRa message display.
             let (sender_str, msg_str) = match text.find(": ") {
                 Some(i) => (&text[..i], &text[i + 2..]),
                 None => ("", text),
@@ -211,7 +263,7 @@ fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
             let _ = text_str.push_str(msg_str);
             crate::LAST_LORA_MSG.lock(|cell| {
                 *cell.borrow_mut() = Some(crate::LoraMessage {
-                    channel: ch.name,
+                    channel: ch_name,
                     sender,
                     text: text_str,
                     timestamp: dec.timestamp,
@@ -219,9 +271,23 @@ fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
                 });
             });
             crate::LORA_MSG_SIGNAL.signal(());
+
+            // Push to the flash queue and notify any connected BLE companion.
+            let mut queued_text: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+            let _ = queued_text.extend_from_slice(&dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]);
+            msg_queue::push(&msg_queue::ReceivedChannelMsg {
+                channel_idx: ch.slot_idx,
+                path_len,
+                text_type: dec.text_type,
+                timestamp: dec.timestamp,
+                rssi,
+                text: queued_text,
+            }).await;
+            defmt::info!("msg_queue: {} message(s) waiting", msg_queue::count());
+            crate::MESSAGES_WAITING_SIGNAL.signal(());
         }
         Err(_) => {
-            defmt::warn!("GrpTxt: decryption failed on channel {=str}", ch.name);
+            defmt::warn!("GrpTxt: decryption failed on channel slot {=u8}", ch.slot_idx);
         }
     }
 }
@@ -354,6 +420,89 @@ fn log_txt_msg(payload: &[u8], rssi: i16, identity: &DeviceIdentity) {
                 });
             });
             crate::PM_SIGNAL.signal(());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Channel message transmission
+// ---------------------------------------------------------------------------
+
+/// Encrypt and broadcast a group-text message on channel slot `req.channel_idx`.
+///
+/// The channel key is looked up first from the already-loaded in-RAM table,
+/// with a direct KV fallback for channels set after the last reload.
+async fn send_grp_txt(
+    lora: &mut SimpleLoRa<'_>,
+    loaded_channels: &[LoadedChannel],
+    req: crate::TxChannelMsg,
+) {
+    use meshcore::payload::grp_txt;
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
+
+    // Resolve the channel key — prefer the in-RAM table, fall back to KV.
+    let (key, hash) = if let Some(ch) = loaded_channels.iter().find(|c| c.slot_idx == req.channel_idx) {
+        (ch.key, ch.hash)
+    } else if let Some((_, key)) = channels::get(req.channel_idx).await {
+        let hash = hash_from_key(&key);
+        (key, hash)
+    } else {
+        defmt::warn!("send_grp_txt: channel slot {=u8} not found, dropping", req.channel_idx);
+        return;
+    };
+
+    // MeshCore GrpTxt wire format embeds the sender as "Name: MessageText".
+    // Build the prefixed wire text: "{device_id}: {message}".
+    // MAX_GRP_DATA_SIZE = 181 bytes; prefix is 6 bytes ("XXYY: "), leaving 175 for the body.
+    let device_id = super::device_id::get_bytes();
+    let mut wire_text: heapless::Vec<u8, { meshcore::MAX_GRP_DATA_SIZE }> = heapless::Vec::new();
+    let _ = wire_text.extend_from_slice(&device_id);
+    let _ = wire_text.extend_from_slice(b": ");
+    let body_max = meshcore::MAX_GRP_DATA_SIZE.saturating_sub(device_id.len() + 2);
+    let _ = wire_text.extend_from_slice(&req.text[..req.text.len().min(body_max)]);
+
+    let grp = match grp_txt::encrypt(&key, hash, req.timestamp, 0, &wire_text) {
+        Ok(g) => g,
+        Err(e) => {
+            defmt::warn!("send_grp_txt: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = grp_txt::serialize(&grp, &mut payload_buf, &mut payload_len) {
+        defmt::warn!("send_grp_txt: serialize failed: {:?}", defmt::Debug2Format(&e));
+        return;
+    }
+
+    let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
+    let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
+
+    let msg = Message {
+        payload_type:   PayloadType::GrpTxt,
+        route:          RouteType::Flood,
+        version:        0,
+        transport_code: 0,
+        path:           heapless::Vec::new(),
+        payload:        msg_payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_grp_txt: TX failed: {:?}", e);
+            } else {
+                defmt::info!(
+                    "GrpTxt sent: ch={=u8} ts={=u32} len={=usize}B",
+                    req.channel_idx, req.timestamp, len
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_grp_txt: packet serialize failed: {:?}", defmt::Debug2Format(&e));
         }
     }
 }
