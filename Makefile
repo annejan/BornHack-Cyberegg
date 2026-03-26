@@ -3,8 +3,8 @@ BIN         = target/thumbv7em-none-eabihf/debug/embassy.bin
 BIN_REL     = target/thumbv7em-none-eabihf/release/embassy.bin
 ELF_REL     = target/thumbv7em-none-eabihf/release/embassy
 
-# App flash base matches the ACTIVE slot in memory.x (after the embassy-boot bootloader)
-FLASH_BASE = 0x0000D000
+# App flash base matches the app slot in memory.x (after the 64 K bootloader)
+FLASH_BASE = 0x00010000
 
 .PHONY: fw fw-release sim flash flash-release monitor bl bl-flash dfu-flash
 
@@ -43,14 +43,10 @@ bl:
 	cd bootloader && cargo bl
 
 # Build and flash the bootloader via SWD (do this once on a fresh device).
-# A full chip erase is required first so that the embassy-boot state region
-# at 0xC000 is 0xFF (empty). Without this, stale bytes from the previous
-# Adafruit/S140 flash content at that address are misread as a DFU state
-# and the bootloader panics.
-#
+# Full chip erase is done first to clear any stale content.
 # Uses `probe-rs download` (not `probe-rs run`) so make exits cleanly after
 # programming without waiting for the firmware — the bootloader blinks red
-# and waits indefinitely when no app is present, so `run` would never return.
+# and waits for DFU when no valid app is present.
 bl-flash:
 	probe-rs erase --chip nRF52840_xxAA
 	cd bootloader && cargo bl
@@ -60,13 +56,14 @@ bl-flash:
 
 # Flash the app firmware over USB DFU.
 # Hold the execute button while powering on to enter DFU mode (red LED blinks).
+# -w: wait up to 10 s for the device to appear (so you can plug in after make).
 dfu-flash:
 	cargo fw
 	arm-none-eabi-objcopy -O binary $(ELF) $(BIN)
-	dfu-util -D $(BIN)
+	dfu-util -w -D $(BIN)
 
 
 dfu-flash-release:
 	cargo fw-release
 	arm-none-eabi-objcopy -O binary $(ELF_REL) $(BIN_REL)
-	dfu-util -D $(BIN_REL)
+	dfu-util -w -D $(BIN_REL)

@@ -60,15 +60,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
-name = "block-buffer"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -130,16 +121,6 @@ name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-
-[[package]]
-name = "crypto-common"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
-dependencies = [
- "generic-array",
- "typenum",
-]
 
 [[package]]
 name = "darling"
@@ -219,54 +200,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "digest"
-version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
-dependencies = [
- "block-buffer",
- "crypto-common",
-]
-
-[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
-]
-
-[[package]]
-name = "embassy-boot"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b8138aeafd7dd004d77bbf42a581060a018112ffaa3ffc1996da5d3867f345"
-dependencies = [
- "defmt",
- "digest",
- "embassy-embedded-hal",
- "embassy-sync",
- "embedded-storage",
- "embedded-storage-async",
- "signature",
-]
-
-[[package]]
-name = "embassy-boot-nrf"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fb12d0fabd2208b3ee5e556b50c900b5152dad6c7a622b09a7c1152cf85bcb4"
-dependencies = [
- "cfg-if",
- "cortex-m",
- "cortex-m-rt",
- "defmt",
- "embassy-boot",
- "embassy-nrf",
- "embassy-sync",
- "embedded-storage",
- "embedded-storage-async",
 ]
 
 [[package]]
@@ -456,23 +395,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embassy-usb-dfu"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9084bd90d04a3e4e36b6d826c70978c644efad12e53cae2a656e4ecaf92674e2"
-dependencies = [
- "bitflags 2.11.0",
- "cortex-m",
- "defmt",
- "embassy-boot",
- "embassy-futures",
- "embassy-sync",
- "embassy-time",
- "embassy-usb",
- "embedded-storage",
-]
-
-[[package]]
 name = "embassy-usb-driver"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -574,16 +496,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c39754e157331b013978ec91992bde1ac089843443c49cbc7f46150b0fad0893"
 
 [[package]]
-name = "generic-array"
-version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
-dependencies = [
- "typenum",
- "version_check",
-]
-
-[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -659,19 +571,16 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 name = "nrf-aegg-bootloader"
 version = "0.1.0"
 dependencies = [
- "cfg-if",
  "cortex-m",
  "cortex-m-rt",
  "defmt",
  "defmt-rtt",
- "embassy-boot-nrf",
  "embassy-executor",
  "embassy-futures",
  "embassy-nrf",
  "embassy-sync",
  "embassy-time",
  "embassy-usb",
- "embassy-usb-dfu",
  "static_cell",
 ]
 
@@ -810,12 +719,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "signature"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 
 [[package]]
 name = "ssmarshal"

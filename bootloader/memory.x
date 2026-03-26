@@ -1,19 +1,11 @@
 MEMORY
 {
-  /* nRF52840 — 1 MB flash, 256 KB RAM                         */
-  /* Bootloader occupies the first 48 K of flash.              */
-  FLASH              (rx)  : ORIGIN = 0x00000000, LENGTH = 48K
-  BOOTLOADER_STATE   (rw)  : ORIGIN = 0x0000C000, LENGTH = 4K
-  ACTIVE             (rx)  : ORIGIN = 0x0000D000, LENGTH = 480K
-  DFU                (rw)  : ORIGIN = 0x00085000, LENGTH = 484K
-  RAM                (rwx) : ORIGIN = 0x20000000, LENGTH = 256K
+  /* nRF52840 — 1 MB internal flash, 256 KB RAM                */
+  /* Bootloader occupies the first 64 K of flash.              */
+  /* App occupies the remaining ~960 K (0x10000 – 0x0FFFFF).   */
+  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 64K
+  RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 256K
 }
 
-__bootloader_state_start = ORIGIN(BOOTLOADER_STATE);
-__bootloader_state_end   = ORIGIN(BOOTLOADER_STATE) + LENGTH(BOOTLOADER_STATE);
-
-__bootloader_active_start = ORIGIN(ACTIVE);
-__bootloader_active_end   = ORIGIN(ACTIVE) + LENGTH(ACTIVE);
-
-__bootloader_dfu_start = ORIGIN(DFU);
-__bootloader_dfu_end   = ORIGIN(DFU) + LENGTH(DFU);
+/* Exported so the bootloader can validate and jump to the app. */
+APP_START = 0x00010000;

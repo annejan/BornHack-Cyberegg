@@ -2,16 +2,12 @@
 #![no_main]
 
 // Code is for NRF52840
-use embassy_boot_nrf::{AlignedBuffer, BlockingFirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_executor::Spawner;
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
-use embassy_nrf::nvmc::Nvmc;
 use embassy_nrf::pwm::SimplePwm;
-use embassy_sync::blocking_mutex::Mutex;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::Timer;
 use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
 use hello_graphics::fw::ble::{CompanionContext, init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
@@ -34,16 +30,6 @@ use ssd1680::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-// Feed the watchdog started by the bootloader (channel 0, 5s timeout).
-async fn feed_watchdog() -> ! {
-    let mut ticker = Ticker::every(Duration::from_secs(1));
-    loop {
-        embassy_nrf::pac::WDT
-            .rr(0)
-            .write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
-        ticker.next().await;
-    }
-}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -226,16 +212,6 @@ async fn main(spawner: Spawner) {
     led_blue.set_high();
     Timer::after_millis(200).await;
 
-    // All peripherals initialised — commit this firmware so the bootloader won't roll back.
-    {
-        let flash = Mutex::<NoopRawMutex, _>::new(core::cell::RefCell::new(Nvmc::new(p.NVMC)));
-        let fw_config = FirmwareUpdaterConfig::from_linkerfile_blocking(&flash, &flash);
-        let mut aligned = AlignedBuffer([0u8; 4]);
-        let mut updater = BlockingFirmwareUpdater::new(fw_config, &mut aligned.0);
-        let _ = updater.mark_booted();
-        defmt::info!("Firmware marked as booted");
-    }
-
     defmt::info!("Entering main loop...");
     let main_loop = async {
         // let mut loop_count: u32 = 0;
@@ -308,5 +284,5 @@ async fn main(spawner: Spawner) {
         &identity,
     );
 
-    embassy_futures::join::join5(main_loop, run_nfc, buttons, run_lora, feed_watchdog()).await;
+    embassy_futures::join::join4(main_loop, run_nfc, buttons, run_lora).await;
 }
