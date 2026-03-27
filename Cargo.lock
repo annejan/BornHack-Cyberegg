@@ -984,7 +984,7 @@ dependencies = [
  "nrf-sdc",
  "panic-probe",
  "rand_core 0.6.4",
- "ssd1680",
+ "ssd1675",
  "static_cell",
  "sx126x",
  "tickv",
@@ -1626,7 +1626,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
-name = "ssd1680"
+name = "ssd1675"
 version = "0.16.1"
 dependencies = [
  "embassy-time",

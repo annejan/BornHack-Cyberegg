@@ -151,6 +151,19 @@ pub async fn run_meshcore_listener<'a>(
             Ok(None) => { /* CRC error or non-data IRQ — already re-armed */ }
 
             Ok(Some((len, rssi))) => {
+                // Push raw bytes to the BLE task immediately (before dedup/decrypt)
+                // so the client can do its own decryption and relay-repeat tracking.
+                {
+                    let mut pkt = crate::RawLoRaPkt {
+                        snr_x4: 0,
+                        rssi:   rssi.clamp(-128, 0) as i8,
+                        len,
+                        data:   [0u8; meshcore::MAX_TRANS_UNIT],
+                    };
+                    pkt.data[..len].copy_from_slice(&raw[..len]);
+                    let _ = crate::RAW_PKT_CHANNEL.try_send(pkt);
+                }
+
                 let frame = &raw[..len];
 
                 match meshcore::packet::deserialize(frame) {
@@ -165,8 +178,14 @@ pub async fn run_meshcore_listener<'a>(
 
                     Ok(msg) => {
                         update_health!(|h| h.lora.set_ok("Packet received."));
-                        use meshcore::packet::PayloadType;
-                        let path_len = msg.path.len() as u8;
+                        use meshcore::packet::{PayloadType, RouteType};
+                        // Mirror the original firmware: flood routes carry the wire-encoded
+                        // path_len_byte (hash_size_code<<6 | hop_count); direct routes
+                        // signal 0xFF (no path built up by relays).
+                        let path_len = match msg.route {
+                            RouteType::Flood | RouteType::TransportFlood => msg.path_len_byte,
+                            _ => 0xFF,
+                        };
                         match msg.payload_type {
                             PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, path_len, &loaded_channels).await,
                             PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, identity),
@@ -235,14 +254,13 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[Loade
         Ok(dec) => {
             let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
 
-            // Deduplicate: hash channel_hash + decrypted text + timestamp.
-            let hash = msg_hash(grp.channel_hash, text.as_bytes(), dec.timestamp);
-            let already_seen = MSG_SEEN.lock(|cell| {
+            let content_hash = msg_hash(grp.channel_hash, text.as_bytes(), dec.timestamp);
+            let is_new = MSG_SEEN.lock(|cell| {
                 let mut ring = cell.borrow_mut();
-                if ring.contains(hash) { true } else { ring.insert(hash); false }
+                if ring.contains(content_hash) { false } else { ring.insert(content_hash); true }
             });
-            if already_seen {
-                defmt::debug!("GrpTxt: duplicate suppressed (hash={=u32:#010x})", hash);
+            if !is_new {
+                defmt::debug!("GrpTxt: duplicate suppressed (hash={=u32:#010x})", content_hash);
                 return;
             }
 
@@ -502,6 +520,7 @@ async fn send_grp_txt(
         route:          RouteType::Flood,
         version:        0,
         transport_code: 0,
+        path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        msg_payload,
     };
@@ -516,6 +535,12 @@ async fn send_grp_txt(
                     "GrpTxt sent: ch={=u8} ts={=u32} len={=usize}B",
                     req.channel_idx, req.timestamp, len
                 );
+
+                // Seed MSG_SEEN so relay-bounces of our own packet are
+                // suppressed.  We do NOT push to the companion queue — the
+                // companion app already knows it sent this message.
+                let content_hash = msg_hash(hash, &wire_text, req.timestamp);
+                MSG_SEEN.lock(|cell| cell.borrow_mut().insert(content_hash));
             }
         }
         Err(e) => {
@@ -577,6 +602,7 @@ pub async fn send_advert(
         route:          RouteType::Flood,
         version:        0,
         transport_code: 0,
+        path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        msg_payload,
     };
@@ -640,6 +666,7 @@ pub async fn send_pm(
         route:          RouteType::Flood,
         version:        0,
         transport_code: 0,
+        path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        msg_payload,
     };

@@ -22,6 +22,7 @@
         "Irqs",
         "jedec",
         "QSPI",
+        "redrive",
         "tickv"
     ]
 }

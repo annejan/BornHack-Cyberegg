@@ -1,6 +1,6 @@
-[submodule "vendor/ssd1680"]
-	path = vendor/ssd1680
-	url = https://codeberg.org/Ranzbak/ssd1680.git
+[submodule "ssd1675"]
+	path = vendor/ssd1675
+	url = https://codeberg.org/Ranzbak/ssd1675.git
 	branch = master
 [submodule "meshcore"]
 	path = vendor/meshcore

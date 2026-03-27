@@ -32,9 +32,9 @@ fn get_device_id() -> [u8; 4] {
 }
 #[cfg(feature = "embassy")]
 use heapless::format;
-// Embassy: re-export TriColor from ssd1680 hardware driver
+// Embassy: re-export TriColor from ssd1675 hardware driver
 #[cfg(feature = "embassy")]
-pub use ssd1680::graphics::{BLACK, RED, TriColor, WHITE};
+pub use ssd1675::graphics::{BLACK, RED, TriColor, WHITE};
 
 // Simulator: define TriColor locally
 #[cfg(feature = "simulator")]
@@ -320,6 +320,27 @@ pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 /// meshcore task reloads its channel table from KV.
 #[cfg(feature = "embassy")]
 pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// A raw received LoRa packet to be forwarded to the BLE companion as `0x88`.
+#[cfg(feature = "embassy")]
+pub struct RawLoRaPkt {
+    pub snr_x4: i8,
+    pub rssi:   i8,
+    pub len:    usize,
+    pub data:   [u8; meshcore::MAX_TRANS_UNIT],
+}
+
+/// Passes raw received LoRa packets from the meshcore task to the BLE task for
+/// immediate `0x88` (PUSH_CODE_LOG_RX_DATA) notifications.
+///
+/// Depth 4: burst tolerance.  If the BLE task is slow the oldest raw packet is
+/// dropped (send via `try_send`, ignore `Err`).
+#[cfg(feature = "embassy")]
+pub static RAW_PKT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    RawLoRaPkt,
+    4,
+> = embassy_sync::channel::Channel::new();
 
 /// An outgoing channel message queued by the BLE task for the meshcore task to transmit.
 #[cfg(feature = "embassy")]

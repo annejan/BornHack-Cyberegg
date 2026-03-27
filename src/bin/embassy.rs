@@ -13,9 +13,9 @@ use hello_graphics::fw::ble::{CompanionContext, init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
-use hello_graphics::fw::settings;
 use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
+use hello_graphics::fw::settings;
 use hello_graphics::{
     ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, health_err, with_health,
 };
@@ -23,13 +23,12 @@ use hello_graphics::{
     board, draw_graphics,
     fw::button::run_buttons,
     fw::buzzer::{Buzzer, buzzer_task, play as play_melody},
-    fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
+    fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd},
     fw::nfct::run_nfct,
 };
-use ssd1680::graphics::WHITE;
+use ssd1675::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
-
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -89,7 +88,8 @@ async fn main(spawner: Spawner) {
     // consumes p.RNG — the SDC holds the peripheral for its lifetime.
     let ble_prng_seed = hello_graphics::fw::device_identity::trng_seed(); // TRNG used before RNG peripheral is consumed by SDC
 
-    static SDC_MEM: StaticCell<nrf_sdc::Mem<{ hello_graphics::fw::ble::SDC_MEM_SIZE }>> = StaticCell::new();
+    static SDC_MEM: StaticCell<nrf_sdc::Mem<{ hello_graphics::fw::ble::SDC_MEM_SIZE }>> =
+        StaticCell::new();
     // init_ble returns SoftdeviceController<'static> directly.
     // PPI channels are reserved hardware crossbar slots used by MPSL (CH19,30,31) and
     // the SoftDevice Controller (CH17-29 minus the MPSL ones) for timing-critical BLE
@@ -137,16 +137,12 @@ async fn main(spawner: Spawner) {
     let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
     let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
 
-    Timer::after_millis(500).await;
     defmt::info!("Init EPD");
 
-    let bus = init_epd_bus(
+    let mut display: EpdGfx<'_> = init_epd(
         board!(p, epd_spi),
         board!(p, epd_sck).into(),
         board!(p, epd_mosi).into(),
-    );
-    let mut display: EpdGfx<'_> = init_epd(
-        bus,
         board!(p, epd_busy).into(),
         board!(p, epd_reset).into(),
         board!(p, epd_dc).into(),
@@ -156,6 +152,7 @@ async fn main(spawner: Spawner) {
         red_buffer,
         work_buffer,
     )
+    .await
     .unwrap();
 
     defmt::info!("EPD initialized");
@@ -224,46 +221,75 @@ async fn main(spawner: Spawner) {
                     health_err!(epd, "Failed to draw graphics");
                 }
             }
-            let _ = display.reset().await;
-            if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 0) {
-                // First screen with menu structure, fast updates
-                let _ = display.update_ghost().await;
-            } else {
-                // Other screens with small text, slower updates
-                let _ = display.update_bw().await;
-            }
-            let _ = display.deep_sleep().await;
+            // Snapshot active screen before starting the update so both the
+            // update path and the event filter use a consistent value.
+            let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
+
+            // Race the display update against incoming events.
+            // If an event arrives first, the update future is dropped — the EPD
+            // controller may be mid-refresh, but the hardware reset at the top
+            // of the next iteration will abort it and reinitialise the controller.
+            // If the update finishes first, we wait for the next event normally.
+            use embassy_futures::select::{Either, Either4, select, select4};
+            let update_completed = matches!(
+                select(
+                    async {
+                        let _ = display.reset().await;
+                        // if active_screen == 0 {
+                        //     let _ = display.update_ghost().await;
+                        // } else {
+                        let _ = display.update_bw().await;
+                        // }
+                        let _ = display.deep_sleep().await;
+                    },
+                    async {
+                        loop {
+                            match select4(
+                                button_rcvr.changed(),
+                                LORA_MSG_SIGNAL.wait(),
+                                ADVERT_SIGNAL.wait(),
+                                BLE_PAIRING_SIGNAL.wait(),
+                            )
+                            .await
+                            {
+                                Either4::First(_) => break,
+                                Either4::Second(_) if active_screen == 1 => break,
+                                Either4::Third(_) if active_screen == 2 => break,
+                                Either4::Fourth(_) => break,
+                                _ => {} // event not relevant for current screen
+                            }
+                        }
+                    },
+                )
+                .await,
+                Either::First(_)
+            );
 
             led_red.set_low();
             Timer::after_millis(50).await;
             led_red.set_high();
 
-            // Wait for a button event, a new LoRa message, a new advert, or a BLE pairing event.
-            // Signal-driven redraws only fire when the relevant screen is active.
-            loop {
-                use embassy_futures::select::{Either4, select4};
-                match select4(
-                    button_rcvr.changed(),
-                    LORA_MSG_SIGNAL.wait(),
-                    ADVERT_SIGNAL.wait(),
-                    BLE_PAIRING_SIGNAL.wait(),
-                )
-                .await
-                {
-                    Either4::First(_) => break,
-                    Either4::Second(_) => {
-                        if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 1) {
-                            break;
-                        }
+            if update_completed {
+                // Update finished cleanly — wait for the next event before redrawing.
+                // Signal-driven redraws only fire when the relevant screen is active.
+                loop {
+                    match select4(
+                        button_rcvr.changed(),
+                        LORA_MSG_SIGNAL.wait(),
+                        ADVERT_SIGNAL.wait(),
+                        BLE_PAIRING_SIGNAL.wait(),
+                    )
+                    .await
+                    {
+                        Either4::First(_) => break,
+                        Either4::Second(_) if active_screen == 1 => break,
+                        Either4::Third(_) if active_screen == 2 => break,
+                        Either4::Fourth(_) => break,
+                        _ => {}
                     }
-                    Either4::Third(_) => {
-                        if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 2) {
-                            break;
-                        }
-                    }
-                    Either4::Fourth(_) => break, // passkey displayed on any screen
                 }
             }
+            // If interrupted: loop back immediately; next reset() cleans up the controller.
         }
     };
 

@@ -423,6 +423,12 @@ async fn nus_peripheral_loop<C>(
             }
         };
 
+        // App protocol version negotiated via CMD_DEVICE_QUERY (0x16).
+        // < 3 → send ChannelMsgRecv (0x08, V1, no RF metadata)
+        // >= 3 → send ChannelMsgRecvV3 (0x11, includes SNR/reserved bytes)
+        // Defaults to 0 so clients that never send DEVICE_QUERY get V1.
+        let mut app_target_ver: u8 = 0;
+
         // Clear any stale signal, then re-arm if there are undelivered messages.
         crate::MESSAGES_WAITING_SIGNAL.reset();
         if !msg_queue::is_empty() {
@@ -430,13 +436,34 @@ async fn nus_peripheral_loop<C>(
         }
 
         loop {
-            use embassy_futures::select::{Either, select};
+            use embassy_futures::select::{Either3, select3};
 
-            match select(gatt_conn.next(), crate::MESSAGES_WAITING_SIGNAL.wait()).await {
+            match select3(
+                gatt_conn.next(),
+                crate::MESSAGES_WAITING_SIGNAL.wait(),
+                crate::RAW_PKT_CHANNEL.receive(),
+            ).await {
+                // -----------------------------------------------------------
+                // Raw LoRa packet received — push 0x88 to app immediately.
+                // -----------------------------------------------------------
+                Either3::Third(pkt) => {
+                    defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
+                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
+                    let len = companion::encode(
+                        &companion::Response::LogRxData {
+                            snr_x4: pkt.snr_x4,
+                            rssi:   pkt.rssi,
+                            data:   &pkt.data[..pkt.len],
+                        },
+                        &mut buf,
+                    );
+                    notify_once(&server, &gatt_conn, &buf[..len]).await;
+                }
+
                 // -----------------------------------------------------------
                 // New messages arrived while connected — push 0x83 to app.
                 // -----------------------------------------------------------
-                Either::Second(()) => {
+                Either3::Second(()) => {
                     defmt::debug!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
                     let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
                     let len = companion::encode(&companion::Response::MessagesWaiting, &mut buf);
@@ -446,7 +473,7 @@ async fn nus_peripheral_loop<C>(
                 // -----------------------------------------------------------
                 // GATT event
                 // -----------------------------------------------------------
-                Either::First(event) => match event {
+                Either3::First(event) => match event {
                     GattConnectionEvent::Disconnected { reason } => {
                         defmt::info!("BLE: disconnected (reason {:?})", defmt::Debug2Format(&reason));
                         crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
@@ -498,6 +525,7 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_radio:    Option<settings::RadioParams> = None;
                             let mut pending_position: Option<settings::Position> = None;
                             let mut pending_other:    Option<settings::OtherParams> = None;
+                            let mut pending_reboot:   bool = false;
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
                                     defmt::warn!("companion: empty write");
@@ -526,7 +554,9 @@ async fn nus_peripheral_loop<C>(
                                     })
                                 }
 
-                                Ok(companion::cmd::Command::DeviceQuery) => {
+                                Ok(companion::cmd::Command::DeviceQuery(ver)) => {
+                                    app_target_ver = ver;
+                                    defmt::info!("companion: DEVICE_QUERY app_target_ver={=u8}", ver);
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
                                         fw_version: 3,
                                         max_contacts_raw: 10,
@@ -567,14 +597,24 @@ async fn nus_peripheral_loop<C>(
                                             if remaining > 0 {
                                                 crate::MESSAGES_WAITING_SIGNAL.signal(());
                                             }
-                                            companion::Response::ChannelMsgRecvV3(companion::ChannelMsgV3 {
-                                                rf_info: [msg.rssi.unsigned_abs().min(255) as u8, 0, 0],
-                                                channel: msg.channel_idx,
-                                                path_len: msg.path_len,
-                                                text_type: msg.text_type,
-                                                timestamp: msg.timestamp,
-                                                text: &msg.text,
-                                            })
+                                            if app_target_ver >= 3 {
+                                                companion::Response::ChannelMsgRecvV3(companion::ChannelMsgV3 {
+                                                    rf_info: [msg.rssi.unsigned_abs().min(255) as u8, 0, 0],
+                                                    channel: msg.channel_idx,
+                                                    path_len: msg.path_len,
+                                                    text_type: msg.text_type,
+                                                    timestamp: msg.timestamp,
+                                                    text: &msg.text,
+                                                })
+                                            } else {
+                                                companion::Response::ChannelMsgRecv(companion::ChannelMsg {
+                                                    channel: msg.channel_idx,
+                                                    path_len: msg.path_len,
+                                                    text_type: msg.text_type,
+                                                    timestamp: msg.timestamp,
+                                                    text: &msg.text,
+                                                })
+                                            }
                                         }
                                         None => {
                                             defmt::info!("companion: SYNC_NEXT_MESSAGE → NO_MORE_MSGS");
@@ -598,6 +638,12 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::SendSelfAdvert(_mode)) => {
+                                    companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::Reboot) => {
+                                    defmt::info!("companion: REBOOT → scheduled");
+                                    pending_reboot = true;
                                     companion::Response::Ok
                                 }
 
@@ -770,6 +816,12 @@ async fn nus_peripheral_loop<C>(
                                     Ok(()) => defmt::info!("companion: other params persisted"),
                                     Err(e) => defmt::warn!("companion: other params persist failed: {:?}", e),
                                 }
+                            }
+                            if pending_reboot {
+                                // Give BLE stack time to deliver the PACKET_OK notification
+                                // before pulling the reset line.
+                                embassy_time::Timer::after_millis(200).await;
+                                cortex_m::peripheral::SCB::sys_reset();
                             }
                         } else if let Ok(reply) = write.accept() {
                             reply.send().await;

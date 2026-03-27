@@ -41,7 +41,7 @@ embassy-executor = { version = "0.9", features = [
 # embassy-rp = { version = "0.2", features = ["time-driver"], optional = true }
 defmt-rtt = { version = "1.0.0", features = ["disable-blocking-mode"], optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
-ssd1680 = { version = "0.16", path = "./vendor/ssd1680", optional = true }
+ssd1675 = { version = "0.16", path = "./vendor/ssd1675", optional = true }
 sx126x = { version = "0.3.0", optional = true }
 embedded-hal = { version = "1.0", optional = true }
 embedded-hal-bus = { version = "0.2", features = ["async"], optional = true }
@@ -94,7 +94,7 @@ embassy = [
 
     "heapless",
     "panic-probe",
-    "ssd1680",
+    "ssd1675",
     "static_cell",
     "sx126x",
     "nrf-mpsl",
