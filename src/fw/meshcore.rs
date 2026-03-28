@@ -331,7 +331,7 @@ fn log_advert(payload: &[u8], rssi: i16) {
         }
     };
 
-    let sig_ok = meshcore::identity::verify_advert(&a).is_ok();
+    let sig_ok = meshcore::identity::verify_advert(&a, payload).is_ok();
 
     if let Some(ref name) = a.name {
         defmt::info!(
@@ -362,16 +362,34 @@ fn log_advert(payload: &[u8], rssi: i16) {
         let _ = pub_key_hex.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char });
     }
 
+    let (lat, lon) = a.position.unwrap_or((0, 0));
+
     crate::LAST_ADVERT.lock(|cell| {
         *cell.borrow_mut() = Some(crate::LastAdvert {
-            name: name_str,
+            name: name_str.clone(),
             pub_key_hex,
             role: a.role.to_u8(),
             sig_ok,
             rssi,
+            lat,
+            lon,
         });
     });
     crate::ADVERT_SIGNAL.signal(());
+
+    let mut ble_name: heapless::Vec<u8, 32> = heapless::Vec::new();
+    if let Some(ref n) = a.name {
+        let _ = ble_name.extend_from_slice(n);
+    }
+    let _ = crate::ADVERT_BLE_CHANNEL.try_send(crate::AdvertBleNotif {
+        pub_key: a.pub_key,
+        adv_type: a.role.to_u8(),
+        rssi: rssi.clamp(-128, 0) as i8,
+        timestamp: a.timestamp,
+        lat,
+        lon,
+        name: ble_name,
+    });
 }
 
 // ---------------------------------------------------------------------------

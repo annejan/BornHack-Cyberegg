@@ -23,10 +23,11 @@ use hello_graphics::{
     board, draw_graphics,
     fw::button::run_buttons,
     fw::buzzer::{Buzzer, buzzer_task, play as play_melody},
-    fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd},
+    fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd},
     fw::nfct::run_nfct,
 };
-use ssd1675::graphics::WHITE;
+use ssd1675::graphics::Color;
+use ssd1675::UpdateMode;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -79,6 +80,10 @@ async fn main(spawner: Spawner) {
     // Must happen before BLE init, which consumes p.RNG.
     // -----------------------------------------------------------------------
     let identity = settings::load_or_create_identity().await;
+
+    // Read nRF52840 die temperature before BLE init consumes p.TEMP.
+    let temp_celsius = hello_graphics::fw::epd::read_nrf_temp().await;
+    defmt::info!("Die temperature: {} °C", temp_celsius);
 
     // -----------------------------------------------------------------------
     // BLE (MPSL + SDC + TrouBLE peripheral task)
@@ -151,6 +156,8 @@ async fn main(spawner: Spawner) {
         black_buffer,
         red_buffer,
         work_buffer,
+        Some(temp_celsius),
+        LutMode::NoInvert,
     )
     .await
     .unwrap();
@@ -212,7 +219,7 @@ async fn main(spawner: Spawner) {
     defmt::info!("Entering main loop...");
     let main_loop = async {
         loop {
-            let _ = display.clear(WHITE);
+            let _ = display.clear(Color::White);
             let health_str = with_health!(|f| f.to_string());
             let bat_str = battery::read_pct();
             match draw_graphics(&mut display, &health_str, &bat_str) {
@@ -234,13 +241,13 @@ async fn main(spawner: Spawner) {
             let update_completed = matches!(
                 select(
                     async {
+                        defmt::info!("EPD: reset");
                         let _ = display.reset().await;
-                        // if active_screen == 0 {
-                        //     let _ = display.update_ghost().await;
-                        // } else {
-                        let _ = display.update_bw().await;
-                        // }
+                        defmt::info!("EPD: update_bw");
+                        let _ = display.update_bw(UpdateMode::Mode1).await;
+                        defmt::info!("EPD: deep_sleep");
                         let _ = display.deep_sleep().await;
+                        defmt::info!("EPD: done");
                     },
                     async {
                         loop {

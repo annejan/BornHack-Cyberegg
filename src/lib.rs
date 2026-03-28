@@ -32,9 +32,17 @@ fn get_device_id() -> [u8; 4] {
 }
 #[cfg(feature = "embassy")]
 use heapless::format;
-// Embassy: re-export TriColor from ssd1675 hardware driver
+// Embassy: re-export Color from ssd1675 hardware driver
 #[cfg(feature = "embassy")]
-pub use ssd1675::graphics::{BLACK, RED, TriColor, WHITE};
+pub use ssd1675::graphics::Color;
+#[cfg(feature = "embassy")]
+pub use ssd1675::graphics::Color as TriColor;
+#[cfg(feature = "embassy")]
+pub const BLACK: Color = Color::Black;
+#[cfg(feature = "embassy")]
+pub const WHITE: Color = Color::White;
+#[cfg(feature = "embassy")]
+pub const RED: Color = Color::Red;
 
 // Simulator: define TriColor locally
 #[cfg(feature = "simulator")]
@@ -272,6 +280,10 @@ pub struct LastAdvert {
     pub role: u8,
     pub sig_ok: bool,
     pub rssi: i16,
+    /// GPS latitude in microdegrees (° × 1 000 000), 0 if not present.
+    pub lat: i32,
+    /// GPS longitude in microdegrees (° × 1 000 000), 0 if not present.
+    pub lon: i32,
 }
 
 #[cfg(feature = "embassy")]
@@ -281,6 +293,32 @@ pub static LAST_ADVERT: Mutex<CriticalSectionRawMutex, RefCell<Option<LastAdvert
 /// Fired by the meshcore listener task whenever a new advert is stored in LAST_ADVERT.
 #[cfg(feature = "embassy")]
 pub static ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Advert data forwarded to the BLE task for push to the companion app (0x8A).
+#[cfg(feature = "embassy")]
+pub struct AdvertBleNotif {
+    /// Full Ed25519 public key (32 bytes) of the advertising node.
+    pub pub_key: [u8; 32],
+    /// Node role (ADV_TYPE_*).
+    pub adv_type: u8,
+    /// RSSI in dBm (cast to i8).
+    pub rssi: i8,
+    /// Unix timestamp from the advert payload.
+    pub timestamp: u32,
+    /// Latitude × 1 000 000 (0 if not present).
+    pub lat: i32,
+    /// Longitude × 1 000 000 (0 if not present).
+    pub lon: i32,
+    /// Advertising node's display name (UTF-8 bytes).
+    pub name: heapless::Vec<u8, 32>,
+}
+
+#[cfg(feature = "embassy")]
+pub static ADVERT_BLE_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    AdvertBleNotif,
+    4,
+> = embassy_sync::channel::Channel::new();
 
 /// Last received private message (TxtMsg), updated by the meshcore listener task.
 #[cfg(feature = "embassy")]
@@ -683,6 +721,22 @@ where
                 };
                 Text::with_text_style(sig_text, Point::new(4, 72), sig_style, bottom)
                     .draw(display)?;
+
+                // GPS coordinates (if present)
+                if adv.lat != 0 || adv.lon != 0 {
+                    let lat_deg  = adv.lat / 1_000_000;
+                    let lat_frac = (adv.lat.abs() % 1_000_000) as u32;
+                    let lat_hem  = if adv.lat >= 0 { 'N' } else { 'S' };
+                    let lon_deg  = adv.lon / 1_000_000;
+                    let lon_frac = (adv.lon.abs() % 1_000_000) as u32;
+                    let lon_hem  = if adv.lon >= 0 { 'E' } else { 'W' };
+                    let lat_text = format!(18; "{}.{:06}{}", lat_deg.abs(), lat_frac, lat_hem).unwrap();
+                    let lon_text = format!(19; "{}.{:06}{}", lon_deg.abs(), lon_frac, lon_hem).unwrap();
+                    Text::with_text_style(&lat_text, Point::new(4, 88), style_small, bottom).draw(display)?;
+                    Text::with_text_style(&lon_text, Point::new(4, 104), style_small, bottom).draw(display)?;
+                } else {
+                    Text::with_text_style("No GPS", Point::new(4, 88), style_small, bottom).draw(display)?;
+                }
 
                 // RSSI at bottom
                 let rssi_text = format!(12; "{} dBm", adv.rssi).unwrap();

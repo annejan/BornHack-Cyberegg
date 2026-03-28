@@ -39,22 +39,32 @@ embassy-executor = { version = "0.9", features = [
     "defmt",
 ], optional = true }
 # embassy-rp = { version = "0.2", features = ["time-driver"], optional = true }
-defmt-rtt = { version = "1.0.0", features = ["disable-blocking-mode"], optional = true }
+defmt-rtt = { version = "1.0.0", features = [
+    "disable-blocking-mode",
+], optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
-ssd1675 = { version = "0.16", path = "./vendor/ssd1675", optional = true }
+ssd1675 = { version = "0.6", path = "./vendor/ssd1675", optional = true }
 sx126x = { version = "0.3.0", optional = true }
 embedded-hal = { version = "1.0", optional = true }
 embedded-hal-bus = { version = "0.2", features = ["async"], optional = true }
 heapless = { version = "0.9.2", optional = true }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = ["nrf52840"], optional = true }
-nrf-sdc  = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = ["nrf52840", "peripheral"], optional = true }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = [
+    "nrf52840",
+], optional = true }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = [
+    "nrf52840",
+    "peripheral",
+], optional = true }
 # dev-disable-csprng-seed-requirement: skips the panic if the SM PRNG hasn't been seeded.
 # The nrf-sdc 0.4 API borrows `rng` for the SDC's lifetime, making it unavailable for
 # seeding trouble-host. This is safe for now because we do not initiate pairing.
 # TODO: seed the SM properly before enabling bonding in production.
-trouble-host = { version = "0.6", features = ["defmt", "security"], optional = true }
+trouble-host = { version = "0.6", features = [
+    "defmt",
+    "security",
+], optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
-tickv    = { version = "2.0", optional = true }
+tickv = { version = "2.0", optional = true }
 meshcore = { path = "./vendor/meshcore", optional = true }
 meshcore-companion = { path = "./vendor/meshcore-companion", optional = true }
 
@@ -69,11 +79,17 @@ opt-level = "s"
 lto = "thin"
 
 [profile.release]
-debug = 2
+debug = 0
 opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true
+
+# Optimize all dependencies
+[profile.dev.package."*"]
+opt-level = "z"
+
 
 [features]
 # default = ["simulator"]
@@ -123,4 +139,3 @@ name = "embassy"
 path = "src/bin/embassy.rs"
 required-features = ["embassy"]
 harness = false
-

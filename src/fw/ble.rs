@@ -436,44 +436,18 @@ async fn nus_peripheral_loop<C>(
         }
 
         loop {
-            use embassy_futures::select::{Either3, select3};
+            use embassy_futures::select::{Either4, select4};
 
-            match select3(
+            match select4(
                 gatt_conn.next(),
                 crate::MESSAGES_WAITING_SIGNAL.wait(),
                 crate::RAW_PKT_CHANNEL.receive(),
+                crate::ADVERT_BLE_CHANNEL.receive(),
             ).await {
-                // -----------------------------------------------------------
-                // Raw LoRa packet received — push 0x88 to app immediately.
-                // -----------------------------------------------------------
-                Either3::Third(pkt) => {
-                    defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
-                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
-                    let len = companion::encode(
-                        &companion::Response::LogRxData {
-                            snr_x4: pkt.snr_x4,
-                            rssi:   pkt.rssi,
-                            data:   &pkt.data[..pkt.len],
-                        },
-                        &mut buf,
-                    );
-                    notify_once(&server, &gatt_conn, &buf[..len]).await;
-                }
-
-                // -----------------------------------------------------------
-                // New messages arrived while connected — push 0x83 to app.
-                // -----------------------------------------------------------
-                Either3::Second(()) => {
-                    defmt::debug!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
-                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
-                    let len = companion::encode(&companion::Response::MessagesWaiting, &mut buf);
-                    notify_once(&server, &gatt_conn, &buf[..len]).await;
-                }
-
                 // -----------------------------------------------------------
                 // GATT event
                 // -----------------------------------------------------------
-                Either3::First(event) => match event {
+                Either4::First(event) => match event {
                     GattConnectionEvent::Disconnected { reason } => {
                         defmt::info!("BLE: disconnected (reason {:?})", defmt::Debug2Format(&reason));
                         crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
@@ -828,6 +802,59 @@ async fn nus_peripheral_loop<C>(
                         }
                     }
                     _ => {}
+                }
+
+                // -----------------------------------------------------------
+                // New messages arrived while connected — push 0x83 to app.
+                // -----------------------------------------------------------
+                Either4::Second(()) => {
+                    defmt::debug!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
+                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
+                    let len = companion::encode(&companion::Response::MessagesWaiting, &mut buf);
+                    notify_once(&server, &gatt_conn, &buf[..len]).await;
+                }
+
+                // -----------------------------------------------------------
+                // Raw LoRa packet received — push 0x88 to app immediately.
+                // -----------------------------------------------------------
+                Either4::Third(pkt) => {
+                    defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
+                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
+                    let len = companion::encode(
+                        &companion::Response::LogRxData {
+                            snr_x4: pkt.snr_x4,
+                            rssi:   pkt.rssi,
+                            data:   &pkt.data[..pkt.len],
+                        },
+                        &mut buf,
+                    );
+                    notify_once(&server, &gatt_conn, &buf[..len]).await;
+                }
+
+                // -----------------------------------------------------------
+                // Advert received — push 0x8A (NewAdvert) to app immediately.
+                // This populates the "Discover / Recent Node Adverts" section.
+                // -----------------------------------------------------------
+                Either4::Fourth(notif) => {
+                    defmt::debug!("BLE: advert from {:02x}, pushing 0x8A", &notif.pub_key[..6]);
+                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
+                    let out_path = [0u8; 64];
+                    let len = companion::encode(
+                        &companion::Response::NewAdvert(companion::response::NewAdvert {
+                            pub_key:               &notif.pub_key,
+                            adv_type:              notif.adv_type,
+                            flags:                 0,
+                            out_path_len:          0xFF, // OUT_PATH_UNKNOWN
+                            out_path:              &out_path,
+                            name:                  &notif.name,
+                            last_advert_timestamp: notif.timestamp,
+                            gps_lat:               notif.lat,
+                            gps_lon:               notif.lon,
+                            lastmod:               0,
+                        }),
+                        &mut buf,
+                    );
+                    notify_once(&server, &gatt_conn, &buf[..len]).await;
                 }
             }
         }
