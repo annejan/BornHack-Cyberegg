@@ -202,15 +202,7 @@ impl<const M: usize> DisplayState<M> {
     }
 }
 
-static MAIN_ITEMS: [MenuItem; 4] = [
-    MenuItem {
-        label: || "Item 1",
-        action: || {},
-    },
-    MenuItem {
-        label: || "Item 2",
-        action: || {},
-    },
+static MAIN_ITEMS: [MenuItem; 2] = [
     MenuItem {
         label: label_boost_rx,
         action: action_boost_rx,
@@ -218,7 +210,9 @@ static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Reset channels",
         #[cfg(feature = "embassy")]
-        action: || { CHANNEL_RESET_SIGNAL.signal(()); },
+        action: || {
+            CHANNEL_RESET_SIGNAL.signal(());
+        },
         #[cfg(not(feature = "embassy"))]
         action: || {},
     },
@@ -234,22 +228,29 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
     action: || {},
 }];
 
+static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Badgercorn",
+    action: || {},
+}];
+
 // Embassy version with ThreadModeRawMutex
 #[cfg(feature = "embassy")]
-pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<3>>> =
+pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<4>>> =
     Mutex::new(RefCell::new(DisplayState::new([
         ScreenState::new(&MAIN_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
+        ScreenState::new(&BADGERCORN_ITEMS),
     ])));
 
 // Simulator version with std::sync::Mutex
 #[cfg(feature = "simulator")]
-pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<3>>> =
+pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<4>>> =
     Mutex::new(RefCell::new(DisplayState::new([
         ScreenState::new(&MAIN_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
+        ScreenState::new(&BADGERCORN_ITEMS),
     ])));
 
 /// Last decoded LoRa group-text message, updated by the meshcore listener task.
@@ -260,6 +261,7 @@ pub struct LoraMessage {
     pub text: heapless::String<128>,
     pub timestamp: u32,
     pub rssi: i16,
+    pub snr_x4: i8,
 }
 
 #[cfg(feature = "embassy")]
@@ -280,6 +282,7 @@ pub struct LastAdvert {
     pub role: u8,
     pub sig_ok: bool,
     pub rssi: i16,
+    pub snr_x4: i8,
     /// GPS latitude in microdegrees (° × 1 000 000), 0 if not present.
     pub lat: i32,
     /// GPS longitude in microdegrees (° × 1 000 000), 0 if not present.
@@ -359,13 +362,17 @@ pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 #[cfg(feature = "embassy")]
 pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Signals the meshcore task to transmit a self-advert.
+pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, fw::meshcore::AdvertMode> =
+    Signal::new();
+
 /// A raw received LoRa packet to be forwarded to the BLE companion as `0x88`.
 #[cfg(feature = "embassy")]
 pub struct RawLoRaPkt {
     pub snr_x4: i8,
-    pub rssi:   i8,
-    pub len:    usize,
-    pub data:   [u8; meshcore::MAX_TRANS_UNIT],
+    pub rssi: i8,
+    pub len: usize,
+    pub data: [u8; meshcore::MAX_TRANS_UNIT],
 }
 
 /// Passes raw received LoRa packets from the meshcore task to the BLE task for
@@ -374,18 +381,15 @@ pub struct RawLoRaPkt {
 /// Depth 4: burst tolerance.  If the BLE task is slow the oldest raw packet is
 /// dropped (send via `try_send`, ignore `Err`).
 #[cfg(feature = "embassy")]
-pub static RAW_PKT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    RawLoRaPkt,
-    4,
-> = embassy_sync::channel::Channel::new();
+pub static RAW_PKT_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, RawLoRaPkt, 4> =
+    embassy_sync::channel::Channel::new();
 
 /// An outgoing channel message queued by the BLE task for the meshcore task to transmit.
 #[cfg(feature = "embassy")]
 pub struct TxChannelMsg {
     pub channel_idx: u8,
-    pub timestamp:   u32,
-    pub text:        heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
+    pub timestamp: u32,
+    pub text: heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
 }
 
 /// Queue from the BLE companion task to the meshcore task for outgoing channel messages.
@@ -398,6 +402,20 @@ pub static TX_MSG_CHANNEL: embassy_sync::channel::Channel<
     TxChannelMsg,
     16,
 > = embassy_sync::channel::Channel::new();
+
+/// An outgoing private (P2P) message queued by the BLE task for the meshcore task to transmit.
+#[cfg(feature = "embassy")]
+pub struct TxPrivateMsg {
+    /// Full 32-byte recipient public key.
+    pub recipient_pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    pub timestamp: u32,
+    pub text: heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
+}
+
+/// Queue from the BLE companion task to the meshcore task for outgoing private messages.
+#[cfg(feature = "embassy")]
+pub static TX_PM_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxPrivateMsg, 4> =
+    embassy_sync::channel::Channel::new();
 
 // Macro for embassy - immutable access
 #[cfg(feature = "embassy")]
@@ -445,13 +463,14 @@ pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resu
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let active = with_display_state!(|state: &Ref<'_, DisplayState<3>>| state.active_screen());
+    let active = with_display_state!(|state: &Ref<'_, DisplayState<4>>| state.active_screen());
     match active {
         0 => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "embassy")]
         1 => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "embassy")]
         2 => draw_screen_advert(display, bat_prc),
+        // Screen 3 (badgercorn) is rendered via blit() in embassy.rs — nothing to draw here.
         _ => draw_screen_main(display, health_str, bat_prc),
     }
 }
@@ -471,7 +490,7 @@ where
     // Animated red dot
     let dot_pos = Point::new(((circle_post * 20) + 15) as i32, 7);
     Circle::with_center(dot_pos, 10)
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .into_styled(PrimitiveStyle::with_fill(RED))
         .draw(display)?;
 
     let position = Point::new(76, 76);
@@ -490,7 +509,7 @@ where
     let text_style = MonoTextStyle::new(&FONT_7X13, WHITE);
     let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BLACK);
     let bat_style = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let item_text = with_display_state!(|state: &Ref<'_, DisplayState<3>>| state
+    let item_text = with_display_state!(|state: &Ref<'_, DisplayState<4>>| state
         .get_current_menu_item()
         .unwrap());
 
@@ -627,8 +646,8 @@ where
                 // Rows 3+: message text wrapped at 21 chars, 14px per line
                 draw_wrapped(display, msg.text.as_str(), 4, 44, 14, 21, style_msg)?;
 
-                // RSSI at bottom
-                let rssi_text = format!(12; "{} dBm", msg.rssi).unwrap();
+                // RSSI and SNR at bottom
+                let rssi_text = format!(24; "{} dBm / {} dB", msg.rssi, msg.snr_x4 / 4).unwrap();
                 Text::with_text_style(&rssi_text, Point::new(4, 152), style_rssi, bottom)
                     .draw(display)?;
             }
@@ -724,22 +743,27 @@ where
 
                 // GPS coordinates (if present)
                 if adv.lat != 0 || adv.lon != 0 {
-                    let lat_deg  = adv.lat / 1_000_000;
+                    let lat_deg = adv.lat / 1_000_000;
                     let lat_frac = (adv.lat.abs() % 1_000_000) as u32;
-                    let lat_hem  = if adv.lat >= 0 { 'N' } else { 'S' };
-                    let lon_deg  = adv.lon / 1_000_000;
+                    let lat_hem = if adv.lat >= 0 { 'N' } else { 'S' };
+                    let lon_deg = adv.lon / 1_000_000;
                     let lon_frac = (adv.lon.abs() % 1_000_000) as u32;
-                    let lon_hem  = if adv.lon >= 0 { 'E' } else { 'W' };
-                    let lat_text = format!(18; "{}.{:06}{}", lat_deg.abs(), lat_frac, lat_hem).unwrap();
-                    let lon_text = format!(19; "{}.{:06}{}", lon_deg.abs(), lon_frac, lon_hem).unwrap();
-                    Text::with_text_style(&lat_text, Point::new(4, 88), style_small, bottom).draw(display)?;
-                    Text::with_text_style(&lon_text, Point::new(4, 104), style_small, bottom).draw(display)?;
+                    let lon_hem = if adv.lon >= 0 { 'E' } else { 'W' };
+                    let lat_text =
+                        format!(18; "{}.{:06}{}", lat_deg.abs(), lat_frac, lat_hem).unwrap();
+                    let lon_text =
+                        format!(19; "{}.{:06}{}", lon_deg.abs(), lon_frac, lon_hem).unwrap();
+                    Text::with_text_style(&lat_text, Point::new(4, 88), style_small, bottom)
+                        .draw(display)?;
+                    Text::with_text_style(&lon_text, Point::new(4, 104), style_small, bottom)
+                        .draw(display)?;
                 } else {
-                    Text::with_text_style("No GPS", Point::new(4, 88), style_small, bottom).draw(display)?;
+                    Text::with_text_style("No GPS", Point::new(4, 88), style_small, bottom)
+                        .draw(display)?;
                 }
 
-                // RSSI at bottom
-                let rssi_text = format!(12; "{} dBm", adv.rssi).unwrap();
+                // RSSI and SNR at bottom
+                let rssi_text = format!(24; "{} dBm / {} dB", adv.rssi, adv.snr_x4 / 4).unwrap();
                 Text::with_text_style(&rssi_text, Point::new(4, 152), style_small, bottom)
                     .draw(display)?;
             }

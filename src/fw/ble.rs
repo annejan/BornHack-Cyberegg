@@ -216,23 +216,22 @@ pub struct CompanionContext {
 ///
 /// A 2-second timeout prevents a dropped connection from causing a permanent
 /// hang inside the GATT write handler.
-async fn notify_once<P: PacketPool>(
-    server: &NusServer<'_>,
-    conn: &GattConnection<'_, '_, P>,
-    data: &[u8],
-) {
-    let mut vec: heapless::Vec<u8, 244> = heapless::Vec::new();
-    if vec.extend_from_slice(data).is_err() {
-        defmt::warn!("companion: notify data too large ({} B), truncating", data.len());
-        let _ = vec.extend_from_slice(&data[..244]);
-    }
-    match embassy_time::with_timeout(
-        embassy_time::Duration::from_millis(2000),
-        server.nus.tx.notify(conn, &vec),
-    ).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => defmt::warn!("companion: notify failed: {:?}", defmt::Debug2Format(&e)),
-        Err(_) => defmt::warn!("companion: notify timed out (connection lost?)"),
+/// A pre-serialised notification payload ready to hand to `tx.notify`.
+type OutboxEntry = ([u8; companion::MAX_RESPONSE_LEN], usize);
+
+/// Static backing store for the per-connection outbox.
+///
+/// Keeping this in `.bss` rather than on the BLE task stack avoids a ~4 KiB
+/// stack allocation that was overflowing and corrupting embassy-sync internals.
+static OUTBOX_STORAGE: StaticCell<heapless::Deque<OutboxEntry, 4>> = StaticCell::new();
+
+/// Encode a [`companion::Response`] and push it onto the outbox.
+/// Drops the entry with a warning if the outbox is full.
+fn enqueue_notify(outbox: &mut heapless::Deque<OutboxEntry, 4>, response: &companion::Response<'_>) {
+    let mut entry: OutboxEntry = ([0u8; companion::MAX_RESPONSE_LEN], 0);
+    entry.1 = companion::encode(response, &mut entry.0);
+    if outbox.push_back(entry).is_err() {
+        defmt::warn!("companion: outbox full, dropping notification");
     }
 }
 
@@ -316,6 +315,9 @@ async fn nus_peripheral_loop<C>(
     ];
     // Safety: all bytes are valid UTF-8 (ASCII + the two-byte Æ sequence above).
     let name_str = unsafe { core::str::from_utf8_unchecked(&name) };
+
+    // Initialise static outbox storage once — cleared on each new connection.
+    let outbox: &mut heapless::Deque<OutboxEntry, 4> = OUTBOX_STORAGE.init(heapless::Deque::new());
 
     let mut adv_buf = [0u8; 31];
     let adv_len = AdStructure::encode_slice(
@@ -423,27 +425,87 @@ async fn nus_peripheral_loop<C>(
             }
         };
 
-        // App protocol version negotiated via CMD_DEVICE_QUERY (0x16).
-        // < 3 → send ChannelMsgRecv (0x08, V1, no RF metadata)
-        // >= 3 → send ChannelMsgRecvV3 (0x11, includes SNR/reserved bytes)
-        // Defaults to 0 so clients that never send DEVICE_QUERY get V1.
-        let mut app_target_ver: u8 = 0;
-
         // Clear any stale signal, then re-arm if there are undelivered messages.
         crate::MESSAGES_WAITING_SIGNAL.reset();
         if !msg_queue::is_empty() {
             crate::MESSAGES_WAITING_SIGNAL.signal(());
         }
 
-        loop {
-            use embassy_futures::select::{Either4, select4};
+        // Per-connection outbound notification queue (backed by static storage).
+        // Cleared on each new connection; drained one entry per loop iteration,
+        // raced against incoming GATT events so we never block event handling
+        // waiting for an L2CAP TX credit.
+        outbox.clear();
 
-            match select4(
-                gatt_conn.next(),
-                crate::MESSAGES_WAITING_SIGNAL.wait(),
-                crate::RAW_PKT_CHANNEL.receive(),
-                crate::ADVERT_BLE_CHANNEL.receive(),
-            ).await {
+        // Lazy contact streaming state: (next slot index to probe, contacts
+        // remaining to send).  Populated when GET_CONTACTS is received and
+        // drained one KV read per loop iteration.
+        let mut contacts_stream: Option<(usize, u16)> = None;
+
+        loop {
+            use embassy_futures::select::{Either, Either4, select, select4};
+
+            // ---------------------------------------------------------------
+            // Lazy contact streaming: emit one slot per iteration into outbox.
+            // ---------------------------------------------------------------
+            if let Some((ref mut slot, ref mut remaining)) = contacts_stream {
+                if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
+                    enqueue_notify(outbox, &companion::Response::ContactEnd);
+                    defmt::info!("companion: GET_CONTACTS complete");
+                    contacts_stream = None;
+                } else {
+                    let c = contacts::ContactStore::new().read_slot(*slot).await;
+                    *slot += 1;
+                    if let Some(c) = c {
+                        let mut prefix = [0u8; 6];
+                        prefix.copy_from_slice(&c.pub_key[..6]);
+                        let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
+                        enqueue_notify(outbox, &companion::Response::Contact(companion::response::Contact {
+                            pub_key_prefix: prefix,
+                            flags:     c.flags,
+                            last_seen: c.last_advert_ts,
+                            name:      &c.name[..name_end],
+                        }));
+                        *remaining = remaining.saturating_sub(1);
+                    }
+                }
+            }
+
+            // ---------------------------------------------------------------
+            // Race: drain outbox front vs handle incoming events.
+            // If the outbox is empty we just wait for events.
+            // ---------------------------------------------------------------
+            let incoming = if let Some((buf, len)) = outbox.front().copied() {
+                let mut vec: heapless::Vec<u8, 244> = heapless::Vec::new();
+                let _ = vec.extend_from_slice(&buf[..len.min(244)]);
+                match select(
+                    server.nus.tx.notify(&gatt_conn, &vec),
+                    select4(
+                        gatt_conn.next(),
+                        crate::MESSAGES_WAITING_SIGNAL.wait(),
+                        crate::RAW_PKT_CHANNEL.receive(),
+                        crate::ADVERT_BLE_CHANNEL.receive(),
+                    ),
+                ).await {
+                    Either::First(r) => {
+                        if let Err(e) = r {
+                            defmt::warn!("companion: notify failed: {:?}", defmt::Debug2Format(&e));
+                        }
+                        outbox.pop_front();
+                        continue;
+                    }
+                    Either::Second(ev) => ev,
+                }
+            } else {
+                select4(
+                    gatt_conn.next(),
+                    crate::MESSAGES_WAITING_SIGNAL.wait(),
+                    crate::RAW_PKT_CHANNEL.receive(),
+                    crate::ADVERT_BLE_CHANNEL.receive(),
+                ).await
+            };
+
+            match incoming {
                 // -----------------------------------------------------------
                 // GATT event
                 // -----------------------------------------------------------
@@ -518,7 +580,6 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_other:    Option<settings::OtherParams> = None;
                             let mut pending_reboot:   bool = false;
                             let mut pending_contact:  Option<contacts::Contact> = None;
-                            let mut pending_contacts_sync: bool = false;
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
                                     defmt::warn!("companion: empty write");
@@ -548,8 +609,7 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::DeviceQuery(ver)) => {
-                                    app_target_ver = ver;
-                                    defmt::info!("companion: DEVICE_QUERY app_target_ver={=u8}", ver);
+                                    defmt::info!("companion: DEVICE_QUERY ver={=u8}", ver);
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
                                         fw_version: 3,
                                         // Protocol encodes capacity as (actual ÷ 2); u8 max = 255
@@ -583,32 +643,39 @@ async fn nus_peripheral_loop<C>(
                                     match popped {
                                         Some(ref msg) => {
                                             let remaining = msg_queue::count();
-                                            defmt::info!(
-                                                "companion: SYNC_NEXT_MESSAGE → ch={=u8} ts={=u32} ({=u16} remaining)",
-                                                msg.channel_idx, msg.timestamp, remaining
-                                            );
-                                            // If more messages are queued, signal so the BLE
-                                            // loop sends another 0x83 after this response.
                                             if remaining > 0 {
                                                 crate::MESSAGES_WAITING_SIGNAL.signal(());
                                             }
-                                            if app_target_ver >= 3 {
-                                                companion::Response::ChannelMsgRecvV3(companion::ChannelMsgV3 {
-                                                    rf_info: [msg.rssi.unsigned_abs().min(255) as u8, 0, 0],
-                                                    channel: msg.channel_idx,
-                                                    path_len: msg.path_len,
-                                                    text_type: msg.text_type,
-                                                    timestamp: msg.timestamp,
-                                                    text: &msg.text,
-                                                })
-                                            } else {
-                                                companion::Response::ChannelMsgRecv(companion::ChannelMsg {
-                                                    channel: msg.channel_idx,
-                                                    path_len: msg.path_len,
-                                                    text_type: msg.text_type,
-                                                    timestamp: msg.timestamp,
-                                                    text: &msg.text,
-                                                })
+                                            match msg.kind {
+                                                msg_queue::MsgKind::Private => {
+                                                    defmt::info!(
+                                                        "companion: SYNC_NEXT_MESSAGE → private from={=[u8]:02x} ts={=u32} rssi={=i16} ({=u16} remaining)",
+                                                        msg.sender_prefix, msg.timestamp, msg.rssi, remaining
+                                                    );
+                                                    companion::Response::ContactMsgRecvV3(companion::ContactMsgV3 {
+                                                        rf_info:        [msg.rssi.unsigned_abs().min(255) as u8, 0, 0],
+                                                        pub_key_prefix: msg.sender_prefix,
+                                                        path_len:  msg.path_len,
+                                                        text_type: msg.text_type,
+                                                        timestamp: msg.timestamp,
+                                                        signature: None,
+                                                        text:      &msg.text,
+                                                    })
+                                                }
+                                                msg_queue::MsgKind::Channel => {
+                                                    defmt::info!(
+                                                        "companion: SYNC_NEXT_MESSAGE → ch={=u8} ts={=u32} rssi={=i16} ({=u16} remaining)",
+                                                        msg.channel_idx, msg.timestamp, msg.rssi, remaining
+                                                    );
+                                                    companion::Response::ChannelMsgRecvV3(companion::ChannelMsgV3 {
+                                                        rf_info:   [msg.rssi.unsigned_abs().min(255) as u8, 0, 0],
+                                                        channel:   msg.channel_idx,
+                                                        path_len:  msg.path_len,
+                                                        text_type: msg.text_type,
+                                                        timestamp: msg.timestamp,
+                                                        text:      &msg.text,
+                                                    })
+                                                }
                                             }
                                         }
                                         None => {
@@ -620,7 +687,7 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::GetContacts) => {
                                     if contacts_count > 0 {
-                                        pending_contacts_sync = true;
+                                        contacts_stream = Some((0, contacts_count));
                                         companion::Response::ContactStart
                                     } else {
                                         companion::Response::NoMoreMsgs
@@ -661,7 +728,14 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
-                                Ok(companion::cmd::Command::SendSelfAdvert(_mode)) => {
+                                Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
+                                    let advert_mode = if mode == 1 {
+                                        crate::fw::meshcore::AdvertMode::Flood
+                                    } else {
+                                        crate::fw::meshcore::AdvertMode::ZeroHop
+                                    };
+                                    crate::SEND_ADVERT_SIGNAL.signal(advert_mode);
+                                    defmt::info!("companion: SEND_SELF_ADVERT mode={=u8} → signalled", mode);
                                     companion::Response::Ok
                                 }
 
@@ -714,6 +788,37 @@ async fn nus_peripheral_loop<C>(
                                     } else {
                                         defmt::warn!("companion: SET_CHANNEL idx={=u8} out of range", index);
                                         companion::Response::Error(companion::ErrorCode::IndexOutOfRange)
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SendTxtMsg { txt_type: _, attempt: _, timestamp, pub_key_prefix, text }) => {
+                                    // Look up the full pub_key by prefix scan.
+                                    let recipient = contacts::ContactStore::new()
+                                        .find_by_prefix(&pub_key_prefix)
+                                        .await;
+                                    match recipient {
+                                        None => {
+                                            defmt::warn!("companion: SEND_TXT_MSG recipient not found for prefix {=[u8]:02x}", pub_key_prefix);
+                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                        }
+                                        Some(c) => {
+                                            let mut v: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+                                            let _ = v.extend_from_slice(&text[..text.len().min(msg_queue::MAX_TEXT)]);
+                                            match crate::TX_PM_CHANNEL.try_send(crate::TxPrivateMsg {
+                                                recipient_pub_key: c.pub_key,
+                                                timestamp,
+                                                text: v,
+                                            }) {
+                                                Ok(()) => {
+                                                    defmt::info!("companion: SEND_TXT_MSG to={=[u8]:02x} → queued", pub_key_prefix);
+                                                    companion::Response::MsgSent
+                                                }
+                                                Err(_) => {
+                                                    defmt::warn!("companion: SEND_TXT_MSG TX queue full");
+                                                    companion::Response::Error(companion::ErrorCode::InsufficientStorage)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
@@ -831,15 +936,12 @@ async fn nus_peripheral_loop<C>(
                                 }
                             };
 
-                            let mut resp_buf = [0u8; companion::MAX_RESPONSE_LEN];
-                            let resp_len = companion::encode(&response, &mut resp_buf);
-
-                            // Acknowledge the write BEFORE sending the notification.
+                            // Acknowledge the write then queue the response notification.
                             match write.accept() {
                                 Ok(reply) => reply.send().await,
                                 Err(e) => defmt::warn!("companion: write.accept() failed: {:?}", defmt::Debug2Format(&e)),
                             }
-                            notify_once(&server, &gatt_conn, &resp_buf[..resp_len]).await;
+                            enqueue_notify(outbox, &response);
 
                             // Apply any pending settings changes (after response is sent
                             // so the borrow on node_name via `response` has ended).
@@ -879,65 +981,27 @@ async fn nus_peripheral_loop<C>(
                                 cortex_m::peripheral::SCB::sys_reset();
                             }
 
-                            // Persist an ADD_UPDATE_CONTACT payload to flash and push it back.
+                            // Persist an ADD_UPDATE_CONTACT payload to flash and push
+                            // ContactStart/Contact/ContactEnd back into the outbox.
                             if let Some(ref contact) = pending_contact {
                                 let store = contacts::ContactStore::new();
                                 match store.add_or_update(contact).await {
                                     Ok(r) => {
                                         defmt::info!("companion: ADD_UPDATE_CONTACT → {:?}", r);
-                                        // Push the stored contact back so the app updates immediately.
-                                        let mut nbuf = [0u8; companion::MAX_RESPONSE_LEN];
-                                        let slen = companion::encode(&companion::Response::ContactStart, &mut nbuf);
-                                        notify_once(&server, &gatt_conn, &nbuf[..slen]).await;
                                         let mut prefix = [0u8; 6];
                                         prefix.copy_from_slice(&contact.pub_key[..6]);
                                         let name_end = contact.name.iter().position(|&b| b == 0).unwrap_or(32);
-                                        let clen = companion::encode(
-                                            &companion::Response::Contact(companion::response::Contact {
-                                                pub_key_prefix: prefix,
-                                                flags:          contact.flags,
-                                                last_seen:      contact.last_advert_ts,
-                                                name:           &contact.name[..name_end],
-                                            }),
-                                            &mut nbuf,
-                                        );
-                                        notify_once(&server, &gatt_conn, &nbuf[..clen]).await;
-                                        let elen = companion::encode(&companion::Response::ContactEnd, &mut nbuf);
-                                        notify_once(&server, &gatt_conn, &nbuf[..elen]).await;
+                                        enqueue_notify(outbox, &companion::Response::ContactStart);
+                                        enqueue_notify(outbox, &companion::Response::Contact(companion::response::Contact {
+                                            pub_key_prefix: prefix,
+                                            flags:     contact.flags,
+                                            last_seen: contact.last_advert_ts,
+                                            name:      &contact.name[..name_end],
+                                        }));
+                                        enqueue_notify(outbox, &companion::Response::ContactEnd);
                                     }
                                     Err(e) => defmt::warn!("companion: ADD_UPDATE_CONTACT store failed: {:?}", e),
                                 }
-                            }
-
-                            // Stream stored contacts following a GET_CONTACTS ContactStart.
-                            if pending_contacts_sync {
-                                let store = contacts::ContactStore::new();
-                                let mut nbuf = [0u8; companion::MAX_RESPONSE_LEN];
-                                let mut found = 0u16;
-                                for idx in 0..contacts::MAX_CONTACTS {
-                                    if found >= contacts_count {
-                                        break;
-                                    }
-                                    if let Some(c) = store.read_slot(idx).await {
-                                        found += 1;
-                                        let mut prefix = [0u8; 6];
-                                        prefix.copy_from_slice(&c.pub_key[..6]);
-                                        let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
-                                        let nlen = companion::encode(
-                                            &companion::Response::Contact(companion::response::Contact {
-                                                pub_key_prefix: prefix,
-                                                flags:          c.flags,
-                                                last_seen:      c.last_advert_ts,
-                                                name:           &c.name[..name_end],
-                                            }),
-                                            &mut nbuf,
-                                        );
-                                        notify_once(&server, &gatt_conn, &nbuf[..nlen]).await;
-                                    }
-                                }
-                                let elen = companion::encode(&companion::Response::ContactEnd, &mut nbuf);
-                                notify_once(&server, &gatt_conn, &nbuf[..elen]).await;
-                                defmt::info!("companion: GET_CONTACTS sync complete ({} contacts)", contacts_count);
                             }
                         } else if let Ok(reply) = write.accept() {
                             reply.send().await;
@@ -951,52 +1015,39 @@ async fn nus_peripheral_loop<C>(
                 // -----------------------------------------------------------
                 Either4::Second(()) => {
                     defmt::debug!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
-                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
-                    let len = companion::encode(&companion::Response::MessagesWaiting, &mut buf);
-                    notify_once(&server, &gatt_conn, &buf[..len]).await;
+                    enqueue_notify(outbox, &companion::Response::MessagesWaiting);
                 }
 
                 // -----------------------------------------------------------
-                // Raw LoRa packet received — push 0x88 to app immediately.
+                // Raw LoRa packet received — push 0x88 to app.
                 // -----------------------------------------------------------
                 Either4::Third(pkt) => {
                     defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
-                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
-                    let len = companion::encode(
-                        &companion::Response::LogRxData {
-                            snr_x4: pkt.snr_x4,
-                            rssi:   pkt.rssi,
-                            data:   &pkt.data[..pkt.len],
-                        },
-                        &mut buf,
-                    );
-                    notify_once(&server, &gatt_conn, &buf[..len]).await;
+                    enqueue_notify(outbox, &companion::Response::LogRxData {
+                        snr_x4: pkt.snr_x4,
+                        rssi:   pkt.rssi,
+                        data:   &pkt.data[..pkt.len],
+                    });
                 }
 
                 // -----------------------------------------------------------
-                // Advert received — push 0x8A (NewAdvert) to app immediately.
-                // This populates the "Discover / Recent Node Adverts" section.
+                // Advert received — push 0x8A (NewAdvert) to app.
                 // -----------------------------------------------------------
                 Either4::Fourth(notif) => {
                     defmt::debug!("BLE: advert from {:02x}, pushing 0x8A", &notif.pub_key[..6]);
-                    let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
                     let out_path = [0u8; 64];
-                    let len = companion::encode(
-                        &companion::Response::NewAdvert(companion::response::NewAdvert {
-                            pub_key:               &notif.pub_key,
-                            adv_type:              notif.adv_type,
-                            flags:                 0,
-                            out_path_len:          0xFF, // OUT_PATH_UNKNOWN
-                            out_path:              &out_path,
-                            name:                  &notif.name,
-                            last_advert_timestamp: notif.timestamp,
-                            gps_lat:               notif.lat,
-                            gps_lon:               notif.lon,
-                            lastmod:               0,
-                        }),
-                        &mut buf,
-                    );
-                    notify_once(&server, &gatt_conn, &buf[..len]).await;
+                    enqueue_notify(outbox, &companion::Response::NewAdvert(companion::response::NewAdvert {
+                        pub_key:               &notif.pub_key,
+                        adv_type:              notif.adv_type,
+                        flags:                 0,
+                        out_path_len:          0xFF,
+                        out_path:              &out_path,
+                        name:                  &notif.name,
+                        last_advert_timestamp: notif.timestamp,
+                        gps_lat:               notif.lat,
+                        gps_lon:               notif.lon,
+                        lastmod:               0,
+                    }));
                 }
             }
         }

@@ -10,6 +10,7 @@ use static_cell::StaticCell;
 use core::convert::Infallible;
 use embassy_nrf::gpio::{Pin as GpioPin, Port};
 use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
+pub use ssd1675::LutMode;
 use {defmt_rtt as _, panic_probe as _};
 
 // EPD display configuration - compile-time constants with generics
@@ -49,16 +50,6 @@ pub type EpdGfx<'a> = GraphicDisplay<
 
 static OTP_LUT: StaticCell<[u8; 107]> = StaticCell::new();
 
-/// Controls whether the inversion phases are zeroed out in the OTP LUT.
-///
-/// `Invert`   — full factory waveform, includes pre-charge/erase phases (~0.3s inversion visible).
-/// `NoInvert` — timing groups 0–2 zeroed, suppresses the visible inversion at the cost of ghosting.
-#[derive(Clone, Copy, PartialEq)]
-pub enum LutMode {
-    Invert,
-    NoInvert,
-}
-
 /// Read back the OTP LUT register (command 0x33) using stolen peripherals.
 ///
 /// Sequence (per SSD1619 reference driver):
@@ -79,8 +70,7 @@ async fn probe_lut(
     rst: &Peri<'_, AnyPin>,
     busy: &Peri<'_, AnyPin>,
     temp_raw: u16,
-    mode: LutMode,
-) -> &'static [u8; 107] {
+) -> [u8; 107] {
     fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
         let port = match p.port() {
             Port::Port0 => 0u8,
@@ -163,7 +153,8 @@ async fn probe_lut(
 
     // Phase 2: read 107 bytes from the LUT register (0x33).
     // The controller now presents the loaded zone on MISO.
-    let lut = OTP_LUT.init([0u8; 107]);
+    // Stack-allocated only for the duration of the SPI read; caller moves it into StaticCell.
+    let mut lut = [0u8; 107];
     cs_out.set_low();
     {
         // Command phase: send 0x33 on MOSI.
@@ -187,31 +178,13 @@ async fn probe_lut(
             unsafe { AnyPin::steal(data_nr) },
             cfg,
         );
-        spi_rx.read(lut).await.ok();
+        spi_rx.read(&mut lut).await.ok();
     }
     cs_out.set_high();
 
     defmt::info!("Display OTP LUT (107 bytes):");
     for (i, chunk) in lut.chunks(10).enumerate() {
         defmt::info!("  [{=usize:03}] {:02x}", i * 10, chunk);
-    }
-
-    if mode == LutMode::NoInvert {
-        // ~Zero the pre-charge/erase timing phases that cause visible inversion.
-        // Variant is detected by the same rule used in set_otp_lut().
-        if lut[7] != 0 || lut[8] != 0 || lut[9] != 0 {
-            // SSD1675: 7-byte waveform rows → waveform 5×7=35 bytes, timing groups 5 bytes each.
-            // Zero timing groups 0–2: bytes 35–49 (15 bytes).
-            lut[35..50].fill(0);
-            lut[51] = 2;
-            lut[52] = lut[52] + 0x10;
-            lut[53] = 2;
-            lut[54] = lut[54] + 0x10;
-            lut[55] = 2;
-        } else {
-            // SSD1675B (data sheet p.14): waveform 5×10=50 bytes (0–49), then 10 timing phases
-            lut[50..64].fill(0);
-        }
     }
 
     lut
@@ -260,17 +233,10 @@ pub async fn init_epd<'a>(
     );
 
     // Read OTP LUT via stolen peripherals before consuming the real tokens.
-    let otp_lut = probe_lut(
-        &sck_pin,
-        &mosi_pin,
-        &csn_pin,
-        &dc_pin,
-        &resetn_pin,
-        &busy_pin,
-        temp_raw,
-        lut_mode,
-    )
-    .await;
+    // Move raw bytes into static storage immediately — keeps the 107-byte buffer off the stack.
+    let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(
+        probe_lut(&sck_pin, &mosi_pin, &csn_pin, &dc_pin, &resetn_pin, &busy_pin, temp_raw).await,
+    );
 
     // Build the SPI bus.
     let mut cfg = Config::default();
@@ -294,7 +260,7 @@ pub async fn init_epd<'a>(
     let mut display = Display::new(controller, config);
     display.set_temperature(temp_raw);
     let mut gfx = GraphicDisplay::new(display, black_buffer, red_buffer, work_buffer);
-    gfx.set_otp_lut(otp_lut);
+    gfx.set_otp_lut(otp_lut, lut_mode);
     defmt::info!(
         "Display controller: {}",
         match gfx.variant() {

@@ -6,14 +6,17 @@ use embassy_executor::Spawner;
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
+use embassy_nrf::pac::wdt::vals::{Halt as WdtHalt, Sleep as WdtSleep};
 use embassy_nrf::pwm::SimplePwm;
+use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
 use embassy_time::Timer;
 use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
 use hello_graphics::fw::ble::{CompanionContext, init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
-use hello_graphics::fw::device_id;
 use hello_graphics::fw::contacts::ContactStore;
+use hello_graphics::fw::device_id;
+use hello_graphics::fw::images::badgercorn::BADGERCORN_DATA;
 use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::fw::settings;
@@ -27,8 +30,8 @@ use hello_graphics::{
     fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd},
     fw::nfct::run_nfct,
 };
-use ssd1675::graphics::Color;
 use ssd1675::UpdateMode;
+use ssd1675::graphics::Color;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -43,6 +46,17 @@ async fn main(spawner: Spawner) {
     // variable SPI and GPIO interrupt latency. CONSTLAT keeps HFCLK running during
     // sleep, matching the behaviour seen when a debugger is connected.
     embassy_nrf::pac::POWER.tasks_constlat().write_value(1);
+
+    // Start a 5-second watchdog. Pauses when a debugger halts the CPU so
+    // probe-rs attach doesn't trigger spurious resets.
+    // A separate task pets it every 2 seconds; if any task starves the
+    // executor the WDT fires, resets, and panic-probe prints a stack trace.
+    let mut wdt_config = WdtConfig::default();
+    wdt_config.timeout_ticks = 5 * 32768; // 5 seconds
+    wdt_config.action_during_debug_halt = WdtHalt::PAUSE;
+    wdt_config.action_during_sleep = WdtSleep::RUN;
+    let (_wdt, [wdt_handle]) = Watchdog::try_new(p.WDT, wdt_config).expect("WDT init failed");
+    spawner.must_spawn(pet_watchdog_task(wdt_handle));
 
     device_id::init();
     let [id0, id1] = device_id::get();
@@ -196,7 +210,7 @@ async fn main(spawner: Spawner) {
         &Default::default(),
     ));
     spawner.must_spawn(buzzer_task(buzzer));
-    play_melody(0); // 0 = STARTUP
+    // play_melody(0); // 0 = STARTUP
     defmt::info!("Buzzer task spawned, startup melody queued");
 
     defmt::info!("Initializing battery monitor");
@@ -226,17 +240,20 @@ async fn main(spawner: Spawner) {
     let main_loop = async {
         loop {
             let _ = display.clear(Color::White);
-            let health_str = with_health!(|f| f.to_string());
-            let bat_str = battery::read_pct();
-            match draw_graphics(&mut display, &health_str, &bat_str) {
-                Ok(_) => {}
-                Err(_) => {
-                    health_err!(epd, "Failed to draw graphics");
+            // Snapshot active screen once; used for rendering and event filtering below.
+            let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
+            if active_screen == 3 {
+                display.blit(Some(BADGERCORN_DATA), None);
+            } else {
+                let health_str = with_health!(|f| f.to_string());
+                let bat_str = battery::read_pct();
+                match draw_graphics(&mut display, &health_str, &bat_str) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        health_err!(epd, "Failed to draw graphics");
+                    }
                 }
             }
-            // Snapshot active screen before starting the update so both the
-            // update path and the event filter use a consistent value.
-            let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 
             // Race the display update against incoming events.
             // If an event arrives first, the update future is dropped — the EPD
@@ -316,4 +333,16 @@ async fn main(spawner: Spawner) {
     );
 
     embassy_futures::join::join4(main_loop, run_nfc, buttons, run_lora).await;
+}
+
+/// Pets the watchdog every 2 seconds. He's a good boy.
+/// If this task stops running (executor starved), the 5-second WDT fires,
+/// resets the chip, and panic-probe prints a defmt stack trace via RTT.
+// TODO: Increase pet interval in production to save battery.
+#[embassy_executor::task]
+async fn pet_watchdog_task(mut handle: embassy_nrf::wdt::WatchdogHandle) {
+    loop {
+        handle.pet();
+        Timer::after_secs(2).await;
+    }
 }

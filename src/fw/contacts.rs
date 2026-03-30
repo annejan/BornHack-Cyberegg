@@ -56,7 +56,7 @@ pub const MAX_CONTACTS: usize = 700;
 const _: () = assert!(MAX_CONTACTS <= 9999, "MAX_CONTACTS exceeds the 4-digit slot key format");
 
 /// Routing path size in bytes — matches MeshCore `MAX_PATH_SIZE`.
-const MAX_PATH_SIZE: usize = 64;
+pub const MAX_PATH_SIZE: usize = 64;
 
 /// Bit 0 of the `flags` field — contact is marked as favourite.
 ///
@@ -114,6 +114,21 @@ pub struct Contact {
 }
 
 impl Contact {
+    /// Number of bytes in `out_path` that are valid, given `out_path_len`.
+    ///
+    /// MeshCore path_len_byte encoding: bits 7-6 = hash_size_code (0→1B, 1→2B, 2→3B),
+    /// bits 5-0 = hop_count.  Actual bytes = hop_count × (hash_size_code + 1).
+    /// Returns 0 when `out_path_len` is [`OUT_PATH_UNKNOWN`] or invalid.
+    pub fn path_actual_bytes(&self) -> usize {
+        if self.out_path_len == OUT_PATH_UNKNOWN {
+            return 0;
+        }
+        let hop_count = (self.out_path_len & 0x3F) as usize;
+        let hash_size = ((self.out_path_len >> 6) as usize) + 1;
+        if hash_size == 4 { return 0; } // reserved
+        (hop_count * hash_size).min(MAX_PATH_SIZE)
+    }
+
     /// `true` when this slot holds no valid contact (pub_key all-zeros).
     pub fn is_deleted(&self) -> bool {
         self.pub_key == [0u8; 32]
@@ -306,17 +321,30 @@ pub enum AddResult {
 }
 
 // ---------------------------------------------------------------------------
-// Slot key helper
+// Key helpers
 // ---------------------------------------------------------------------------
 
 /// Format a slot index as a zero-padded 4-digit decimal string.
-///
-/// Supports indices 0–9999; [`MAX_CONTACTS`] is bounded to 9999 by a
-/// compile-time assertion.
 fn slot_key(idx: usize) -> heapless::String<5> {
     use core::fmt::Write;
     let mut s = heapless::String::new();
     let _ = write!(s, "{:04}", idx);
+    s
+}
+
+/// Format the first 6 bytes of `pub_key` as a 12-char lowercase hex string.
+///
+/// 6 bytes (48 bits) gives a collision probability of < 10⁻⁹ among 700
+/// contacts.  Using 6 bytes lets `find_by_prefix` reuse the same index since
+/// the companion protocol identifies contacts by their first 6 pub_key bytes.
+fn index_key(pub_key: &[u8]) -> heapless::String<12> {
+    let mut s = heapless::String::new();
+    for &b in &pub_key[..6.min(pub_key.len())] {
+        let hi = b >> 4;
+        let lo = b & 0xF;
+        let _ = s.push(if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char });
+        let _ = s.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char });
+    }
     s
 }
 
@@ -331,12 +359,63 @@ fn slot_key(idx: usize) -> heapless::String<5> {
 /// global singleton.
 pub struct ContactStore {
     kv: kv::KvNamespace,
+    /// Secondary index: pub_key[0..6] hex → slot index (2 bytes LE u16).
+    /// Using 6 bytes lets find_by_prefix() (companion sends 6-byte prefix) share
+    /// the same index as find_by_key() and add_or_update().
+    ci: kv::KvNamespace,
 }
 
 impl ContactStore {
     /// Create a new handle to the contact store.
     pub fn new() -> Self {
-        Self { kv: kv::namespace("contacts") }
+        Self { kv: kv::namespace("contacts"), ci: kv::namespace("ci") }
+    }
+
+    /// Look up a slot by the first 6 bytes of pub_key.
+    ///
+    /// Returns the slot index and full Contact if the slot is live and its
+    /// pub_key starts with `prefix`.  Used by both full-key and prefix lookups.
+    async fn index_lookup_prefix(&self, prefix: &[u8; 6]) -> Option<(usize, Contact)> {
+        let ikey = index_key(prefix);
+        let mut buf = [0u8; 2];
+        if self.ci.get(ikey.as_str(), &mut buf).await.ok()? != 2 {
+            return None;
+        }
+        let slot = u16::from_le_bytes(buf) as usize;
+        if slot >= MAX_CONTACTS {
+            return None;
+        }
+        let mut cbuf = [0u8; CONTACT_SIZE];
+        if self.kv.get(slot_key(slot).as_str(), &mut cbuf).await.ok()? != CONTACT_SIZE {
+            return None;
+        }
+        let c = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
+        if !c.is_deleted() && c.pub_key[..6] == *prefix {
+            Some((slot, c))
+        } else {
+            None
+        }
+    }
+
+    /// Look up the slot index for a full pub_key.
+    async fn index_lookup(&self, pub_key: &[u8; 32]) -> Option<usize> {
+        let prefix: &[u8; 6] = pub_key[..6].try_into().unwrap();
+        self.index_lookup_prefix(prefix).await
+            .and_then(|(slot, c)| if c.pub_key == *pub_key { Some(slot) } else { None })
+    }
+
+    /// Write an index entry: pub_key[0..6] → slot index.
+    async fn index_write(&self, pub_key: &[u8; 32], slot: usize) -> Result<(), kv::KvError> {
+        let ikey = index_key(&pub_key[..6]);
+        let slot_bytes = (slot as u16).to_le_bytes();
+        self.ci.set(ikey.as_str(), &slot_bytes, true).await
+    }
+
+    /// Delete the index entry for pub_key.
+    /// Must be called BEFORE zeroing the slot so the pub_key is still known.
+    async fn index_delete(&self, pub_key: &[u8; 32]) {
+        let ikey = index_key(&pub_key[..6]);
+        let _ = self.ci.delete(ikey.as_str()).await;
     }
 
     // -----------------------------------------------------------------------
@@ -464,32 +543,41 @@ impl ContactStore {
         }
     }
 
-    /// Find a contact by exact pub_key match.
+    /// Update the routing path for a contact identified by `pub_key`.
     ///
-    /// Scans at most `capacity` slots and returns the first non-deleted contact
-    /// whose pub_key matches, or `None` if not found.
-    pub async fn find_by_key(&self, pub_key: &[u8; 32]) -> Option<Contact> {
-        let mut meta_buf = [0u8; META_SIZE];
-        let capacity = match self.kv.get("meta", &mut meta_buf).await {
-            Ok(n) if n == META_SIZE => {
-                (Meta::from_bytes(meta_buf[..META_SIZE].try_into().unwrap()).capacity as usize)
-                    .min(MAX_CONTACTS)
-            }
-            _ => MAX_CONTACTS,
-        };
-        for idx in 0..capacity {
-            let key = slot_key(idx);
-            let mut buf = [0u8; CONTACT_SIZE];
-            if let Ok(n) = self.kv.get(key.as_str(), &mut buf).await {
-                if n == CONTACT_SIZE {
-                    let c = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap());
-                    if !c.is_deleted() && c.pub_key == *pub_key {
-                        return Some(c);
-                    }
-                }
-            }
+    /// Only writes to flash if the contact exists and the path actually changed.
+    /// Silently does nothing if the contact is not found.
+    pub async fn update_path(
+        &self,
+        pub_key:      &[u8; 32],
+        out_path_len: u8,
+        out_path:     &[u8; MAX_PATH_SIZE],
+    ) -> Result<(), kv::KvError> {
+        let Some(slot) = self.index_lookup(pub_key).await else { return Ok(()); };
+        let key = slot_key(slot);
+        let mut buf = [0u8; CONTACT_SIZE];
+        if self.kv.get(key.as_str(), &mut buf).await.ok() != Some(CONTACT_SIZE) {
+            return Ok(());
         }
-        None
+        let mut c = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap());
+        if c.out_path_len == out_path_len && c.out_path == *out_path {
+            return Ok(()); // nothing changed
+        }
+        c.out_path_len = out_path_len;
+        c.out_path = *out_path;
+        self.kv.set(key.as_str(), &c.to_bytes(), true).await
+    }
+
+    /// Find a contact whose pub_key starts with `prefix` (6 bytes).
+    pub async fn find_by_prefix(&self, prefix: &[u8; 6]) -> Option<Contact> {
+        self.index_lookup_prefix(prefix).await.map(|(_, c)| c)
+    }
+
+    /// Find a contact by exact pub_key match.
+    pub async fn find_by_key(&self, pub_key: &[u8; 32]) -> Option<Contact> {
+        let prefix: &[u8; 6] = pub_key[..6].try_into().unwrap();
+        self.index_lookup_prefix(prefix).await
+            .and_then(|(_, c)| if c.pub_key == *pub_key { Some(c) } else { None })
     }
 
     // -----------------------------------------------------------------------
@@ -509,6 +597,24 @@ impl ContactStore {
     ///
     /// The entire scan is a single pass over all slots.
     pub async fn add_or_update(&self, contact: &Contact) -> Result<AddResult, kv::KvError> {
+        // --- Update path: contact already known via index ---
+        if let Some(slot) = self.index_lookup(&contact.pub_key).await {
+            let mut cbuf = [0u8; CONTACT_SIZE];
+            if let Ok(n) = self.kv.get(slot_key(slot).as_str(), &mut cbuf).await {
+                if n == CONTACT_SIZE {
+                    let existing = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
+                    if !existing.is_deleted() && existing.pub_key == contact.pub_key {
+                        let mut updated = contact.clone();
+                        updated.flags |= existing.flags & FLAG_FAVORITE;
+                        self.kv.set(slot_key(slot).as_str(), &updated.to_bytes(), true).await?;
+                        return Ok(AddResult::Updated);
+                    }
+                }
+            }
+            // Index pointed at a stale/deleted slot — fall through to add.
+        }
+
+        // --- Add path: write to the ring-buffer head slot ---
         let mut meta_buf = [0u8; META_SIZE];
         let mut meta = match self.kv.get("meta", &mut meta_buf).await {
             Ok(n) if n == META_SIZE => {
@@ -516,68 +622,30 @@ impl ContactStore {
             }
             _ => Meta { capacity: MAX_CONTACTS as u16, head: 0, count: 0, _pad: 0 },
         };
-        let capacity = (meta.capacity as usize).min(MAX_CONTACTS);
+        let capacity = (meta.capacity as usize).min(MAX_CONTACTS).max(1);
+        let target = meta.head as usize % capacity;
 
-        // Single scan: look for a pub_key match, a free/deleted slot, and track
-        // the oldest non-favourite and oldest favourite for eviction.
-        let mut free_slot:     Option<usize>        = None;
-        let mut oldest_nonfav: Option<(usize, u32)> = None; // (idx, lastmod)
-        let mut oldest_fav:    Option<(usize, u32)> = None;
-        let mut cbuf = [0u8; CONTACT_SIZE];
-
-        for idx in 0..capacity {
-            let key = slot_key(idx);
-            match self.kv.get(key.as_str(), &mut cbuf).await {
-                Ok(n) if n == CONTACT_SIZE => {
-                    let existing = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
-
-                    if existing.pub_key == contact.pub_key {
-                        // Update in place, preserving the favourite flag.
-                        let mut updated = contact.clone();
-                        updated.flags |= existing.flags & FLAG_FAVORITE;
-                        let key = slot_key(idx);
-                        self.kv.set(key.as_str(), &updated.to_bytes(), true).await?;
-                        return Ok(AddResult::Updated);
-                    }
-
-                    if existing.is_deleted() {
-                        if free_slot.is_none() {
-                            free_slot = Some(idx);
-                        }
-                    } else if existing.is_favorite() {
-                        if oldest_fav.map_or(true, |(_, lm)| existing.lastmod < lm) {
-                            oldest_fav = Some((idx, existing.lastmod));
-                        }
-                    } else if oldest_nonfav.map_or(true, |(_, lm)| existing.lastmod < lm) {
-                        oldest_nonfav = Some((idx, existing.lastmod));
-                    }
-                }
-                _ => {
-                    // Slot key absent — never written yet.
-                    if free_slot.is_none() {
-                        free_slot = Some(idx);
-                    }
+        // Check if we are overwriting a live contact (eviction) and remove its
+        // index entry first so the index never points at a stale slot.
+        let mut evicted = false;
+        let mut slot_buf = [0u8; CONTACT_SIZE];
+        if let Ok(n) = self.kv.get(slot_key(target).as_str(), &mut slot_buf).await {
+            if n == CONTACT_SIZE {
+                let incumbent = Contact::from_bytes(slot_buf[..CONTACT_SIZE].try_into().unwrap());
+                if !incumbent.is_deleted() {
+                    self.index_delete(&incumbent.pub_key).await;
+                    evicted = true;
                 }
             }
         }
 
-        // Choose where to write.
-        let (target, evicted) = if let Some(idx) = free_slot {
+        if !evicted {
             meta.count = meta.count.saturating_add(1);
-            (idx, false)
-        } else {
-            // Store is full — evict oldest non-favourite; fall back to oldest
-            // favourite if every slot is marked favourite.
-            let idx = oldest_nonfav
-                .or(oldest_fav)
-                .map(|(i, _)| i)
-                .unwrap_or(meta.head as usize % capacity.max(1));
-            meta.head = ((idx + 1) % capacity.max(1)) as u16;
-            (idx, true)
-        };
+        }
+        meta.head = ((target + 1) % capacity) as u16;
 
-        let key = slot_key(target);
-        self.kv.set(key.as_str(), &contact.to_bytes(), true).await?;
+        self.kv.set(slot_key(target).as_str(), &contact.to_bytes(), true).await?;
+        self.index_write(&contact.pub_key, target).await?;
         self.kv.set("meta", &meta.to_bytes(), true).await?;
         Ok(if evicted { AddResult::Evicted } else { AddResult::Added })
     }
@@ -588,32 +656,25 @@ impl ContactStore {
     /// can be reused.  Returns `true` if the contact was found and deleted,
     /// `false` if no contact with that key exists.
     pub async fn delete(&self, pub_key: &[u8; 32]) -> Result<bool, kv::KvError> {
+        // Look up the slot via the index.
+        let Some(idx) = self.index_lookup(pub_key).await else {
+            return Ok(false);
+        };
+
         let mut meta_buf = [0u8; META_SIZE];
         let mut meta = match self.kv.get("meta", &mut meta_buf).await {
-            Ok(n) if n == META_SIZE => {
-                Meta::from_bytes(meta_buf[..META_SIZE].try_into().unwrap())
-            }
+            Ok(n) if n == META_SIZE => Meta::from_bytes(meta_buf[..META_SIZE].try_into().unwrap()),
             _ => return Ok(false),
         };
-        let capacity = (meta.capacity as usize).min(MAX_CONTACTS);
-        let mut cbuf = [0u8; CONTACT_SIZE];
 
-        for idx in 0..capacity {
-            let key = slot_key(idx);
-            if let Ok(n) = self.kv.get(key.as_str(), &mut cbuf).await {
-                if n == CONTACT_SIZE {
-                    let c = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
-                    if &c.pub_key == pub_key && !c.is_deleted() {
-                        let zeroed = [0u8; CONTACT_SIZE];
-                        let key = slot_key(idx);
-                        self.kv.set(key.as_str(), &zeroed, true).await?;
-                        meta.count = meta.count.saturating_sub(1);
-                        self.kv.set("meta", &meta.to_bytes(), true).await?;
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-        Ok(false)
+        // Zero the index entry first (while pub_key is still in scope).
+        self.index_delete(pub_key).await;
+
+        // Zero the slot.
+        let zeroed = [0u8; CONTACT_SIZE];
+        self.kv.set(slot_key(idx).as_str(), &zeroed, true).await?;
+        meta.count = meta.count.saturating_sub(1);
+        self.kv.set("meta", &meta.to_bytes(), true).await?;
+        Ok(true)
     }
 }
