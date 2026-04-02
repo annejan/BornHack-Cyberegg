@@ -1,5 +1,5 @@
 use crate::{DISPLAY_STATE, update_health};
-use crate::fw::game::nav::{nav_down, nav_left, nav_right, nav_up, NavResult};
+use crate::fw::game::input::{GameBtn, dispatch};
 use embassy_nrf::gpio::Input;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
 
@@ -37,71 +37,107 @@ pub async fn run_buttons(
         ])
         .await;
 
-        // Handle the specific button that was pressed (active low)
+        // Only act on button-down (active low).
+        let is_low = match index {
+            0 => btn_can.is_low(),
+            1 => btn_exe.is_low(),
+            2 => joy_up.is_low(),
+            3 => joy_down.is_low(),
+            4 => joy_left.is_low(),
+            5 => joy_right.is_low(),
+            6 => joy_fire.is_low(),
+            _ => false,
+        };
+
+        if !is_low {
+            // Update health diagnostics on any edge, then skip the action.
+            match index {
+                0 => update_button_health!(btn_can, cancel),
+                1 => update_button_health!(btn_exe, execute),
+                2 => update_button_health!(joy_up, up),
+                3 => update_button_health!(joy_down, down),
+                4 => update_button_health!(joy_left, left),
+                5 => update_button_health!(joy_right, right),
+                6 => update_button_health!(joy_fire, fire),
+                _ => {}
+            }
+            continue;
+        }
+
+        let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
+
         match index {
             0 => {
-                defmt::info!("Cancel button {}", btn_can.is_low());
-                if btn_can.is_low() {
+                defmt::info!("Cancel");
+                if on_game {
+                    dispatch(GameBtn::Cancel);
+                } else {
                     DISPLAY_STATE.lock(|f| f.borrow_mut().on_cancel());
-                    btn_sender.send(index as u8);
                 }
+                btn_sender.send(0);
                 update_button_health!(btn_can, cancel);
             }
             1 => {
-                defmt::info!("Execute button pressed");
-                if btn_exe.is_low() {
-                    btn_sender.send(index as u8);
+                defmt::info!("Execute");
+                if on_game {
+                    dispatch(GameBtn::Execute);
                 }
+                // Execute has no role in the non-game menu currently.
+                btn_sender.send(1);
                 update_button_health!(btn_exe, execute);
             }
             2 => {
-                if joy_up.is_low() {
-                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
-                    if on_game { nav_up(); } else { DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up()); }
-                    btn_sender.send(index as u8);
+                defmt::info!("Up");
+                if on_game {
+                    dispatch(GameBtn::Up);
+                } else {
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up());
                 }
-                defmt::info!("Joystick up");
+                btn_sender.send(2);
                 update_button_health!(joy_up, up);
             }
             3 => {
-                if joy_down.is_low() {
-                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
-                    if on_game { nav_down(); } else { DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down()); }
-                    btn_sender.send(index as u8);
+                defmt::info!("Down");
+                if on_game {
+                    dispatch(GameBtn::Down);
+                } else {
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down());
                 }
-                defmt::info!("Joystick down");
+                btn_sender.send(3);
                 update_button_health!(joy_down, down);
             }
             4 => {
-                if joy_left.is_low() {
-                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
-                    if on_game { nav_left(); } else { DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left()); }
-                    btn_sender.send(index as u8);
+                defmt::info!("Left");
+                if on_game {
+                    dispatch(GameBtn::Left);
+                } else {
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left());
                 }
-                defmt::info!("Joystick left");
+                btn_sender.send(4);
                 update_button_health!(joy_left, left);
             }
             5 => {
-                if joy_right.is_low() {
-                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
-                    if on_game {
-                        if matches!(nav_right(), NavResult::NextScreen) {
-                            DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
-                        }
-                    } else {
+                defmt::info!("Right");
+                if on_game {
+                    // dispatch returns false when the cursor is at the grid edge.
+                    let consumed = dispatch(GameBtn::Right);
+                    if !consumed {
                         DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
                     }
-                    btn_sender.send(index as u8);
+                } else {
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
                 }
-                defmt::info!("Joystick right");
+                btn_sender.send(5);
                 update_button_health!(joy_right, right);
             }
             6 => {
-                if joy_fire.is_low() {
+                defmt::info!("Fire");
+                if on_game {
+                    dispatch(GameBtn::Fire);
+                } else {
                     DISPLAY_STATE.lock(|f| f.borrow_mut().fire());
-                    btn_sender.send(index as u8);
                 }
-                defmt::info!("Joystick fire: {}", joy_fire.is_low());
+                btn_sender.send(6);
                 update_button_health!(joy_fire, fire);
             }
             _ => unreachable!(),

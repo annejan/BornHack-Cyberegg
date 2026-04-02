@@ -53,7 +53,10 @@ use crate::fw::kv;
 /// shrinking discards slots beyond the new limit.
 pub const MAX_CONTACTS: usize = 300;
 
-const _: () = assert!(MAX_CONTACTS <= 9999, "MAX_CONTACTS exceeds the 4-digit slot key format");
+const _: () = assert!(
+    MAX_CONTACTS <= 9999,
+    "MAX_CONTACTS exceeds the 4-digit slot key format"
+);
 
 /// Routing path size in bytes — matches MeshCore `MAX_PATH_SIZE`.
 pub const MAX_PATH_SIZE: usize = 64;
@@ -87,30 +90,30 @@ const META_SIZE: usize = 8;
 #[derive(Clone)]
 pub struct Contact {
     /// Ed25519 public key.  All-zeros = deleted slot.
-    pub pub_key:        [u8; 32],
+    pub pub_key: [u8; 32],
     /// Node role: 1 = ChatNode, 2 = Repeater, 3 = RoomServer, 4 = Sensor.
-    pub node_type:      u8,
+    pub node_type: u8,
     /// Contact flags — bit 0 is [`FLAG_FAVORITE`].
-    pub flags:          u8,
+    pub flags: u8,
     /// Routing path length.  [`OUT_PATH_UNKNOWN`] (0xFF) = not yet established.
-    pub out_path_len:   u8,
-    _pad:               u8,
+    pub out_path_len: u8,
+    _pad: u8,
     /// Routing path bytes — zero-filled when `out_path_len == OUT_PATH_UNKNOWN`.
     /// Always stored as `MAX_PATH_SIZE` (64 B) on the wire, matching MeshCore.
-    pub out_path:       [u8; MAX_PATH_SIZE],
+    pub out_path: [u8; MAX_PATH_SIZE],
     /// Display name, UTF-8, zero-padded to 32 bytes.
-    pub name:           [u8; 32],
+    pub name: [u8; 32],
     /// Timestamp from the contact's last advertisement (contact's own clock).
     pub last_advert_ts: u32,
     /// GPS latitude in microdegrees (0 = not set).
-    pub gps_lat:        i32,
+    pub gps_lat: i32,
     /// GPS longitude in microdegrees (0 = not set).
-    pub gps_lon:        i32,
+    pub gps_lon: i32,
     /// Last-modified timestamp on our device clock.
     ///
     /// Used as the eviction key: the contact with the smallest `lastmod`
     /// (among non-favourites) is overwritten when the store is full.
-    pub lastmod:        u32,
+    pub lastmod: u32,
 }
 
 impl Contact {
@@ -125,7 +128,9 @@ impl Contact {
         }
         let hop_count = (self.out_path_len & 0x3F) as usize;
         let hash_size = ((self.out_path_len >> 6) as usize) + 1;
-        if hash_size == 4 { return 0; } // reserved
+        if hash_size == 4 {
+            return 0;
+        } // reserved
         (hop_count * hash_size).min(MAX_PATH_SIZE)
     }
 
@@ -141,7 +146,11 @@ impl Contact {
 
     /// Name bytes with trailing zero padding stripped.
     pub fn name_bytes(&self) -> &[u8] {
-        let end = self.name.iter().position(|&b| b == 0).unwrap_or(self.name.len());
+        let end = self
+            .name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.name.len());
         &self.name[..end]
     }
 
@@ -169,12 +178,12 @@ impl Contact {
             return None;
         }
         let d = &buf[1..]; // skip command byte; d.len() >= 135
-        let pub_key:               [u8; 32] = d[0..32].try_into().ok()?;
-        let node_type                        = d[32];
-        let flags                            = d[33];
-        let out_path_len                     = d[34];
-        let out_path: [u8; MAX_PATH_SIZE]   = d[35..99].try_into().ok()?;
-        let name:     [u8; 32]              = d[99..131].try_into().ok()?;
+        let pub_key: [u8; 32] = d[0..32].try_into().ok()?;
+        let node_type = d[32];
+        let flags = d[33];
+        let out_path_len = d[34];
+        let out_path: [u8; MAX_PATH_SIZE] = d[35..99].try_into().ok()?;
+        let name: [u8; 32] = d[99..131].try_into().ok()?;
         let last_advert_ts = u32::from_le_bytes([d[131], d[132], d[133], d[134]]);
         // MeshCore sends lat+lon together when frame.len >= 144 (d.len >= 143).
         let gps_lat = if d.len() >= 143 {
@@ -194,8 +203,17 @@ impl Contact {
             0
         };
         Some(Self {
-            pub_key, node_type, flags, out_path_len, _pad: 0,
-            out_path, name, last_advert_ts, gps_lat, gps_lon, lastmod,
+            pub_key,
+            node_type,
+            flags,
+            out_path_len,
+            _pad: 0,
+            out_path,
+            name,
+            last_advert_ts,
+            gps_lat,
+            gps_lon,
+            lastmod,
         })
     }
 
@@ -205,28 +223,28 @@ impl Contact {
     /// Uses `timestamp` as both `last_advert_ts` and `lastmod` (best
     /// approximation without a real-time clock).
     pub fn from_advert(
-        pub_key:   [u8; 32],
-        name:      &[u8],
-        adv_type:  u8,
+        pub_key: [u8; 32],
+        name: &[u8],
+        adv_type: u8,
         timestamp: u32,
-        lat:       i32,
-        lon:       i32,
+        lat: i32,
+        lon: i32,
     ) -> Self {
         let mut name_buf = [0u8; 32];
         let len = name.len().min(32);
         name_buf[..len].copy_from_slice(&name[..len]);
         Self {
             pub_key,
-            node_type:      adv_type,
-            flags:          0,
-            out_path_len:   OUT_PATH_UNKNOWN,
-            _pad:           0,
-            out_path:       [0u8; MAX_PATH_SIZE],
-            name:           name_buf,
+            node_type: adv_type,
+            flags: 0,
+            out_path_len: OUT_PATH_UNKNOWN,
+            _pad: 0,
+            out_path: [0u8; MAX_PATH_SIZE],
+            name: name_buf,
             last_advert_ts: timestamp,
-            gps_lat:        lat,
-            gps_lon:        lon,
-            lastmod:        timestamp,
+            gps_lat: lat,
+            gps_lon: lon,
+            lastmod: timestamp,
         }
     }
 
@@ -235,17 +253,28 @@ impl Contact {
     fn to_bytes(&self) -> [u8; CONTACT_SIZE] {
         let mut b = [0u8; CONTACT_SIZE];
         let mut p = 0usize;
-        b[p..p+32].copy_from_slice(&self.pub_key);                     p += 32;
-        b[p] = self.node_type;                                          p += 1;
-        b[p] = self.flags;                                              p += 1;
-        b[p] = self.out_path_len;                                       p += 1;
-        b[p] = self._pad;                                               p += 1;
-        b[p..p+MAX_PATH_SIZE].copy_from_slice(&self.out_path);         p += MAX_PATH_SIZE;
-        b[p..p+32].copy_from_slice(&self.name);                        p += 32;
-        b[p..p+4].copy_from_slice(&self.last_advert_ts.to_le_bytes()); p += 4;
-        b[p..p+4].copy_from_slice(&self.gps_lat.to_le_bytes());        p += 4;
-        b[p..p+4].copy_from_slice(&self.gps_lon.to_le_bytes());        p += 4;
-        b[p..p+4].copy_from_slice(&self.lastmod.to_le_bytes());        p += 4;
+        b[p..p + 32].copy_from_slice(&self.pub_key);
+        p += 32;
+        b[p] = self.node_type;
+        p += 1;
+        b[p] = self.flags;
+        p += 1;
+        b[p] = self.out_path_len;
+        p += 1;
+        b[p] = self._pad;
+        p += 1;
+        b[p..p + MAX_PATH_SIZE].copy_from_slice(&self.out_path);
+        p += MAX_PATH_SIZE;
+        b[p..p + 32].copy_from_slice(&self.name);
+        p += 32;
+        b[p..p + 4].copy_from_slice(&self.last_advert_ts.to_le_bytes());
+        p += 4;
+        b[p..p + 4].copy_from_slice(&self.gps_lat.to_le_bytes());
+        p += 4;
+        b[p..p + 4].copy_from_slice(&self.gps_lon.to_le_bytes());
+        p += 4;
+        b[p..p + 4].copy_from_slice(&self.lastmod.to_le_bytes());
+        p += 4;
         debug_assert_eq!(p, CONTACT_SIZE);
         b
     }
@@ -254,19 +283,30 @@ impl Contact {
         // Offsets: pub_key(0-31) type(32) flags(33) path_len(34) pad(35)
         //          out_path(36-99) name(100-131) ts(132-135)
         //          lat(136-139) lon(140-143) lastmod(144-147)
-        let pub_key:                    [u8; 32]        = b[0..32].try_into().unwrap();
-        let node_type                                    = b[32];
-        let flags                                        = b[33];
-        let out_path_len                                 = b[34];
-        let _pad                                         = b[35];
-        let out_path: [u8; MAX_PATH_SIZE]               = b[36..100].try_into().unwrap();
-        let name:     [u8; 32]                          = b[100..132].try_into().unwrap();
+        let pub_key: [u8; 32] = b[0..32].try_into().unwrap();
+        let node_type = b[32];
+        let flags = b[33];
+        let out_path_len = b[34];
+        let _pad = b[35];
+        let out_path: [u8; MAX_PATH_SIZE] = b[36..100].try_into().unwrap();
+        let name: [u8; 32] = b[100..132].try_into().unwrap();
         let last_advert_ts = u32::from_le_bytes(b[132..136].try_into().unwrap());
-        let gps_lat        = i32::from_le_bytes(b[136..140].try_into().unwrap());
-        let gps_lon        = i32::from_le_bytes(b[140..144].try_into().unwrap());
-        let lastmod        = u32::from_le_bytes(b[144..148].try_into().unwrap());
-        Self { pub_key, node_type, flags, out_path_len, _pad, out_path, name,
-               last_advert_ts, gps_lat, gps_lon, lastmod }
+        let gps_lat = i32::from_le_bytes(b[136..140].try_into().unwrap());
+        let gps_lon = i32::from_le_bytes(b[140..144].try_into().unwrap());
+        let lastmod = u32::from_le_bytes(b[144..148].try_into().unwrap());
+        Self {
+            pub_key,
+            node_type,
+            flags,
+            out_path_len,
+            _pad,
+            out_path,
+            name,
+            last_advert_ts,
+            gps_lat,
+            gps_lon,
+            lastmod,
+        }
     }
 }
 
@@ -279,10 +319,10 @@ struct Meta {
     /// [`MAX_CONTACTS`] value when this record was last written.
     capacity: u16,
     /// Ring-buffer next-write index (0 ≤ head < capacity).
-    head:     u16,
+    head: u16,
     /// Number of non-deleted contacts currently in the store.
-    count:    u16,
-    _pad:     u16,
+    count: u16,
+    _pad: u16,
 }
 
 impl Meta {
@@ -297,9 +337,9 @@ impl Meta {
     fn from_bytes(b: &[u8; META_SIZE]) -> Self {
         Self {
             capacity: u16::from_le_bytes([b[0], b[1]]),
-            head:     u16::from_le_bytes([b[2], b[3]]),
-            count:    u16::from_le_bytes([b[4], b[5]]),
-            _pad:     0,
+            head: u16::from_le_bytes([b[2], b[3]]),
+            count: u16::from_le_bytes([b[4], b[5]]),
+            _pad: 0,
         }
     }
 }
@@ -325,7 +365,7 @@ pub enum AddResult {
 // ---------------------------------------------------------------------------
 
 /// Format a slot index as a zero-padded 4-digit decimal string.
-fn slot_key(idx: usize) -> heapless::String<5> {
+fn slot_key(idx: usize) -> heapless::String<4> {
     use core::fmt::Write;
     let mut s = heapless::String::new();
     let _ = write!(s, "{:04}", idx);
@@ -342,8 +382,16 @@ fn index_key(pub_key: &[u8]) -> heapless::String<12> {
     for &b in &pub_key[..6.min(pub_key.len())] {
         let hi = b >> 4;
         let lo = b & 0xF;
-        let _ = s.push(if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char });
-        let _ = s.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char });
+        let _ = s.push(if hi < 10 {
+            (b'0' + hi) as char
+        } else {
+            (b'a' + hi - 10) as char
+        });
+        let _ = s.push(if lo < 10 {
+            (b'0' + lo) as char
+        } else {
+            (b'a' + lo - 10) as char
+        });
     }
     s
 }
@@ -368,7 +416,10 @@ pub struct ContactStore {
 impl ContactStore {
     /// Create a new handle to the contact store.
     pub fn new() -> Self {
-        Self { kv: kv::namespace("contacts"), ci: kv::namespace("ci") }
+        Self {
+            kv: kv::namespace("contacts"),
+            ci: kv::namespace("ci"),
+        }
     }
 
     /// Look up a slot by the first 6 bytes of pub_key.
@@ -400,8 +451,15 @@ impl ContactStore {
     /// Look up the slot index for a full pub_key.
     async fn index_lookup(&self, pub_key: &[u8; 32]) -> Option<usize> {
         let prefix: &[u8; 6] = pub_key[..6].try_into().unwrap();
-        self.index_lookup_prefix(prefix).await
-            .and_then(|(slot, c)| if c.pub_key == *pub_key { Some(slot) } else { None })
+        self.index_lookup_prefix(prefix)
+            .await
+            .and_then(|(slot, c)| {
+                if c.pub_key == *pub_key {
+                    Some(slot)
+                } else {
+                    None
+                }
+            })
     }
 
     /// Write an index entry: pub_key[0..6] → slot index.
@@ -439,7 +497,8 @@ impl ContactStore {
                 } else {
                     defmt::info!(
                         "contacts: {} slot(s) in use (capacity {})",
-                        meta.count, meta.capacity
+                        meta.count,
+                        meta.capacity
                     );
                 }
             }
@@ -447,14 +506,17 @@ impl ContactStore {
                 // First boot or corrupted metadata — write a fresh record.
                 let meta = Meta {
                     capacity: MAX_CONTACTS as u16,
-                    head:     0,
-                    count:    0,
-                    _pad:     0,
+                    head: 0,
+                    count: 0,
+                    _pad: 0,
                 };
                 match self.kv.set("meta", &meta.to_bytes(), true).await {
                     Ok(()) => defmt::info!("contacts: initialised (capacity {})", MAX_CONTACTS),
                     Err(e) => {
-                        defmt::error!("contacts: failed to write initial metadata: {:?} — wiping KV store", e);
+                        defmt::error!(
+                            "contacts: failed to write initial metadata: {:?} — wiping KV store",
+                            e
+                        );
                         crate::fw::kv::wipe_and_reset().await;
                     }
                 }
@@ -466,27 +528,39 @@ impl ContactStore {
         let old_cap = old.capacity as usize;
         defmt::info!(
             "contacts: capacity changed {} → {} — migrating",
-            old_cap, MAX_CONTACTS
+            old_cap,
+            MAX_CONTACTS
         );
 
         if MAX_CONTACTS >= old_cap {
             // Growing: existing slots remain valid; just update the capacity field.
             let new_meta = Meta {
                 capacity: MAX_CONTACTS as u16,
-                head:     old.head.min((MAX_CONTACTS as u16).saturating_sub(1)),
-                count:    old.count,
-                _pad:     0,
+                head: old.head.min((MAX_CONTACTS as u16).saturating_sub(1)),
+                count: old.count,
+                _pad: 0,
             };
             if let Err(e) = self.kv.set("meta", &new_meta.to_bytes(), true).await {
                 defmt::warn!("contacts: migrate(grow) meta write failed: {:?}", e);
             }
         } else {
             // Shrinking: delete orphaned slots then rescan to get an accurate count.
+            // Yield every iteration so the watchdog task gets to run — deleting
+            // hundreds of slots takes several seconds and would otherwise starve it.
             for idx in MAX_CONTACTS..old_cap {
                 let key = slot_key(idx);
-                let _ = self.kv.delete(key.as_str()).await;
+                defmt::info!("contacts: deleting orphaned slot {} {}", idx, key.as_str());
+                match self.kv.delete(key.as_str()).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        defmt::warn!("contacts: failed to delete orphaned slot {}: {:?}", idx, e)
+                    }
+                }
+                embassy_futures::yield_now().await;
             }
-            let mut count = 0u16;
+
+            // Rescan retained slots to get an accurate count.
+            let mut count: u16 = 0;
             let mut cbuf = [0u8; CONTACT_SIZE];
             for idx in 0..MAX_CONTACTS {
                 let key = slot_key(idx);
@@ -498,12 +572,14 @@ impl ContactStore {
                         }
                     }
                 }
+                embassy_futures::yield_now().await;
             }
+
             let new_meta = Meta {
                 capacity: MAX_CONTACTS as u16,
-                head:     old.head.min((MAX_CONTACTS as u16).saturating_sub(1)),
+                head: old.head.min((MAX_CONTACTS as u16).saturating_sub(1)),
                 count,
-                _pad:     0,
+                _pad: 0,
             };
             if let Err(e) = self.kv.set("meta", &new_meta.to_bytes(), true).await {
                 defmt::warn!("contacts: migrate(shrink) meta write failed: {:?}", e);
@@ -520,9 +596,7 @@ impl ContactStore {
     pub async fn count(&self) -> u16 {
         let mut buf = [0u8; META_SIZE];
         match self.kv.get("meta", &mut buf).await {
-            Ok(n) if n == META_SIZE => {
-                Meta::from_bytes(buf[..META_SIZE].try_into().unwrap()).count
-            }
+            Ok(n) if n == META_SIZE => Meta::from_bytes(buf[..META_SIZE].try_into().unwrap()).count,
             _ => 0,
         }
     }
@@ -552,11 +626,13 @@ impl ContactStore {
     /// Silently does nothing if the contact is not found.
     pub async fn update_path(
         &self,
-        pub_key:      &[u8; 32],
+        pub_key: &[u8; 32],
         out_path_len: u8,
-        out_path:     &[u8; MAX_PATH_SIZE],
+        out_path: &[u8; MAX_PATH_SIZE],
     ) -> Result<(), kv::KvError> {
-        let Some(slot) = self.index_lookup(pub_key).await else { return Ok(()); };
+        let Some(slot) = self.index_lookup(pub_key).await else {
+            return Ok(());
+        };
         let key = slot_key(slot);
         let mut buf = [0u8; CONTACT_SIZE];
         if self.kv.get(key.as_str(), &mut buf).await.ok() != Some(CONTACT_SIZE) {
@@ -579,7 +655,8 @@ impl ContactStore {
     /// Find a contact by exact pub_key match.
     pub async fn find_by_key(&self, pub_key: &[u8; 32]) -> Option<Contact> {
         let prefix: &[u8; 6] = pub_key[..6].try_into().unwrap();
-        self.index_lookup_prefix(prefix).await
+        self.index_lookup_prefix(prefix)
+            .await
             .and_then(|(_, c)| if c.pub_key == *pub_key { Some(c) } else { None })
     }
 
@@ -612,7 +689,9 @@ impl ContactStore {
                         if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
                             return Ok(AddResult::Updated);
                         }
-                        self.kv.set(slot_key(slot).as_str(), &updated.to_bytes(), true).await?;
+                        self.kv
+                            .set(slot_key(slot).as_str(), &updated.to_bytes(), true)
+                            .await?;
                         return Ok(AddResult::Updated);
                     }
                 }
@@ -623,10 +702,13 @@ impl ContactStore {
         // --- Add path: write to the ring-buffer head slot ---
         let mut meta_buf = [0u8; META_SIZE];
         let mut meta = match self.kv.get("meta", &mut meta_buf).await {
-            Ok(n) if n == META_SIZE => {
-                Meta::from_bytes(meta_buf[..META_SIZE].try_into().unwrap())
-            }
-            _ => Meta { capacity: MAX_CONTACTS as u16, head: 0, count: 0, _pad: 0 },
+            Ok(n) if n == META_SIZE => Meta::from_bytes(meta_buf[..META_SIZE].try_into().unwrap()),
+            _ => Meta {
+                capacity: MAX_CONTACTS as u16,
+                head: 0,
+                count: 0,
+                _pad: 0,
+            },
         };
         let capacity = (meta.capacity as usize).min(MAX_CONTACTS).max(1);
         let target = meta.head as usize % capacity;
@@ -650,10 +732,16 @@ impl ContactStore {
         }
         meta.head = ((target + 1) % capacity) as u16;
 
-        self.kv.set(slot_key(target).as_str(), &contact.to_bytes(), true).await?;
+        self.kv
+            .set(slot_key(target).as_str(), &contact.to_bytes(), true)
+            .await?;
         self.index_write(&contact.pub_key, target).await?;
         self.kv.set("meta", &meta.to_bytes(), true).await?;
-        Ok(if evicted { AddResult::Evicted } else { AddResult::Added })
+        Ok(if evicted {
+            AddResult::Evicted
+        } else {
+            AddResult::Added
+        })
     }
 
     /// Delete a contact by public key.

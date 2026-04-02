@@ -24,7 +24,9 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use static_cell::StaticCell;
 use tickv::{ErrorCode, TicKV};
 
-use crate::fw::storage::{AlignedBuf, QspiFlashController, QspiIrqs, REGION_SIZE, fnv1a, init_qspi};
+use crate::fw::storage::{
+    AlignedBuf, QspiFlashController, QspiIrqs, REGION_SIZE, fnv1a, init_qspi,
+};
 
 // ---------------------------------------------------------------------------
 // Flash layout
@@ -96,13 +98,17 @@ impl KvStore {
         }
     }
 
+    fn exists(&mut self, key: u64) -> bool {
+        !matches!(
+            self.tickv.get_key(key, &mut []),
+            Err(ErrorCode::KeyNotFound)
+        )
+    }
+
     fn set(&mut self, key: u64, data: &[u8], update: bool) -> Result<(), KvError> {
         // Probe existence: get_key with a zero-length buffer returns KeyNotFound
         // only when the key is absent; any other result means the key exists.
-        let exists = !matches!(
-            self.tickv.get_key(key, &mut []),
-            Err(ErrorCode::KeyNotFound)
-        );
+        let exists = self.exists(key);
 
         if exists && !update {
             return Err(KvError::KeyExists);
@@ -115,7 +121,10 @@ impl KvStore {
                 Err(e) => return Err(e.into()),
             }
         }
-        self.tickv.append_key(key, data).map(|_| ()).map_err(Into::into)
+        self.tickv
+            .append_key(key, data)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 
     fn delete(&mut self, key: u64) -> Result<(), KvError> {
@@ -153,7 +162,10 @@ fn erase_all_regions(store: &KvStore) {
 /// that should always succeed returns `KvError::Other`). The firmware restarts
 /// with a clean store on the next boot.
 pub async fn wipe_and_reset() -> ! {
-    defmt::error!("KV: flash corruption — wiping {} regions and resetting", NUM_REGIONS);
+    defmt::error!(
+        "KV: flash corruption — wiping {} regions and resetting",
+        NUM_REGIONS
+    );
     let guard = STORE.lock().await;
     if let Some(store) = guard.as_ref() {
         erase_all_regions(store);
@@ -184,7 +196,11 @@ pub async fn init<'d>(
     let buf = TICKV_BUF.init(AlignedBuf([0u8; REGION_SIZE]));
 
     let store = KvStore {
-        tickv: TicKV::new(QspiFlashController::new(qspi), &mut buf.0, NUM_REGIONS * REGION_SIZE),
+        tickv: TicKV::new(
+            QspiFlashController::new(qspi),
+            &mut buf.0,
+            NUM_REGIONS * REGION_SIZE,
+        ),
     };
 
     match store.tickv.initialise(MAIN_KEY) {
@@ -285,6 +301,15 @@ impl KvNamespace {
             .ok_or(KvError::NotInitialised)?
             .delete(namespaced_key(self.prefix, key))
     }
+
+    pub async fn exists(&self, key: &str) -> Result<bool, KvError> {
+        Ok(STORE
+            .lock()
+            .await
+            .as_mut()
+            .ok_or(KvError::NotInitialised)?
+            .exists(namespaced_key(self.prefix, key)))
+    }
 }
 
 /// Obtain a namespaced handle to the KV store.
@@ -315,7 +340,12 @@ pub async fn smoke_test() {
             defmt::info!("KV smoke test OK");
         }
         Ok(n) => {
-            defmt::warn!("KV smoke test: read back {} bytes, got {:02x} expected {:02x}", n, buf, MAGIC);
+            defmt::warn!(
+                "KV smoke test: read back {} bytes, got {:02x} expected {:02x}",
+                n,
+                buf,
+                MAGIC
+            );
         }
         Err(e) => {
             defmt::warn!("KV smoke test: read failed: {:?}", e);

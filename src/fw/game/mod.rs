@@ -17,6 +17,8 @@
 //! The focused icon is highlighted: black filled circle + icon drawn in white.
 //! Navigation state lives in [`nav`].
 
+pub mod input;
+pub mod modal;
 pub mod nav;
 pub use nav::{GameNav, Row};
 
@@ -313,6 +315,9 @@ where
             _ => icon_twofaces(display, cx, BOT_CY, !attention, fg)?,
         }
     }
+
+    // Modal overlay — drawn last so it sits on top of everything.
+    modal::draw_modal(display)?;
 
     Ok(())
 }

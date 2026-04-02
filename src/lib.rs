@@ -392,7 +392,63 @@ where
         3 => draw_screen_advert(display, bat_prc),
         // Screen 4 (badgercorn) is rendered via blit() in embassy.rs — nothing to draw here.
         _ => draw_screen_main(display, health_str, bat_prc),
+    }?;
+
+    // BLE pairing PIN overlay — drawn last so it appears on every screen,
+    // including over the game screen and any in-game modal.
+    draw_ble_pin_overlay(display)
+}
+
+/// Draw the BLE passkey PIN dialog centred on screen.
+///
+/// Does nothing when no pairing is in progress (`BLE_PASSKEY == u32::MAX`).
+/// The double-border box signals urgency and renders on top of all other content.
+#[cfg(feature = "embassy")]
+fn draw_ble_pin_overlay<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let passkey_val = BLE_PASSKEY.load(Ordering::Relaxed);
+    if passkey_val == u32::MAX {
+        return Ok(());
     }
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    Rectangle::new(Point::new(20, 48), Size::new(112, 62))
+        .into_styled(PrimitiveStyle::with_fill(WHITE))
+        .draw(display)?;
+    Rectangle::new(Point::new(20, 48), Size::new(112, 62))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+        .draw(display)?;
+    Rectangle::new(Point::new(24, 52), Size::new(104, 54))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+        .draw(display)?;
+    Text::with_text_style(
+        "BT PIN:",
+        Point::new(76, 66),
+        MonoTextStyle::new(&FONT_7X13, BLACK),
+        centered,
+    )
+    .draw(display)?;
+    let code_str = format!(8; "{:06}", passkey_val).unwrap();
+    Text::with_text_style(
+        &code_str,
+        Point::new(76, 86),
+        MonoTextStyle::new(&FONT_10X20, BLACK),
+        centered,
+    )
+    .draw(display)
+    .map(|_| ())
+}
+
+#[cfg(feature = "simulator")]
+fn draw_ble_pin_overlay<D>(_display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    Ok(())
 }
 
 fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
@@ -446,33 +502,11 @@ where
         .map(|_| ())
     })?;
 
-    let passkey_val = BLE_PASSKEY.load(Ordering::Relaxed);
-    if passkey_val != u32::MAX {
-        // BLE pairing PIN — white square with double black border to signal importance.
-        // Outer border at (20, 48), inner border 4 px inside, PIN text centered.
-        Rectangle::new(Point::new(20, 48), Size::new(112, 62))
-            .into_styled(PrimitiveStyle::with_fill(WHITE))
-            .draw(display)?;
-        Rectangle::new(Point::new(20, 48), Size::new(112, 62))
-            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
-            .draw(display)?;
-        Rectangle::new(Point::new(24, 52), Size::new(104, 54))
-            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
-            .draw(display)?;
-        let pin_label_style = MonoTextStyle::new(&FONT_7X13, BLACK);
-        let pin_code_style = MonoTextStyle::new(&FONT_10X20, BLACK);
-        Text::with_text_style("BT PIN:", Point::new(76, 66), pin_label_style, centered)
-            .draw(display)?;
-        let code_str = format!(8; "{:06}", passkey_val).unwrap();
-        Text::with_text_style(&code_str, Point::new(76, 86), pin_code_style, centered)
-            .draw(display)?;
-    } else {
-        let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<5>>| {
-            let screen = state.current_screen();
-            (screen.current_items(), screen.current_pos())
-        });
-        menu::draw_menu(display, items, pos)?;
-    }
+    let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<5>>| {
+        let screen = state.current_screen();
+        (screen.current_items(), screen.current_pos())
+    });
+    menu::draw_menu(display, items, pos)?;
 
     Text::with_text_style(
         health_str,
