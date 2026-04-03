@@ -43,6 +43,12 @@ pub struct MeshCoreConfig {
     /// TCXO voltage and startup delay for modules that power the TCXO via DIO3
     /// (e.g. eByte E22). Set to None if the module uses a plain crystal instead.
     pub tcxo: Option<(TcxoVoltage, TcxoDelay)>,
+    /// Spreading factor 5–12 (numeric, used for airtime estimation).
+    pub sf_num: u8,
+    /// Bandwidth in Hz (numeric, used for airtime estimation).
+    pub bw_hz_num: u32,
+    /// Coding rate in MeshCore protocol encoding: 5 = CR4/5, …, 8 = CR4/8.
+    pub cr_num: u8,
 }
 
 impl MeshCoreConfig {
@@ -63,6 +69,9 @@ impl MeshCoreConfig {
         tx_power_dbm: 22,
         preamble_len: 8,
         tcxo: None, // External 32 MHz crystal on XTA/XTB — no DIO3 TCXO control needed
+        sf_num:    8,
+        bw_hz_num: 62_500,
+        cr_num:    5,
     };
 
     /// Build a [`MeshCoreConfig`] from user-configurable [`settings::RadioParams`].
@@ -103,10 +112,13 @@ impl MeshCoreConfig {
                 8 => LoraCodingRate::CR4_8,
                 _ => LoraCodingRate::CR4_5, // protocol cr=5 → CR 4/5
             },
-            sync_word: Self::UK_NARROW_BAND.sync_word,
+            sync_word:    Self::UK_NARROW_BAND.sync_word,
             tx_power_dbm: p.tx_power,
             preamble_len: Self::UK_NARROW_BAND.preamble_len,
-            tcxo: Self::UK_NARROW_BAND.tcxo,
+            tcxo:         Self::UK_NARROW_BAND.tcxo,
+            sf_num:       p.sf,
+            bw_hz_num:    p.bw_hz,
+            cr_num:       p.cr,
         }
     }
 }
@@ -149,6 +161,129 @@ pub enum LoraError {
     Spi(&'static str),
     Timeout,
     Buffer(&'static str),
+    /// TX skipped — 1-hour airtime budget exhausted.
+    DutyCycle,
+}
+
+// ---------------------------------------------------------------------------
+// Airtime estimation
+// ---------------------------------------------------------------------------
+
+/// Standard LoRa time-on-air calculation (Semtech SX1261/2 datasheet §6.1.4).
+///
+/// Returns the estimated on-air time in milliseconds for a packet of
+/// `payload_len` bytes.  Parameters use MeshCore conventions:
+/// - `sf`       — spreading factor 5–12
+/// - `bw_hz`    — bandwidth in Hz (e.g. 62_500)
+/// - `cr_proto` — coding rate in MeshCore encoding: 5 = CR4/5, …, 8 = CR4/8
+/// - `preamble` — programmed preamble length (e.g. 8)
+///
+/// Assumes explicit header mode and CRC enabled (both standard for MeshCore).
+pub fn lora_airtime_ms(payload_len: usize, sf: u8, bw_hz: u32, cr_proto: u8, preamble: u16) -> u32 {
+    // Symbol duration: T_sym_us = 2^SF * 1_000_000 / BW_Hz
+    let sym_us = (1u64 << sf) * 1_000_000 / bw_hz as u64;
+
+    // Low data rate optimisation: enabled when T_sym > 16 ms
+    let de: i64 = if sym_us > 16_000 { 1 } else { 0 };
+
+    // CR value: proto encoding 5 → 1, 6 → 2, 7 → 3, 8 → 4
+    let cr: i64 = cr_proto.saturating_sub(4) as i64;
+
+    // Payload symbol count — explicit header (IH=0), CRC=1 → constant 44
+    let n      = payload_len as i64;
+    let sf_i   = sf as i64;
+    let num    = 8 * n - 4 * sf_i + 44;    // 44 = 28 + 16*CRC - 20*IH
+    let denom  = 4 * (sf_i - 2 * de);
+    let extra  = if num > 0 && denom > 0 {
+        ((num + denom - 1) / denom) * (cr + 4)  // ceil(num/denom) * (CR+4)
+    } else {
+        0
+    };
+    let payload_syms = 8 + extra;
+
+    // Total = (preamble + 4.25) + N_payload  →  (preamble + 4) + N_payload (integer)
+    let total_syms = preamble as i64 + 4 + payload_syms;
+    let t_us = total_syms as u64 * sym_us;
+
+    ((t_us / 1000) as u32).max(1)
+}
+
+// ---------------------------------------------------------------------------
+// TX duty-cycle budget
+// ---------------------------------------------------------------------------
+
+/// Token-bucket TX airtime budget matching the C++ `Dispatcher` logic.
+///
+/// The budget refills continuously at rate `duty_cycle` per millisecond elapsed
+/// and is deducted by actual measured TX airtime after each transmission.
+///
+/// `duty_cycle = 1 / (1 + airtime_factor)` where `airtime_factor` is encoded
+/// as an integer × 1000 (e.g. 9000 = factor 9.0 → 10 % duty cycle).
+pub struct TxBudget {
+    budget_ms: u32,
+    last_update: embassy_time::Instant,
+    /// Airtime factor × 1000; denominator = 1000 + af_x1000.
+    af_x1000: u32,
+}
+
+impl TxBudget {
+    const WINDOW_MS:      u32 = 3_600_000; // 1 hour in ms
+    const MIN_RESERVE_MS: u32 = 100;       // min budget before blocking TX
+    const MIN_TX_DIV:     u32 = 2;         // require est_airtime / N as budget
+
+    pub fn new(af_x1000: u32) -> Self {
+        let denom = 1_000 + af_x1000;
+        // Initial budget = max budget = window * duty_cycle = window * 1000 / denom
+        let max_budget = (Self::WINDOW_MS as u64 * 1_000 / denom as u64) as u32;
+        Self {
+            budget_ms: max_budget,
+            last_update: embassy_time::Instant::now(),
+            af_x1000,
+        }
+    }
+
+    /// Update the factor (e.g. when the user changes it via the companion app).
+    /// Resets the budget to the new max to avoid instant exhaustion.
+    pub fn update_factor(&mut self, af_x1000: u32) {
+        self.af_x1000 = af_x1000;
+        let denom = 1_000 + af_x1000;
+        let max_budget = (Self::WINDOW_MS as u64 * 1_000 / denom as u64) as u32;
+        self.budget_ms = max_budget;
+        self.last_update = embassy_time::Instant::now();
+    }
+
+    /// Refill the budget based on time elapsed since the last update.
+    fn refill(&mut self) {
+        let now      = embassy_time::Instant::now();
+        let elapsed  = (now - self.last_update).as_millis() as u32;
+        let denom    = 1_000 + self.af_x1000;
+        let max_bud  = (Self::WINDOW_MS as u64 * 1_000 / denom as u64) as u32;
+        let refill   = (elapsed as u64 * 1_000 / denom as u64) as u32;
+        if refill > 0 {
+            self.budget_ms = self.budget_ms.saturating_add(refill).min(max_bud);
+            self.last_update = now;
+        }
+    }
+
+    /// Returns `true` if TX is allowed for a packet with estimated airtime `est_ms`.
+    ///
+    /// Requires `budget_ms >= est_ms / MIN_TX_DIV` (same guard as C++ Dispatcher).
+    pub fn can_tx(&mut self, est_ms: u32) -> bool {
+        self.refill();
+        self.budget_ms >= est_ms / Self::MIN_TX_DIV
+    }
+
+    /// Deduct actual measured TX airtime after a successful transmission.
+    pub fn deduct(&mut self, actual_ms: u32) {
+        if actual_ms >= self.budget_ms {
+            self.budget_ms = 0;
+        } else {
+            self.budget_ms -= actual_ms;
+        }
+        if self.budget_ms < Self::MIN_RESERVE_MS {
+            defmt::warn!("TX budget low: {=u32}ms remaining", self.budget_ms);
+        }
+    }
 }
 
 pub struct SimpleLoRa<'a> {
@@ -163,6 +298,12 @@ pub struct SimpleLoRa<'a> {
     pub(super) crc_type: LoRaCrcType,
     pub(super) preamble_len: u16,
     pub(super) dio1: Input<'a>,
+    /// Radio params stored for airtime estimation.
+    sf: u8,
+    bw_hz: u32,
+    cr_proto: u8,
+    /// TX duty-cycle budget; `None` until `init_budget()` is called.
+    tx_budget: Option<TxBudget>,
 }
 
 impl<'a> SimpleLoRa<'a> {
@@ -211,9 +352,24 @@ impl<'a> SimpleLoRa<'a> {
             crc_type: LoRaCrcType::CrcOn,
             preamble_len: config.preamble_len,
             dio1,
+            sf:        config.sf_num,
+            bw_hz:     config.bw_hz_num,
+            cr_proto:  config.cr_num,
+            tx_budget: None,
         };
         radio.apply_rx_gain();
         Ok(radio)
+    }
+
+    /// Initialise the TX duty-cycle budget.
+    ///
+    /// Must be called once at startup with the persisted `airtime_factor_x1000`
+    /// from settings.  Can be called again whenever the factor changes.
+    pub fn init_budget(&mut self, af_x1000: u32) {
+        match self.tx_budget {
+            Some(ref mut b) => b.update_factor(af_x1000),
+            None => self.tx_budget = Some(TxBudget::new(af_x1000)),
+        }
     }
 
     /// Write the RxGain register according to the BOOSTED_RX_GAIN flag.
@@ -329,6 +485,18 @@ impl<'a> SimpleLoRa<'a> {
     }
 
     pub async fn send_message(&mut self, message: &[u8]) -> Result<(), LoraError> {
+        // Check TX duty-cycle budget before transmitting.
+        if let Some(ref mut budget) = self.tx_budget {
+            let est_ms = lora_airtime_ms(message.len(), self.sf, self.bw_hz, self.cr_proto, self.preamble_len);
+            if !budget.can_tx(est_ms) {
+                defmt::warn!(
+                    "TX duty-cycle limit: est={=u32}ms budget={=u32}ms — packet dropped",
+                    est_ms, budget.budget_ms,
+                );
+                return Err(LoraError::DutyCycle);
+            }
+        }
+
         self.lora.rf_switch_tx();
 
         self.lora.write_buffer(0x00, message).unwrap();
@@ -338,12 +506,22 @@ impl<'a> SimpleLoRa<'a> {
             .set_crc_type(self.crc_type)
             .into();
         self.lora.set_packet_params(packet_params).unwrap();
+
+        let tx_start = embassy_time::Instant::now();
         self.lora
             .set_tx(self.tx_timeout)
             .map_err(|_| LoraError::Timeout)?;
 
         self.dio1.wait_for_rising_edge().await;
+        let actual_ms = tx_start.elapsed().as_millis() as u32;
+
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
+
+        // Deduct measured airtime from budget.
+        if let Some(ref mut budget) = self.tx_budget {
+            budget.deduct(actual_ms);
+            defmt::debug!("TX done: actual={=u32}ms budget_remaining={=u32}ms", actual_ms, budget.budget_ms);
+        }
 
         // Re-arm continuous RX so receive_packet() finds the chip already in RX mode.
         self.lora.wait_on_busy().ok();

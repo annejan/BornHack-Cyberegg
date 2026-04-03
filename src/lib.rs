@@ -282,6 +282,10 @@ pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 #[cfg(feature = "embassy")]
 pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Signals the meshcore task that tuning params changed; carries the new airtime_factor_x1000.
+#[cfg(feature = "embassy")]
+pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal::new();
+
 /// Signals the meshcore task to transmit a self-advert.
 #[cfg(feature = "embassy")]
 pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, fw::meshcore::AdvertMode> =
@@ -464,6 +468,73 @@ pub struct LoginResult {
 pub static LOGIN_RESULT_CHANNEL: embassy_sync::channel::Channel<
     CriticalSectionRawMutex,
     LoginResult,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// Carries PACKET_ACK (0x82) events from the meshcore task to the BLE task.
+/// Pushed when the mesh delivers an ACK matching a pending sent message.
+#[cfg(feature = "embassy")]
+pub struct AckEvent {
+    /// 4-byte ACK CRC — matches the expected-ACK tag from the MSG_SENT response.
+    pub ack_crc: u32,
+    /// Round-trip time from send to ACK receipt in milliseconds.
+    pub trip_time_ms: u32,
+}
+
+#[cfg(feature = "embassy")]
+pub static ACK_EVENT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    AckEvent,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// Tracks the most recently sent P2P message, used to compute ACK round-trip time.
+#[cfg(feature = "embassy")]
+pub struct PendingAck {
+    pub ack_hash: u32,
+    pub sent_at: embassy_time::Instant,
+}
+
+#[cfg(feature = "embassy")]
+pub static PENDING_ACK: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<PendingAck>>,
+> = Mutex::new(core::cell::Cell::new(None));
+
+/// Request to send a telemetry REQ packet over LoRa to a remote node.
+#[cfg(feature = "embassy")]
+pub struct TxTelemReq {
+    pub pub_key: [u8; 32],
+    /// Tag (timestamp) used for correlating the response.
+    pub tag: u32,
+}
+
+#[cfg(feature = "embassy")]
+pub static TX_TELEM_REQ_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TxTelemReq,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// Tag stored while waiting for a telemetry response; cleared when received.
+#[cfg(feature = "embassy")]
+pub static PENDING_TELEM_TAG: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<u32>>,
+> = Mutex::new(core::cell::Cell::new(None));
+
+/// Carries a received telemetry response from the meshcore task to the BLE task.
+#[cfg(feature = "embassy")]
+pub struct TelemResult {
+    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    /// Raw CayenneLPP bytes returned by the remote node.
+    pub lpp: heapless::Vec<u8, 176>,
+}
+
+#[cfg(feature = "embassy")]
+pub static TELEM_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TelemResult,
     2,
 > = embassy_sync::channel::Channel::new();
 

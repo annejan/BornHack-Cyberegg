@@ -115,6 +115,16 @@ pub async fn run_meshcore_listener<'a>(
         );
     }
 
+    // Initialise TX duty-cycle budget from persisted tuning params.
+    let tuning = settings::get_tuning_params().await;
+    lora.init_budget(tuning.airtime_factor_x1000);
+    defmt::info!(
+        "TX budget: af={=u32}.{=u32:03} ({}%), window=1h",
+        tuning.airtime_factor_x1000 / 1000,
+        tuning.airtime_factor_x1000 % 1000,
+        1000 / (1 + tuning.airtime_factor_x1000 / 1000).max(1),
+    );
+
     defmt::info!(
         "MeshCore listener ready — freq={=u32}Hz bw={=u32}Hz SF={=u8} CR={=u8} sync={=u16:#06x} preamble={=u16}",
         config.frequency_hz,
@@ -139,6 +149,12 @@ pub async fn run_meshcore_listener<'a>(
             defmt::info!("MeshCore: reloaded {} channel(s) from KV", loaded_channels.len());
         }
 
+        // Update TX duty-cycle budget if tuning params changed.
+        if let Some(af_x1000) = crate::TUNING_CHANGED_SIGNAL.try_take() {
+            lora.init_budget(af_x1000);
+            defmt::info!("TX budget updated: af={=u32}.{=u32:03}", af_x1000 / 1000, af_x1000 % 1000);
+        }
+
         // Drain any already-queued outgoing messages before entering RX.
         while let Ok(req) = crate::TX_MSG_CHANNEL.try_receive() {
             send_grp_txt(&mut lora, &loaded_channels, req).await;
@@ -154,6 +170,9 @@ pub async fn run_meshcore_listener<'a>(
         }
         while let Ok(req) = crate::TX_STATUS_REQ_CHANNEL.try_receive() {
             send_status_request(&mut lora, req, identity).await;
+        }
+        while let Ok(req) = crate::TX_TELEM_REQ_CHANNEL.try_receive() {
+            send_telem_request(&mut lora, req, identity).await;
         }
         if let Some(mode) = crate::SEND_ADVERT_SIGNAL.try_take() {
             let mut name_buf = [0u8; settings::MAX_NODE_NAME];
@@ -224,7 +243,7 @@ pub async fn run_meshcore_listener<'a>(
                             PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, snr_x4, path_len, &loaded_channels).await,
                             PayloadType::TxtMsg => log_txt_msg(&mut lora, &msg.payload, rssi, path_len, &msg.path, identity).await,
                             PayloadType::Advert => log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path).await,
-                            PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
+                            PayloadType::Ack => handle_ack_recv(&msg.payload, rssi),
                             PayloadType::Trace => handle_trace_recv(&msg.payload, &msg.path, snr_x4).await,
                             PayloadType::Response => handle_response_recv(&msg.payload, identity).await,
                             PayloadType::Path => handle_path_recv(&msg.payload, rssi, identity).await,
@@ -754,11 +773,18 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
                 defmt::warn!("send_txt_msg: TX failed: {:?}", e);
             } else {
                 defmt::info!(
-                    "TxtMsg sent: to={=[u8]:02x} route={=str} len={=usize}B",
+                    "TxtMsg sent: to={=[u8]:02x} route={=str} len={=usize}B ack={=u32:#010x}",
                     &req.recipient_pub_key[..6],
                     if route == RouteType::Direct { "direct" } else { "flood" },
-                    len,
+                    len, _expected_ack,
                 );
+                // Record pending ACK so we can compute round-trip time when the mesh ACKs back.
+                crate::PENDING_ACK.lock(|cell| {
+                    cell.set(Some(crate::PendingAck {
+                        ack_hash: _expected_ack,
+                        sent_at:  embassy_time::Instant::now(),
+                    }));
+                });
             }
         }
         Err(e) => {
@@ -980,6 +1006,39 @@ async fn send_ack(
 }
 
 // ---------------------------------------------------------------------------
+// ACK reception — notify BLE client
+// ---------------------------------------------------------------------------
+
+/// Handle a received `PayloadType::Ack` packet from the mesh.
+///
+/// Parses the 4-byte ack_crc from `payload`, matches it against the pending
+/// sent message stored in `PENDING_ACK`, then pushes a `PACKET_ACK` (0x82)
+/// event to the BLE task via `ACK_EVENT_CHANNEL`.
+fn handle_ack_recv(payload: &[u8], rssi: i16) {
+    if payload.len() < 4 {
+        defmt::warn!("handle_ack_recv: payload too short ({=usize}B)", payload.len());
+        return;
+    }
+    let ack_crc = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    defmt::info!("MeshCore Ack: ack_crc={=u32:#010x} [{=i16}dBm]", ack_crc, rssi);
+
+    let trip_time_ms = crate::PENDING_ACK.lock(|cell| {
+        let pending = cell.take();
+        if let Some(p) = pending {
+            if p.ack_hash == ack_crc {
+                let elapsed = p.sent_at.elapsed().as_millis() as u32;
+                return elapsed;
+            }
+            // Not our ACK — put it back.
+            cell.set(Some(p));
+        }
+        0u32
+    });
+
+    let _ = crate::ACK_EVENT_CHANNEL.try_send(crate::AckEvent { ack_crc, trip_time_ms });
+}
+
+// ---------------------------------------------------------------------------
 // Trace-path transmission
 // ---------------------------------------------------------------------------
 
@@ -1167,6 +1226,99 @@ async fn send_status_request(
 }
 
 // ---------------------------------------------------------------------------
+// Telemetry request transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit a `PAYLOAD_TYPE_REQ` telemetry request.
+///
+/// Plaintext layout (13 bytes, same as C++ `sendRequest` with `req_type`):
+/// ```text
+/// [tag:4 LE][req_type:1 = 0x03][reserved:4 zeros][random:4]
+/// ```
+/// Uses `txt_msg::encrypt` with `attempt = 0x03` (= flags byte) and
+/// `text = [0;4] ++ [random;4]` to produce the correct plaintext.
+async fn send_telem_request(
+    lora: &mut SimpleLoRa<'_>,
+    req: crate::TxTelemReq,
+    identity: &DeviceIdentity,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+
+    // REQ_TYPE_GET_TELEMETRY_DATA = 0x03.
+    // txt_msg::encrypt encodes flags = (attempt & 3) | (txt_type << 2).
+    // To get flags = 0x03: attempt = 3, txt_type = 0.
+    // text = [reserved:4][random:4] — we use zeros for both (no RNG needed).
+    const REQ_TYPE_TELEMETRY: u8 = 0x03;
+    // attempt = REQ_TYPE_TELEMETRY so that flags byte = 0x03 in the AES plaintext.
+    let text: [u8; 8] = [0u8; 8]; // reserved(4) + random(4) — zeros acceptable
+
+    let (encrypted, _ack_hash) = match meshcore::payload::txt_msg::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &req.pub_key,
+        req.tag,
+        0,                   // txt_type = 0 → upper bits of flags = 0
+        REQ_TYPE_TELEMETRY,  // attempt field → flags & 3 = 0x03
+        &text,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            defmt::warn!("send_telem_req: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; meshcore::MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = meshcore::payload::txt_msg::serialize(&encrypted, &mut payload_buf, &mut payload_len) {
+        defmt::warn!("send_telem_req: serialize failed: {:?}", defmt::Debug2Format(&e));
+        return;
+    }
+
+    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+    };
+
+    let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
+    let _ = payload_vec.extend_from_slice(&payload_buf[..payload_len]);
+
+    let msg = Message {
+        payload_type:   PayloadType::Req,
+        route,
+        version:        0,
+        transport_code: 0,
+        path_len_byte,
+        path:           path_bytes,
+        payload:        payload_vec,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            crate::PENDING_TELEM_TAG.lock(|cell| cell.set(Some(req.tag)));
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_telem_req: TX failed: {:?}", e);
+                crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
+            } else {
+                defmt::info!("Telem req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B)",
+                    &req.pub_key[..6], req.tag, len);
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_telem_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Trace-path receive handler
 // ---------------------------------------------------------------------------
 
@@ -1332,7 +1484,31 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
             }
         }
 
-        // No pending status request — treat as a login response.
+        // Check if this is a response to a pending telemetry request (tag-based match).
+        let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
+        if let Some(telem_tag) = pending_telem {
+            if dec.timestamp == telem_tag {
+                crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
+
+                // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
+                let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
+                let _ = lpp.push(dec.flags);
+                let _ = lpp.extend_from_slice(&dec.text);
+
+                defmt::info!(
+                    "Response recv: TELEM from {=[u8]:02x} lpp={=usize}B",
+                    &c.pub_key[..6], lpp.len(),
+                );
+
+                let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult {
+                    pub_key,
+                    lpp,
+                });
+                return;
+            }
+        }
+
+        // No pending status or telemetry request — treat as a login response.
         let success = resp_type == 0
             || (resp_type == b'O' && dec.text.first() == Some(&b'K'));
 

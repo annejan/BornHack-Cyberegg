@@ -327,6 +327,60 @@ pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
 }
 
 // ---------------------------------------------------------------------------
+// Tuning parameters  (CMD_SET_TUNING_PARAMS 0x15 / CMD_GET_TUNING_PARAMS 0x2B)
+// ---------------------------------------------------------------------------
+
+/// Tuning parameters for TX duty-cycle enforcement and relay timing.
+#[derive(Clone, Copy, Debug, defmt::Format)]
+pub struct TuningParams {
+    /// RX relay delay base, encoded as `delay_secs * 1000` (e.g. 1000 = 1.0 s).
+    /// Not yet acted on by the firmware; stored for round-trip fidelity.
+    pub rx_delay_base_x1000: u32,
+    /// Airtime factor encoded as `factor * 1000` (e.g. 9000 = factor 9.0).
+    /// Duty cycle = 1 / (1 + factor): factor 9.0 → 10%, factor 0.0 → 100%.
+    /// Default: 9000 (10% duty cycle — EU 869 MHz compliant).
+    pub airtime_factor_x1000: u32,
+}
+
+impl TuningParams {
+    fn to_bytes(self) -> [u8; 8] {
+        let mut b = [0u8; 8];
+        b[0..4].copy_from_slice(&self.rx_delay_base_x1000.to_le_bytes());
+        b[4..8].copy_from_slice(&self.airtime_factor_x1000.to_le_bytes());
+        b
+    }
+
+    fn from_bytes(b: &[u8; 8]) -> Self {
+        Self {
+            rx_delay_base_x1000:  u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            airtime_factor_x1000: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+        }
+    }
+}
+
+/// Default tuning parameters.
+///
+/// `rx_delay_base = 0` (no relay delay), `airtime_factor = 9.0` (10% duty cycle).
+pub const DEFAULT_TUNING: TuningParams = TuningParams {
+    rx_delay_base_x1000:  0,
+    airtime_factor_x1000: 9_000,
+};
+
+/// Read the persisted tuning params, or return [`DEFAULT_TUNING`] if not stored.
+pub async fn get_tuning_params() -> TuningParams {
+    let mut b = [0u8; 8];
+    match ns().get("tuning", &mut b).await {
+        Ok(8) => TuningParams::from_bytes(&b),
+        _ => DEFAULT_TUNING,
+    }
+}
+
+/// Persist tuning params to flash.
+pub async fn set_tuning_params(p: TuningParams) -> Result<(), kv::KvError> {
+    ns().set("tuning", &p.to_bytes(), true).await
+}
+
+// ---------------------------------------------------------------------------
 // Path hash mode  (CMD_SET_PATH_HASH_MODE 0x3D)
 // ---------------------------------------------------------------------------
 

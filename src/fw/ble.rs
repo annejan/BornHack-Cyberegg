@@ -518,7 +518,13 @@ async fn nus_peripheral_loop<C>(
                         crate::TRACE_RESULT_CHANNEL.receive(),
                         select(
                             crate::LOGIN_RESULT_CHANNEL.receive(),
-                            crate::STATUS_RESULT_CHANNEL.receive(),
+                            select(
+                                crate::STATUS_RESULT_CHANNEL.receive(),
+                                select(
+                                    crate::ACK_EVENT_CHANNEL.receive(),
+                                    crate::TELEM_RESULT_CHANNEL.receive(),
+                                ),
+                            ),
                         ),
                     ),
                 ).await {
@@ -540,7 +546,13 @@ async fn nus_peripheral_loop<C>(
                     crate::TRACE_RESULT_CHANNEL.receive(),
                     select(
                         crate::LOGIN_RESULT_CHANNEL.receive(),
-                        crate::STATUS_RESULT_CHANNEL.receive(),
+                        select(
+                            crate::STATUS_RESULT_CHANNEL.receive(),
+                            select(
+                                crate::ACK_EVENT_CHANNEL.receive(),
+                                crate::TELEM_RESULT_CHANNEL.receive(),
+                            ),
+                        ),
                     ),
                 ).await
             };
@@ -624,6 +636,9 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_other:    Option<settings::OtherParams> = None;
                             let mut pending_reboot:   bool = false;
                             let mut pending_contact:  Option<contacts::Contact> = None;
+                            // Self-telemetry LPP buffer: CayenneLPP [ch=1][0x02][val:2 BE].
+                            let mut self_telem_lpp: [u8; 4] = [0u8; 4];
+                            let mut self_telem_prefix: [u8; 6] = [0u8; 6];
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
                                     defmt::warn!("companion: empty write");
@@ -851,7 +866,7 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
-                                Ok(companion::cmd::Command::SendTxtMsg { txt_type: _, attempt: _, timestamp, pub_key_prefix, text }) => {
+                                Ok(companion::cmd::Command::SendTxtMsg { txt_type, attempt, timestamp, pub_key_prefix, text }) => {
                                     // Look up the full pub_key by prefix scan.
                                     let recipient = contacts::ContactStore::new()
                                         .find_by_prefix(&pub_key_prefix)
@@ -864,14 +879,34 @@ async fn nus_peripheral_loop<C>(
                                         Some(c) => {
                                             let mut v: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
                                             let _ = v.extend_from_slice(&text[..text.len().min(msg_queue::MAX_TEXT)]);
+                                            let is_flood = c.out_path_len == contacts::OUT_PATH_UNKNOWN;
                                             match crate::TX_PM_CHANNEL.try_send(crate::TxPrivateMsg {
                                                 recipient_pub_key: c.pub_key,
                                                 timestamp,
                                                 text: v,
                                             }) {
                                                 Ok(()) => {
-                                                    defmt::info!("companion: SEND_TXT_MSG to={=[u8]:02x} → queued", pub_key_prefix);
-                                                    companion::Response::MsgSent
+                                                    // Compute expected_ack = SHA-256([ts:4][flags:1][text] || sender_pk)[0..4]
+                                                    let flags = (attempt & 3) | (txt_type << 2);
+                                                    let text_len = text.len().min(meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE);
+                                                    let mut pfx = [0u8; 5 + meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE];
+                                                    pfx[0..4].copy_from_slice(&timestamp.to_le_bytes());
+                                                    pfx[4] = flags;
+                                                    pfx[5..5 + text_len].copy_from_slice(&text[..text_len]);
+                                                    let expected_ack = meshcore::payload::txt_msg::compute_ack_hash(
+                                                        &pfx[..5 + text_len],
+                                                        &ctx.pub_key,
+                                                    );
+                                                    let est_timeout_ms = if is_flood { 30_000u32 } else { 15_000u32 };
+                                                    defmt::info!(
+                                                        "companion: SEND_TXT_MSG to={=[u8]:02x} → queued, ack={=u32:#010x} flood={=bool}",
+                                                        pub_key_prefix, expected_ack, is_flood
+                                                    );
+                                                    companion::Response::SentWithTag {
+                                                        is_flood,
+                                                        tag: expected_ack,
+                                                        est_timeout_ms,
+                                                    }
                                                 }
                                                 Err(_) => {
                                                     defmt::warn!("companion: SEND_TXT_MSG TX queue full");
@@ -1073,6 +1108,73 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
+                                Ok(companion::cmd::Command::SetTuningParams { rx_delay_base_x1000, airtime_factor_x1000 }) => {
+                                    let af = airtime_factor_x1000.min(9_000);
+                                    defmt::info!(
+                                        "companion: SET_TUNING_PARAMS rx_delay={=u32} af={=u32}",
+                                        rx_delay_base_x1000, af,
+                                    );
+                                    let params = settings::TuningParams {
+                                        rx_delay_base_x1000,
+                                        airtime_factor_x1000: af,
+                                    };
+                                    match settings::set_tuning_params(params).await {
+                                        Ok(()) => {
+                                            crate::TUNING_CHANGED_SIGNAL.signal(af);
+                                            companion::Response::Ok
+                                        }
+                                        Err(e) => {
+                                            defmt::warn!("companion: SET_TUNING_PARAMS persist failed: {:?}", e);
+                                            companion::Response::Error(companion::ErrorCode::Generic)
+                                        }
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::GetTuningParams) => {
+                                    let params = settings::get_tuning_params().await;
+                                    defmt::info!(
+                                        "companion: GET_TUNING_PARAMS rx={=u32} af={=u32}",
+                                        params.rx_delay_base_x1000, params.airtime_factor_x1000,
+                                    );
+                                    companion::Response::TuningParams {
+                                        rx_delay_base_x1000:  params.rx_delay_base_x1000,
+                                        airtime_factor_x1000: params.airtime_factor_x1000,
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SendTelemetryRequest { pub_key: Some(key) }) => {
+                                    let tag = crate::unix_now().unwrap_or(0);
+                                    let contact = contacts::ContactStore::new().find_by_key(&key).await;
+                                    let is_flood = contact
+                                        .as_ref()
+                                        .map(|c| c.out_path_len == contacts::OUT_PATH_UNKNOWN)
+                                        .unwrap_or(true);
+                                    let est_timeout_ms = if is_flood { 30_000u32 } else { 15_000u32 };
+                                    defmt::info!(
+                                        "companion: SEND_TELEMETRY_REQ key={=[u8]:02x} tag={=u32:#010x} flood={=bool}",
+                                        &key[..6], tag, is_flood,
+                                    );
+                                    let _ = crate::TX_TELEM_REQ_CHANNEL.try_send(crate::TxTelemReq {
+                                        pub_key: key,
+                                        tag,
+                                    });
+                                    companion::Response::SentWithTag { is_flood, tag, est_timeout_ms }
+                                }
+
+                                Ok(companion::cmd::Command::SendTelemetryRequest { pub_key: None }) => {
+                                    // Self-telemetry: immediately return own battery voltage as CayenneLPP.
+                                    // CayenneLPP voltage: [channel=1][type=0x02][value:2 BE], 0.01V resolution.
+                                    let mv = crate::fw::battery::read_mv() as u32;
+                                    let val = ((mv + 5) / 10) as u16;
+                                    self_telem_lpp = [1, 0x02, (val >> 8) as u8, val as u8];
+                                    self_telem_prefix.copy_from_slice(&ctx.pub_key[..6]);
+                                    defmt::info!("companion: SEND_TELEMETRY_REQ (self) batt={=u16} centivolt", val);
+                                    companion::Response::TelemetryResponse {
+                                        pub_key_prefix: self_telem_prefix,
+                                        lpp_data: &self_telem_lpp,
+                                    }
+                                }
+
                                 Ok(companion::cmd::Command::Unknown(b)) => {
                                     defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
                                     companion::Response::Error(companion::ErrorCode::InvalidCommand)
@@ -1245,18 +1347,44 @@ async fn nus_peripheral_loop<C>(
                             enqueue_notify(outbox, &companion::Response::LoginFail { pub_key_prefix: prefix });
                         }
                     }
-                    Either::Second(status) => {
-                        let mut prefix = [0u8; 6];
-                        prefix.copy_from_slice(&status.pub_key[..6]);
-                        defmt::info!(
-                            "BLE: status from {:02x} uptime={=u32}s batt={=u16}mV, pushing 0x87",
-                            &status.pub_key[..6], status.uptime_secs, status.battery_mv,
-                        );
-                        enqueue_notify(outbox, &companion::Response::StatusResponse {
-                            pub_key_prefix: prefix,
-                            uptime_secs:    status.uptime_secs,
-                            battery_mv:     status.battery_mv,
-                        });
+                    Either::Second(either2) => match either2 {
+                        Either::First(status) => {
+                            let mut prefix = [0u8; 6];
+                            prefix.copy_from_slice(&status.pub_key[..6]);
+                            defmt::info!(
+                                "BLE: status from {:02x} uptime={=u32}s batt={=u16}mV, pushing 0x87",
+                                &status.pub_key[..6], status.uptime_secs, status.battery_mv,
+                            );
+                            enqueue_notify(outbox, &companion::Response::StatusResponse {
+                                pub_key_prefix: prefix,
+                                uptime_secs:    status.uptime_secs,
+                                battery_mv:     status.battery_mv,
+                            });
+                        }
+                        Either::Second(either3) => match either3 {
+                            Either::First(ack) => {
+                                defmt::info!(
+                                    "BLE: ACK ack_crc={=u32:#010x} trip={=u32}ms, pushing 0x82",
+                                    ack.ack_crc, ack.trip_time_ms,
+                                );
+                                enqueue_notify(outbox, &companion::Response::Ack(companion::Ack {
+                                    ack_crc:      ack.ack_crc,
+                                    trip_time_ms: ack.trip_time_ms,
+                                }));
+                            }
+                            Either::Second(telem) => {
+                                let mut prefix = [0u8; 6];
+                                prefix.copy_from_slice(&telem.pub_key[..6]);
+                                defmt::info!(
+                                    "BLE: telem from {:02x} lpp={=usize}B, pushing 0x8B",
+                                    &telem.pub_key[..6], telem.lpp.len(),
+                                );
+                                enqueue_notify(outbox, &companion::Response::TelemetryResponse {
+                                    pub_key_prefix: prefix,
+                                    lpp_data: &telem.lpp,
+                                });
+                            }
+                        }
                     }
                 }
             }
