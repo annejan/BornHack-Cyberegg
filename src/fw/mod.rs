@@ -19,3 +19,4 @@ pub mod meshcore;
 pub mod msg_queue;
 pub mod settings;
 pub mod sx1262;
+pub mod temperature;

@@ -1,14 +1,12 @@
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::peripherals;
 use embassy_nrf::spim::{Config, Frequency, InterruptHandler, Spim};
-use embassy_nrf::temp::Temp;
 use embassy_nrf::{Peri, bind_interrupts};
 use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use static_cell::StaticCell;
 
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicI16, Ordering};
 use embassy_nrf::gpio::{Pin as GpioPin, Port};
 use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
 pub use ssd1675::LutMode;
@@ -35,7 +33,6 @@ pub type EpdConfig152x152 = EpdConfig<152, 152>;
 
 bind_interrupts!(struct Irqs {
     SPIM3 => InterruptHandler<peripherals::SPI3>;
-    TEMP  => embassy_nrf::temp::InterruptHandler;
 });
 
 pub type EpdGfx<'a> = GraphicDisplay<
@@ -191,31 +188,6 @@ async fn probe_lut(
     lut
 }
 
-/// Cached nRF52840 die temperature in °C × 10 (e.g. 255 = 25.5 °C).
-/// `i16::MIN` until the first measurement is taken.
-static CACHED_TEMP_C10: AtomicI16 = AtomicI16::new(i16::MIN);
-
-/// Read the nRF52840 built-in temperature sensor using a stolen peripheral.
-///
-/// Uses `unsafe { peripherals::TEMP::steal() }` so the caller retains `p.TEMP`
-/// for the BLE stack. The stolen peripheral is dropped before returning.
-/// Updates the cached temperature; call [`last_temp_c10`] to read it later.
-/// Returns temperature in degrees Celsius.
-pub async fn read_nrf_temp() -> i16 {
-    let mut sensor = Temp::new(unsafe { peripherals::TEMP::steal() }, Irqs);
-    let t = sensor.read().await.to_num::<i16>();
-    drop(sensor);
-    CACHED_TEMP_C10.store(t * 10, Ordering::Relaxed);
-    t
-}
-
-/// Return the last measured die temperature as °C × 10 (e.g. 255 = 25.5 °C),
-/// or `i16::MIN` if no measurement has been taken yet.
-///
-/// Safe to call from any task without touching the TEMP peripheral.
-pub fn last_temp_c10() -> i16 {
-    CACHED_TEMP_C10.load(Ordering::Relaxed)
-}
 
 /// Initialize the EPD display (SSD1675/SSD1675B, SPIM3 interface).
 ///

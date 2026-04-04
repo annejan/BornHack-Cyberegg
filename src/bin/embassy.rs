@@ -115,7 +115,7 @@ async fn main(spawner: Spawner) {
     let identity = settings::load_or_create_identity().await;
 
     // Read nRF52840 die temperature before BLE init consumes p.TEMP.
-    let temp_celsius = hello_graphics::fw::epd::read_nrf_temp().await;
+    let temp_celsius = hello_graphics::fw::temperature::read_and_cache().await;
     defmt::info!("Die temperature: {} °C", temp_celsius);
 
     // -----------------------------------------------------------------------

@@ -1174,7 +1174,7 @@ async fn nus_peripheral_loop<C>(
                                     self_telem_lpp_len = 4;
 
                                     // CayenneLPP temperature: [ch=1][0x67][val:2 BE signed], 0.1°C resolution.
-                                    let t_c10 = crate::fw::epd::last_temp_c10();
+                                    let t_c10 = crate::fw::temperature::last_c10();
                                     if t_c10 != i16::MIN {
                                         let t_bytes = t_c10.to_be_bytes();
                                         self_telem_lpp[4] = 1;
