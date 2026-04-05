@@ -304,6 +304,14 @@ pub struct SimpleLoRa<'a> {
     cr_proto: u8,
     /// TX duty-cycle budget; `None` until `init_budget()` is called.
     tx_budget: Option<TxBudget>,
+    /// RSSI of the last successfully received packet (dBm, negative).
+    pub last_rssi: i16,
+    /// SNR × 4 of the last successfully received packet.
+    pub last_snr_x4: i8,
+    /// Accumulated TX airtime in milliseconds (sum of measured TX durations).
+    pub tx_air_ms: u32,
+    /// Accumulated RX airtime in milliseconds (sum of per-packet on-air durations).
+    pub rx_air_ms: u32,
 }
 
 impl<'a> SimpleLoRa<'a> {
@@ -356,6 +364,10 @@ impl<'a> SimpleLoRa<'a> {
             bw_hz:     config.bw_hz_num,
             cr_proto:  config.cr_num,
             tx_budget: None,
+            last_rssi:   0,
+            last_snr_x4: 0,
+            tx_air_ms:   0,
+            rx_air_ms:   0,
         };
         radio.apply_rx_gain();
         Ok(radio)
@@ -457,6 +469,12 @@ impl<'a> SimpleLoRa<'a> {
                 .map(|s| (s.rssi_pkt() as i16, (s.snr_pkt() * 4.0) as i8))
                 .unwrap_or((0, 0));
 
+            self.last_rssi   = rssi;
+            self.last_snr_x4 = snr_x4;
+            // Accumulate per-packet on-air duration (same formula as TX).
+            let pkt_air_ms = lora_airtime_ms(len, self.sf, self.bw_hz, self.cr_proto, self.preamble_len);
+            self.rx_air_ms = self.rx_air_ms.saturating_add(pkt_air_ms);
+
             Some((len, rssi, snr_x4))
         } else if irq.crc_err() {
             let (rssi, _snr_x4) = self
@@ -516,6 +534,8 @@ impl<'a> SimpleLoRa<'a> {
         let actual_ms = tx_start.elapsed().as_millis() as u32;
 
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
+
+        self.tx_air_ms = self.tx_air_ms.saturating_add(actual_ms);
 
         // Deduct measured airtime from budget.
         if let Some(ref mut budget) = self.tx_budget {

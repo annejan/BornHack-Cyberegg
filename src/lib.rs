@@ -318,6 +318,34 @@ pub static DISCOVERY_RESULT_CHANNEL: embassy_sync::channel::Channel<
 pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, fw::meshcore::AdvertMode> =
     Signal::new();
 
+/// Radio statistics snapshot, written by the meshcore task and read by the BLE task
+/// on `CMD_GET_STATS / STATS_TYPE_RADIO (0x38 0x01)`.
+#[cfg(feature = "embassy")]
+#[derive(Clone, Copy)]
+pub struct RadioStats {
+    /// Noise floor estimate in dBm (i16 LE on wire).  We approximate this as
+    /// `last_rssi - snr` which gives the estimated noise power at the receiver.
+    pub noise_floor: i16,
+    /// RSSI of the last successfully received packet (dBm, cast to i8).
+    pub last_rssi: i8,
+    /// SNR × 4 of the last successfully received packet.
+    pub last_snr_x4: i8,
+    /// Total TX airtime in seconds.
+    pub tx_air_secs: u32,
+    /// Total RX airtime in seconds.
+    pub rx_air_secs: u32,
+}
+
+#[cfg(feature = "embassy")]
+pub static RADIO_STATS: Mutex<CriticalSectionRawMutex, core::cell::Cell<RadioStats>> =
+    Mutex::new(core::cell::Cell::new(RadioStats {
+        noise_floor: -120,
+        last_rssi:    0,
+        last_snr_x4:  0,
+        tx_air_secs:  0,
+        rx_air_secs:  0,
+    }));
+
 /// A raw received LoRa packet to be forwarded to the BLE companion as `0x88`.
 #[cfg(feature = "embassy")]
 pub struct RawLoRaPkt {

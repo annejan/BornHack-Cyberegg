@@ -1502,6 +1502,32 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
+                                Ok(companion::cmd::Command::GetStats(stats_type)) => {
+                                    match stats_type {
+                                        0x01 => {
+                                            let s = crate::RADIO_STATS.lock(|c| c.get());
+                                            defmt::info!(
+                                                "companion: GET_STATS RADIO noise={=i16}dBm rssi={=i8}dBm snr_x4={=i8}",
+                                                s.noise_floor, s.last_rssi, s.last_snr_x4,
+                                            );
+                                            companion::Response::StatsRadio {
+                                                noise_floor: s.noise_floor,
+                                                last_rssi:   s.last_rssi,
+                                                last_snr_x4: s.last_snr_x4,
+                                                tx_air_secs: s.tx_air_secs,
+                                                rx_air_secs: s.rx_air_secs,
+                                            }
+                                        }
+                                        other => {
+                                            defmt::warn!(
+                                                "companion: GET_STATS unsupported type={=u8:#04x}",
+                                                other
+                                            );
+                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                        }
+                                    }
+                                }
+
                                 Ok(companion::cmd::Command::SendControlData(payload)) => {
                                     defmt::info!(
                                         "companion: SEND_CONTROL_DATA ctl_type={=u8:#04x} len={=usize}",

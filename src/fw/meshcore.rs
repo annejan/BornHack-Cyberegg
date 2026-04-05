@@ -210,6 +210,20 @@ pub async fn run_meshcore_listener<'a>(
             Ok(None) => { /* CRC error or non-data IRQ — already re-armed */ }
 
             Ok(Some((len, rssi, snr_x4))) => {
+                // Update radio stats snapshot for CMD_GET_STATS / STATS_TYPE_RADIO.
+                {
+                    let noise_floor = (rssi as i32 - (snr_x4 as i32 / 4)).clamp(-128, 0) as i16;
+                    crate::RADIO_STATS.lock(|cell| {
+                        cell.set(crate::RadioStats {
+                            noise_floor,
+                            last_rssi:   rssi.clamp(-128, 0) as i8,
+                            last_snr_x4: snr_x4,
+                            tx_air_secs: lora.tx_air_ms / 1000,
+                            rx_air_secs: lora.rx_air_ms / 1000,
+                        });
+                    });
+                }
+
                 // Push raw bytes to the BLE task immediately (before dedup/decrypt)
                 // so the client can do its own decryption and relay-repeat tracking.
                 {
