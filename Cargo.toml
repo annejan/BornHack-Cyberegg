@@ -118,9 +118,8 @@ mesh = [
     "meshcore-companion",
 ]
 simulator = ["embedded-graphics-simulator", "heapless", "game"]
-embassy = [
-    "game",
-    "mesh",
+# Base nRF52840 embassy runtime (display, buttons, LEDs, buzzer — no radio/BLE).
+embassy-base = [
     "cortex-m",
     "cortex-m-rt",
     "defmt",
@@ -132,18 +131,22 @@ embassy = [
     "embassy-time",
     "embedded-hal",
     "embedded-hal-bus",
-
     "heapless",
     "panic-probe",
     "ssd1675",
     "static_cell",
 ]
+# Full build: game + mesh.
+embassy      = ["embassy-base", "game", "mesh"]
+# Game only (no LoRa/BLE mesh stack).
+embassy-game = ["embassy-base", "game"]
+# Mesh only (no game).
+embassy-mesh = ["embassy-base", "mesh"]
 
 # [workspace]
 # harness = false
 
 [lib]
-harness = false
 
 [[bin]]
 name = "simulator"
@@ -154,5 +157,5 @@ required-features = ["simulator"]
 [[bin]]
 name = "embassy"
 path = "src/bin/embassy.rs"
-required-features = ["embassy"]
+required-features = ["embassy-base"]
 harness = false

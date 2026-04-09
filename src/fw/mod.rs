@@ -11,26 +11,6 @@ pub mod led;
 pub mod nfct;
 pub mod temperature;
 
-// Mesh-dependent modules: LoRa radio, BLE companion, KV store, contacts, etc.
+/// MeshCore networking stack (LoRa radio, BLE companion, contacts, channels, KV store).
 #[cfg(feature = "mesh")]
-pub mod ble;
-#[cfg(feature = "mesh")]
-pub mod bonds;
-#[cfg(feature = "mesh")]
-pub mod channels;
-#[cfg(feature = "mesh")]
-pub mod contacts;
-#[cfg(feature = "mesh")]
-pub mod device_identity;
-#[cfg(feature = "mesh")]
-pub mod kv;
-#[cfg(feature = "mesh")]
-pub mod meshcore;
-#[cfg(feature = "mesh")]
-pub mod msg_queue;
-#[cfg(feature = "mesh")]
-pub mod settings;
-#[cfg(feature = "mesh")]
-pub mod storage;
-#[cfg(feature = "mesh")]
-pub mod sx1262;
+pub mod mesh;

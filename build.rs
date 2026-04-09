@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn main() {
-    let embassy = std::env::var_os("CARGO_FEATURE_EMBASSY").is_some();
+    let embassy = std::env::var_os("CARGO_FEATURE_EMBASSY_BASE").is_some();
     let simulator = std::env::var_os("CARGO_FEATURE_SIMULATOR").is_some();
 
     if embassy && simulator {

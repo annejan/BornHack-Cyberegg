@@ -43,8 +43,8 @@ use nrf_sdc::{self as sdc, SoftdeviceController};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
-use crate::fw::bonds::{BOND_CMD_CHANNEL, BondCmd, INITIAL_BONDS};
-use crate::fw::{channels, contacts, msg_queue, settings};
+use super::bonds::{BOND_CMD_CHANNEL, BondCmd, INITIAL_BONDS};
+use super::{channels, contacts, msg_queue, settings};
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG
@@ -527,7 +527,7 @@ async fn nus_peripheral_loop<C>(
         if crate::CONTACT_RESET_SIGNAL.signaled() {
             crate::CONTACT_RESET_SIGNAL.reset();
             defmt::info!("settings: clearing all contacts");
-            crate::fw::contacts::ContactStore::new().clear_all().await;
+            super::contacts::ContactStore::new().clear_all().await;
         }
 
         defmt::debug!("BLE: advertising…");
@@ -1002,9 +1002,9 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
                                     let advert_mode = if mode == 1 {
-                                        crate::fw::meshcore::AdvertMode::Flood
+                                        super::meshcore::AdvertMode::Flood
                                     } else {
-                                        crate::fw::meshcore::AdvertMode::ZeroHop
+                                        super::meshcore::AdvertMode::ZeroHop
                                     };
                                     crate::SEND_ADVERT_SIGNAL.signal(advert_mode);
                                     defmt::info!(

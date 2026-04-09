@@ -25,7 +25,7 @@ use embassy_sync::once_lock::OnceLock;
 use ekv::{Config, Database, MountError};
 use static_cell::StaticCell;
 
-use crate::fw::storage::{KV_PAGE_COUNT, QspiFlash, QspiIrqs, init_qspi};
+use super::storage::{KV_PAGE_COUNT, QspiFlash, QspiIrqs, init_qspi};
 
 // ---------------------------------------------------------------------------
 // Error type

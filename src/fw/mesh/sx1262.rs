@@ -81,7 +81,7 @@ impl MeshCoreConfig {
     ///
     /// `settings::RadioParams.cr` uses **MeshCore protocol encoding** (5 = CR 4/5,
     /// 6 = CR 4/6, …).  The sx126x hardware encoding (CR4_5 = 1, …) is handled here.
-    pub fn from_radio_params(p: &crate::fw::settings::RadioParams) -> Self {
+    pub fn from_radio_params(p: &super::settings::RadioParams) -> Self {
         Self {
             frequency_hz: p.freq_hz,
             spread_factor: match p.sf {

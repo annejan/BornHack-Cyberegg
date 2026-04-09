@@ -6,7 +6,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Timer;
 
 use super::device_identity::DeviceIdentity;
-use super::health::SYSTEM_HEALTH;
+use crate::fw::health::SYSTEM_HEALTH;
 use super::settings;
 use super::sx1262::{MeshCoreConfig, SimpleLoRa};
 use super::{channels, contacts, msg_queue};
@@ -774,7 +774,7 @@ async fn send_grp_txt(
     let name_len = {
         let n = settings::get_node_name(&mut name_buf).await;
         if n == 0 {
-            let id = super::device_id::get_bytes();
+            let id = crate::fw::device_id::get_bytes();
             name_buf[..id.len()].copy_from_slice(&id);
             id.len()
         } else {

@@ -32,7 +32,7 @@
 //! | `0x3A`       | SET_AUTOADD_CONFIG    | `"autoadd"`      |
 //! | `0x3D`       | SET_PATH_HASH_MODE    | `"path_hash"`    |
 
-use crate::fw::{device_identity, kv};
+use super::{device_identity, kv};
 pub use device_identity::DeviceIdentity;
 
 // ---------------------------------------------------------------------------

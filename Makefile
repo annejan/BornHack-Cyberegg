@@ -6,49 +6,82 @@ ELF_REL     = target/thumbv7em-none-eabihf/release/embassy
 # App flash base matches the app slot in memory.x (ORIGIN in memory.x = 0xD000)
 FLASH_BASE = 0x0000D000
 
-.PHONY: fw fw-release sim flash flash-release monitor bl bl-flash dfu-flash
+.PHONY: fw fw-release fw-game fw-game-release fw-mesh fw-mesh-release \
+        sim flash flash-release flash-game flash-mesh \
+        monitor bl bl-flash dfu-flash dfu-flash-release
 
-# Build the app firmware (debug)
+# ---------- Full build (game + mesh) ----------
+
 fw:
 	cargo fw
 	@arm-none-eabi-size $(ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
 
-# Build the app firmware (release)
 fw-release:
 	cargo fw-release
 	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
 
-# Build and flash the debug firmware via SWD
 flash:
 	cargo fw
 	probe-rs download --chip nRF52840_xxAA $(ELF)
 
-# Build and flash the release firmware via SWD
 flash-release:
 	cargo fw-release
 	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
 
-# Run the simulator
+# ---------- Game only (no mesh) ----------
+
+fw-game:
+	cargo fw-game
+	@arm-none-eabi-size $(ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+fw-game-release:
+	cargo fw-game-release
+	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+flash-game:
+	cargo fw-game
+	probe-rs download --chip nRF52840_xxAA $(ELF)
+
+flash-game-release:
+	cargo fw-game-release
+	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# ---------- Mesh only (no game) ----------
+
+fw-mesh:
+	cargo fw-mesh
+	@arm-none-eabi-size $(ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+fw-mesh-release:
+	cargo fw-mesh-release
+	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+flash-mesh:
+	cargo fw-mesh
+	probe-rs download --chip nRF52840_xxAA $(ELF)
+
+flash-mesh-release:
+	cargo fw-mesh-release
+	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# ---------- Simulator ----------
+
 sim:
 	cargo sim
 
-# Monitor RTT output (app)
+# ---------- Monitor / debug ----------
+
 monitor:
 	probe-rs attach --chip nRF52840_xxAA --always-print-stacktrace target/thumbv7em-none-eabihf/debug/embassy
 
-# Monitor RTT output (bootloader)
 bl-monitor:
 	probe-rs attach --chip nRF52840_xxAA bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 
-# Build the bootloader
+# ---------- Bootloader ----------
+
 bl:
 	cd bootloader && cargo bl
 
-# Build and flash the bootloader via SWD (do this once on a fresh device).
-# Full chip erase is done first to clear any stale content.
-# Uses `probe-rs download` (not `probe-rs run`) so make exits cleanly after
-# programming without waiting for the firmware — the bootloader blinks red
-# and waits for DFU when no valid app is present.
 bl-flash:
 	probe-rs erase --chip nRF52840_xxAA
 	cd bootloader && cargo bl
@@ -56,14 +89,12 @@ bl-flash:
 	    bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 	@echo "Bootloader programmed. Run 'make flash' to install the app."
 
-# Flash the app firmware over USB DFU.
-# Hold the execute button while powering on to enter DFU mode (red LED blinks).
-# -w: wait up to 10 s for the device to appear (so you can plug in after make).
+# ---------- USB DFU ----------
+
 dfu-flash:
 	cargo fw
 	arm-none-eabi-objcopy -O binary $(ELF) $(BIN)
 	dfu-util -w -D $(BIN)
-
 
 dfu-flash-release:
 	cargo fw-release

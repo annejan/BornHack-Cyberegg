@@ -13,7 +13,7 @@
 //! // Pass to run_meshcore_listener(..., identity).
 //! ```
 
-use crate::fw::kv::{KvError, KvNamespace};
+use super::kv::{KvError, KvNamespace};
 
 /// KV key under which the 32-byte seed is stored.
 const KV_SEED_KEY: &str = "identity_seed";

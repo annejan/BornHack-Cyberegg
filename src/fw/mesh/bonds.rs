@@ -15,7 +15,7 @@ use heapless::Vec;
 use trouble_host::prelude::{BdAddr, SecurityLevel};
 use trouble_host::{BondInformation, Identity, IdentityResolvingKey, LongTermKey};
 
-use crate::fw::kv::{self, KvError, KvNamespace};
+use super::kv::{self, KvError, KvNamespace};
 
 // ---------------------------------------------------------------------------
 // Constants

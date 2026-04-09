@@ -1,15 +1,15 @@
-#![cfg_attr(feature = "embassy", no_std)]
-#![cfg_attr(feature = "embassy", no_main)]
+#![cfg_attr(feature = "embassy-base", no_std)]
+#![cfg_attr(feature = "embassy-base", no_main)]
 
 #[derive(Debug, PartialEq)]
-#[cfg_attr(feature = "embassy", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
 pub enum ScreenError {
     NotFound,
     OutOfBounds,
     InvalidScreen,
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
@@ -28,23 +28,23 @@ use embedded_graphics::{
     primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 #[cfg(feature = "simulator")]
 fn get_device_id() -> [u8; 4] {
     *b"A3F7"
 }
 use heapless::format;
 // Embassy: re-export Color from ssd1675 hardware driver
-#[cfg(feature = "embassy")]
-pub use ssd1675::graphics::Color;
-#[cfg(feature = "embassy")]
-pub use ssd1675::graphics::Color as TriColor;
-#[cfg(feature = "embassy")]
-pub const BLACK: Color = Color::Black;
-#[cfg(feature = "embassy")]
-pub const WHITE: Color = Color::White;
-#[cfg(feature = "embassy")]
-pub const RED: Color = Color::Red;
+#[cfg(feature = "embassy-base")]
+mod embassy_colors {
+    pub use ssd1675::graphics::Color;
+    pub use ssd1675::graphics::Color as TriColor;
+    pub const BLACK: Color = Color::Black;
+    pub const WHITE: Color = Color::White;
+    pub const RED: Color = Color::Red;
+}
+#[cfg(feature = "embassy-base")]
+pub use embassy_colors::*;
 
 // Simulator: define TriColor locally
 #[cfg(feature = "simulator")]
@@ -82,12 +82,12 @@ mod tricolor {
 pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
 // Conditional imports based on feature
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::{
     Mutex,
     raw::CriticalSectionRawMutex,
 };
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 use embassy_sync::signal::Signal;
 
 #[cfg(feature = "simulator")]
@@ -100,96 +100,12 @@ pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(0);
 
 /// Fired when `TIMEZONE_OFFSET` changes so the BLE task can persist it.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Last decoded LoRa group-text message, updated by the meshcore listener task.
-#[cfg(feature = "embassy")]
-pub struct LoraMessage {
-    pub channel: heapless::String<32>,
-    pub sender: heapless::String<32>,
-    pub text: heapless::String<128>,
-    pub timestamp: u32,
-    pub rssi: i16,
-    pub snr_x4: i8,
-}
-
-#[cfg(feature = "embassy")]
-pub static LAST_LORA_MSG: Mutex<CriticalSectionRawMutex, RefCell<Option<LoraMessage>>> =
-    Mutex::new(RefCell::new(None));
-
-/// Fired by the meshcore listener task whenever a new message is stored in LAST_LORA_MSG.
-#[cfg(feature = "embassy")]
-pub static LORA_MSG_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Last received MeshCore advert, updated by the meshcore listener task.
-#[cfg(feature = "embassy")]
-pub struct LastAdvert {
-    /// Device name, or empty string if the advert carried no name.
-    pub name: heapless::String<32>,
-    /// First 8 bytes of the public key as lowercase hex (16 chars).
-    pub pub_key_hex: heapless::String<16>,
-    pub role: u8,
-    pub sig_ok: bool,
-    pub rssi: i16,
-    pub snr_x4: i8,
-    /// GPS latitude in microdegrees (° × 1 000 000), 0 if not present.
-    pub lat: i32,
-    /// GPS longitude in microdegrees (° × 1 000 000), 0 if not present.
-    pub lon: i32,
-}
-
-#[cfg(feature = "embassy")]
-pub static LAST_ADVERT: Mutex<CriticalSectionRawMutex, RefCell<Option<LastAdvert>>> =
-    Mutex::new(RefCell::new(None));
-
-/// Fired by the meshcore listener task whenever a new advert is stored in LAST_ADVERT.
-#[cfg(feature = "embassy")]
-pub static ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Advert data forwarded to the BLE task for push to the companion app (0x8A).
-#[cfg(feature = "embassy")]
-pub struct AdvertBleNotif {
-    /// Full Ed25519 public key (32 bytes) of the advertising node.
-    pub pub_key: [u8; 32],
-    /// Node role (ADV_TYPE_*).
-    pub adv_type: u8,
-    /// RSSI in dBm (cast to i8).
-    pub rssi: i8,
-    /// Unix timestamp from the advert payload.
-    pub timestamp: u32,
-    /// Latitude × 1 000 000 (0 if not present).
-    pub lat: i32,
-    /// Longitude × 1 000 000 (0 if not present).
-    pub lon: i32,
-    /// Advertising node's display name (UTF-8 bytes).
-    pub name: heapless::Vec<u8, 32>,
-}
-
-#[cfg(feature = "embassy")]
-pub static ADVERT_BLE_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    AdvertBleNotif,
-    4,
-> = embassy_sync::channel::Channel::new();
-
-/// Last received private message (TxtMsg), updated by the meshcore listener task.
-#[cfg(feature = "embassy")]
-pub struct LastPm {
-    /// Sender's name from the contacts list, or hex pub-key prefix if unknown.
-    pub sender_name: heapless::String<32>,
-    pub text: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }>,
-    pub timestamp: u32,
-    pub rssi: i16,
-}
-
-#[cfg(feature = "embassy")]
-pub static LAST_PM: Mutex<CriticalSectionRawMutex, RefCell<Option<LastPm>>> =
-    Mutex::new(RefCell::new(None));
-
-/// Fired by the meshcore listener task whenever a new PM is stored in LAST_PM.
-#[cfg(feature = "embassy")]
-pub static PM_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+// Re-export mesh types and statics so existing `crate::SomeType` paths keep working.
+#[cfg(feature = "mesh")]
+pub use fw::mesh::*;
 
 /// Active BLE pairing passkey (6-digit, 0–999999). `u32::MAX` means no pairing in progress.
 pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -201,29 +117,29 @@ pub static BLE_CONNECTED: AtomicBool = AtomicBool::new(false);
 pub static PM_UNREAD: AtomicBool = AtomicBool::new(false);
 
 /// Fired by the BLE task whenever the pairing passkey changes (new passkey or cleared).
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired every minute by `minute_tick_task` so the display redraws the clock.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub static MINUTE_TICK: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // ---------------------------------------------------------------------------
 // Wall clock
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 struct WallClock {
     unix_base: u32,
     ticks_base: u64,
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 static WALL_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<WallClock>>> =
     Mutex::new(RefCell::new(None));
 
 /// Called by the BLE task when `SET_DEVICE_TIME` (0x06) is received.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub fn set_wall_clock(unix_secs: u32) {
     WALL_CLOCK.lock(|cell| {
         *cell.borrow_mut() = Some(WallClock {
@@ -234,7 +150,7 @@ pub fn set_wall_clock(unix_secs: u32) {
 }
 
 /// Current unix time in seconds, or `None` if the clock has never been synced.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub fn unix_now() -> Option<u32> {
     WALL_CLOCK.lock(|cell| {
         cell.borrow().as_ref().map(|wc| {
@@ -250,12 +166,12 @@ pub fn unix_now() -> Option<u32> {
 /// MeshCore node name cached from KV for synchronous access by the display renderer.
 /// Populated by the BLE task at startup (after reading from flash) and on every
 /// SET_ADVERT_NAME update.  Empty until the BLE task has initialized.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31>>> =
     Mutex::new(RefCell::new(heapless::String::new()));
 
 /// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub fn update_node_name(name: &[u8]) {
     if let Ok(s) = core::str::from_utf8(name) {
         NODE_NAME.lock(|cell| {
@@ -266,410 +182,14 @@ pub fn update_node_name(name: &[u8]) {
     }
 }
 
-/// Fired by the menu to request the BLE task to wipe and re-seed the channel store.
-#[cfg(feature = "embassy")]
-pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Fired by the menu when the boost-RX toggle changes so the BLE task can persist it.
-#[cfg(feature = "embassy")]
-pub static BOOST_RX_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+// (mesh statics moved to fw/mesh/mod.rs)
 
-/// Fired by the menu to request the BLE task to clear all stored contacts.
-#[cfg(feature = "embassy")]
-pub static CONTACT_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Fired by the meshcore task whenever a new message is pushed to `msg_queue`.
-/// The BLE task listens for this to send an unsolicited `0x83` notification.
-#[cfg(feature = "embassy")]
-pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Fired by the BLE task after a `SET_CHANNEL` or channel reset so that the
-/// meshcore task reloads its channel table from KV.
-#[cfg(feature = "embassy")]
-pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Signals the meshcore task that tuning params changed; carries the new airtime_factor_x1000.
-#[cfg(feature = "embassy")]
-pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal::new();
-
-/// Tag stored while waiting for a path discovery response; cleared when received.
-#[cfg(feature = "embassy")]
-pub static PENDING_DISCOVERY_TAG: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<u32>>,
-> = Mutex::new(core::cell::Cell::new(None));
-
-/// Path discovery result pushed from the meshcore task to the BLE task.
-#[cfg(feature = "embassy")]
-pub struct DiscoveryResult {
-    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
-    /// Path-length byte for the outbound (return) path.
-    pub out_path_len_byte: u8,
-    /// Outbound path hash bytes.
-    pub out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-    /// Path-length byte for the inbound (relay) path.
-    pub in_path_len_byte: u8,
-    /// Inbound path hash bytes.
-    pub in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-}
-
-#[cfg(feature = "embassy")]
-pub static DISCOVERY_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    DiscoveryResult,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// Signals the meshcore task to transmit a self-advert.
-#[cfg(feature = "embassy")]
-pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, fw::meshcore::AdvertMode> =
-    Signal::new();
-
-/// Radio statistics snapshot, written by the meshcore task and read by the BLE task
-/// on `CMD_GET_STATS / STATS_TYPE_RADIO (0x38 0x01)`.
-#[cfg(feature = "embassy")]
-#[derive(Clone, Copy)]
-pub struct RadioStats {
-    /// Noise floor estimate in dBm (i16 LE on wire).  We approximate this as
-    /// `last_rssi - snr` which gives the estimated noise power at the receiver.
-    pub noise_floor: i16,
-    /// RSSI of the last successfully received packet (dBm, cast to i8).
-    pub last_rssi: i8,
-    /// SNR × 4 of the last successfully received packet.
-    pub last_snr_x4: i8,
-    /// Total TX airtime in seconds.
-    pub tx_air_secs: u32,
-    /// Total RX airtime in seconds.
-    pub rx_air_secs: u32,
-}
-
-#[cfg(feature = "embassy")]
-pub static RADIO_STATS: Mutex<CriticalSectionRawMutex, core::cell::Cell<RadioStats>> =
-    Mutex::new(core::cell::Cell::new(RadioStats {
-        noise_floor: -120,
-        last_rssi:    0,
-        last_snr_x4:  0,
-        tx_air_secs:  0,
-        rx_air_secs:  0,
-    }));
-
-/// A raw received LoRa packet to be forwarded to the BLE companion as `0x88`.
-#[cfg(feature = "embassy")]
-pub struct RawLoRaPkt {
-    pub snr_x4: i8,
-    pub rssi: i8,
-    pub len: usize,
-    pub data: [u8; meshcore::MAX_TRANS_UNIT],
-}
-
-/// Passes raw received LoRa packets from the meshcore task to the BLE task for
-/// immediate `0x88` (PUSH_CODE_LOG_RX_DATA) notifications.
-///
-/// Depth 4: burst tolerance.  If the BLE task is slow the oldest raw packet is
-/// dropped (send via `try_send`, ignore `Err`).
-#[cfg(feature = "embassy")]
-pub static RAW_PKT_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, RawLoRaPkt, 4> =
-    embassy_sync::channel::Channel::new();
-
-/// An outgoing channel message queued by the BLE task for the meshcore task to transmit.
-#[cfg(feature = "embassy")]
-pub struct TxChannelMsg {
-    pub channel_idx: u8,
-    pub timestamp: u32,
-    pub text: heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
-}
-
-/// Queue from the BLE companion task to the meshcore task for outgoing channel messages.
-///
-/// Depth 16: at slow LoRa settings (SF12 / narrow BW) each packet takes several seconds,
-/// so a burst of pasted messages must not overflow before they can be drained.
-#[cfg(feature = "embassy")]
-pub static TX_MSG_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TxChannelMsg,
-    16,
-> = embassy_sync::channel::Channel::new();
-
-/// An outgoing private (P2P) message queued by the BLE task for the meshcore task to transmit.
-#[cfg(feature = "embassy")]
-pub struct TxPrivateMsg {
-    /// Full 32-byte recipient public key.
-    pub recipient_pub_key: [u8; meshcore::PUB_KEY_SIZE],
-    pub timestamp: u32,
-    pub text: heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
-    /// Text type (0 = plain, 1 = CLI data, 2 = signed).
-    pub txt_type: u8,
-    /// Retry attempt counter (0 = first send). Affects the ACK hash.
-    pub attempt: u8,
-}
-
-/// Queue from the BLE companion task to the meshcore task for outgoing private messages.
-#[cfg(feature = "embassy")]
-pub static TX_PM_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxPrivateMsg, 4> =
-    embassy_sync::channel::Channel::new();
-
-/// An outgoing trace-path request queued by the BLE task for the meshcore task.
-#[cfg(feature = "embassy")]
-pub struct TxTracePath {
-    /// Random tag for correlating the response.
-    pub tag: u32,
-    /// Auth code embedded in the trace payload.
-    pub auth: u32,
-    /// Trace flags (bits 0-1 = path hash width).
-    pub flags: u8,
-    /// Routing path bytes (node hashes); empty for a zero-hop trace.
-    pub path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-}
-
-/// Queue from the BLE companion task to the meshcore task for outgoing trace-path requests.
-#[cfg(feature = "embassy")]
-pub static TX_TRACE_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TxTracePath,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// An outgoing status request queued by the BLE task for the meshcore task.
-#[cfg(feature = "embassy")]
-pub struct TxStatusReq {
-    /// Full 32-byte Ed25519 public key of the target node.
-    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
-}
-
-/// Queue from the BLE companion task to the meshcore task for outgoing status requests.
-#[cfg(feature = "embassy")]
-pub static TX_STATUS_REQ_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxStatusReq, 2> =
-    embassy_sync::channel::Channel::new();
-
-/// Tracks the pub_key of the currently pending status request (if any).
-///
-/// Set by `send_status_request` before the AnonReq is transmitted;
-/// cleared by `handle_response_recv` when a matching response is decoded.
-/// Using a blocking mutex so it can be accessed from non-async context.
-#[cfg(feature = "embassy")]
-pub static PENDING_STATUS_PUBKEY: embassy_sync::blocking_mutex::Mutex<
-    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
-    core::cell::Cell<Option<[u8; meshcore::PUB_KEY_SIZE]>>,
-> = embassy_sync::blocking_mutex::Mutex::new(core::cell::Cell::new(None));
-
-/// Status result pushed from the meshcore task to the BLE task (0x87).
-#[cfg(feature = "embassy")]
-pub struct StatusResult {
-    /// Full 32-byte public key of the responding node (first 6 bytes used in push).
-    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
-    /// Node uptime in seconds.
-    pub uptime_secs: u32,
-    /// Battery voltage in millivolts.
-    pub battery_mv: u16,
-}
-
-/// Passes status results from the meshcore task to the BLE task for 0x87 push.
-#[cfg(feature = "embassy")]
-pub static STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    StatusResult,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// An outgoing login request queued by the BLE task for the meshcore task.
-#[cfg(feature = "embassy")]
-pub struct TxLogin {
-    /// Full 32-byte Ed25519 public key of the target (room/repeater server).
-    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
-    /// Password bytes (UTF-8, 0–15 bytes).
-    pub password: heapless::Vec<u8, 15>,
-}
-
-/// Queue from the BLE companion task to the meshcore task for outgoing login requests.
-#[cfg(feature = "embassy")]
-pub static TX_LOGIN_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxLogin, 2> =
-    embassy_sync::channel::Channel::new();
-
-/// Trace-path result pushed from the meshcore task to the BLE task (0x89).
-#[cfg(feature = "embassy")]
-pub struct TraceResult {
-    /// Number of relay hops recorded in the trace.
-    pub path_len: u8,
-    /// Trace flags (bits 0-1 = path hash width).
-    pub flags: u8,
-    /// Tag echoed from the original request.
-    pub tag: u32,
-    /// Auth code echoed from the original request.
-    pub auth_code: u32,
-    /// Per-hop node hash bytes (from trace payload route field).
-    pub path_hashes: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-    /// Per-hop SNR bytes from relays (from LoRa packet path field, raw × 4).
-    pub path_snrs: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-    /// SNR at the final receiving hop (our radio's receive SNR × 4).
-    pub final_snr: i8,
-}
-
-/// Passes trace-path results from the meshcore task to the BLE task for 0x89 push.
-#[cfg(feature = "embassy")]
-pub static TRACE_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TraceResult,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// Login result pushed from the meshcore task to the BLE task (0x85 or 0x86).
-#[cfg(feature = "embassy")]
-pub struct LoginResult {
-    /// `true` = login accepted (push 0x85), `false` = rejected (push 0x86).
-    pub success: bool,
-    /// 1 if the authenticated user has admin rights (valid only when `success`).
-    pub is_admin: u8,
-    /// Full 32-byte public key of the server (first 6 bytes used in both success/fail frames).
-    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
-    /// Tag from the original request (valid only when `success`).
-    pub tag: u32,
-    /// ACL permission bits (valid only when `success`).
-    pub acl_perms: u8,
-    /// Server firmware version level (valid only when `success`).
-    pub fw_ver_level: u8,
-}
-
-/// Passes login results from the meshcore task to the BLE task for 0x85/0x86 push.
-#[cfg(feature = "embassy")]
-pub static LOGIN_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    LoginResult,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// Carries PACKET_ACK (0x82) events from the meshcore task to the BLE task.
-/// Pushed when the mesh delivers an ACK matching a pending sent message.
-#[cfg(feature = "embassy")]
-pub struct AckEvent {
-    /// 4-byte ACK CRC — matches the expected-ACK tag from the MSG_SENT response.
-    pub ack_crc: u32,
-    /// Round-trip time from send to ACK receipt in milliseconds.
-    pub trip_time_ms: u32,
-}
-
-#[cfg(feature = "embassy")]
-pub static ACK_EVENT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    AckEvent,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// Tracks the most recently sent P2P message, used to compute ACK round-trip time.
-#[cfg(feature = "embassy")]
-#[derive(Clone, Copy)]
-pub struct PendingAck {
-    pub ack_hash: u32,
-    pub sent_at: embassy_time::Instant,
-}
-
-#[cfg(feature = "embassy")]
-pub static PENDING_ACK: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<PendingAck>>,
-> = Mutex::new(core::cell::Cell::new(None));
-
-/// Request to send a telemetry REQ packet over LoRa to a remote node.
-#[cfg(feature = "embassy")]
-pub struct TxTelemReq {
-    pub pub_key: [u8; 32],
-    /// Tag (timestamp) used for correlating the response.
-    pub tag: u32,
-}
-
-#[cfg(feature = "embassy")]
-pub static TX_TELEM_REQ_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TxTelemReq,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// Request to send a path-discovery REQ packet over LoRa to a remote node.
-#[cfg(feature = "embassy")]
-pub struct TxDiscoveryReq {
-    pub pub_key: [u8; 32],
-    /// Tag used for correlating the discovery response.
-    pub tag: u32,
-}
-
-#[cfg(feature = "embassy")]
-pub static TX_DISCOVERY_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TxDiscoveryReq,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// Raw control/discovery payload for `CMD_SEND_CONTROL_DATA` (0x37).
-///
-/// Carries the bytes starting from the `ctl_type` byte (i.e. everything after
-/// the command byte).  The meshcore task wraps these in a `PAYLOAD_TYPE_CONTROL`
-/// zero-hop direct packet and transmits it.
-#[cfg(feature = "embassy")]
-pub struct TxControlData {
-    pub payload: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }>,
-}
-
-#[cfg(feature = "embassy")]
-pub static TX_CONTROL_DATA_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TxControlData,
-    2,
-> = embassy_sync::channel::Channel::new();
-
-/// A received `PAYLOAD_TYPE_CONTROL (0x0B)` packet to forward to the companion app
-/// as `PUSH_CODE_CONTROL_DATA (0x8E)`.
-#[cfg(feature = "embassy")]
-pub struct ControlDataPkt {
-    pub snr_x4:   i8,
-    pub rssi:     i8,
-    pub path_len: u8,
-    pub payload:  heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }>,
-}
-
-#[cfg(feature = "embassy")]
-pub static CONTROL_DATA_PKT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    ControlDataPkt,
-    4,
-> = embassy_sync::channel::Channel::new();
-
-/// 16-byte transport key for region-scoped flood packets (SetFloodScope / 0x36).
-///
-/// When `Some`, all outgoing flood packets are tagged with a per-packet HMAC-SHA256
-/// code derived from this key, and incoming `TransportFlood` packets whose code
-/// does not match are silently dropped.  `None` means unscoped — all flood packets
-/// are sent and received without region filtering (equivalent to transport_codes = {0,0}).
-#[cfg(feature = "embassy")]
-pub static FLOOD_SCOPE_KEY: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<[u8; 16]>>,
-> = Mutex::new(core::cell::Cell::new(None));
-
-/// Tag stored while waiting for a telemetry response; cleared when received.
-#[cfg(feature = "embassy")]
-pub static PENDING_TELEM_TAG: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<u32>>,
-> = Mutex::new(core::cell::Cell::new(None));
-
-/// Carries a received telemetry response from the meshcore task to the BLE task.
-#[cfg(feature = "embassy")]
-pub struct TelemResult {
-    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
-    /// Raw CayenneLPP bytes returned by the remote node.
-    pub lpp: heapless::Vec<u8, 176>,
-}
-
-#[cfg(feature = "embassy")]
-pub static TELEM_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex,
-    TelemResult,
-    2,
-> = embassy_sync::channel::Channel::new();
 
 // Macro for embassy - immutable access
 /// Access the shared `DisplayState` immutably.
 /// Usage: `with_display_state!(|s| s.active_screen())`
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 #[macro_export]
 macro_rules! with_display_state {
     ($f:expr) => {
@@ -683,7 +203,7 @@ macro_rules! with_display_state {
 
 /// Access the shared `DisplayState` mutably.
 /// Usage: `with_display_state_mut!(|s| s.dispatch_button(btn))`
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 #[macro_export]
 macro_rules! with_display_state_mut {
     ($f:expr) => {
@@ -741,11 +261,11 @@ where
         #[cfg(feature = "game")]
         SCREEN_GAME => game::draw_screen_game(display, game::nav::get_nav()),
         SCREEN_MAIN => draw_screen_main(display, health_str, bat_prc),
-        #[cfg(feature = "embassy")]
+        #[cfg(feature = "mesh")]
         SCREEN_PM => draw_screen_pm(display, bat_prc),
-        #[cfg(feature = "embassy")]
+        #[cfg(feature = "mesh")]
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
-        #[cfg(feature = "embassy")]
+        #[cfg(feature = "mesh")]
         SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
         // SCREEN_BADGERCORN is rendered via blit() in embassy.rs — nothing to draw here.
         _ => draw_screen_main(display, health_str, bat_prc),
@@ -760,7 +280,7 @@ where
 ///
 /// Does nothing when no pairing is in progress (`BLE_PASSKEY == u32::MAX`).
 /// The double-border box signals urgency and renders on top of all other content.
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 fn draw_ble_pin_overlay<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -845,7 +365,7 @@ where
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
     )
     .draw(display)?;
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "embassy-base")]
     NODE_NAME.lock(|cell| -> Result<(), D::Error> {
         let name = cell.borrow();
         let display_name = if name.is_empty() {
@@ -880,7 +400,7 @@ where
     )
     .draw(display)?;
 
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "embassy-base")]
     if let Some(unix) = unix_now() {
         let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
         let local = (unix as i64 + offset_secs) as u32;
@@ -932,7 +452,7 @@ where
     Ok(())
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "mesh")]
 fn draw_screen_pm<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -997,7 +517,7 @@ where
     })
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "mesh")]
 fn draw_screen_lora<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -1066,7 +586,7 @@ where
     })
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "mesh")]
 fn draw_screen_advert<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,

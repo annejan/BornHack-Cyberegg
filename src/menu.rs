@@ -329,17 +329,17 @@ fn label_boost_rx() -> &'static str {
 fn action_boost_rx() {
     let current = crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed);
     crate::BOOSTED_RX_GAIN.store(!current, Ordering::Relaxed);
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "mesh")]
     crate::BOOST_RX_CHANGED_SIGNAL.signal(());
 }
 
 fn action_reset_channels() {
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "mesh")]
     crate::CHANNEL_RESET_SIGNAL.signal(());
 }
 
 fn action_reset_contacts() {
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "mesh")]
     crate::CONTACT_RESET_SIGNAL.signal(());
 }
 
@@ -360,7 +360,7 @@ fn action_tz_inc() {
     let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
     if v < 14 {
         crate::TIMEZONE_OFFSET.store(v + 1, Ordering::Relaxed);
-        #[cfg(feature = "embassy")]
+        #[cfg(feature = "embassy-base")]
         crate::TZ_CHANGED_SIGNAL.signal(());
     }
 }
@@ -369,28 +369,28 @@ fn action_tz_dec() {
     let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
     if v > -12 {
         crate::TIMEZONE_OFFSET.store(v - 1, Ordering::Relaxed);
-        #[cfg(feature = "embassy")]
+        #[cfg(feature = "embassy-base")]
         crate::TZ_CHANGED_SIGNAL.signal(());
     }
 }
 
 fn action_melody_0() {
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(0);
 }
 
 fn action_melody_1() {
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(1);
 }
 
 fn action_melody_2() {
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(2);
 }
 
 fn action_melody_3() {
-    #[cfg(feature = "embassy")]
+    #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(3);
 }
 
@@ -538,10 +538,10 @@ const GAME_ENABLED: bool = true;
 #[cfg(not(feature = "game"))]
 const GAME_ENABLED: bool = false;
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "embassy-base")]
 pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>> =
     Mutex::new(RefCell::new(DisplayState::new(
         [
