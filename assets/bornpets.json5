@@ -1,0 +1,359 @@
+{
+  // Bornpets sprite sheet config for aegg-asset-assistant
+  // Generate template:  asset-gen template assets/bornpets.json5
+  // Encode sprites:     asset-gen encode-config assets/bornpets.json5
+  //
+  // Frame size varies per asset (see frame_width/frame_height).
+  // 2bpp PCX format: 00=black, 01=red, 10=white, 11=transparent.
+  // Animation timing handled in firmware — not encoded here.
+  // Artists may leave frames empty if fewer than max are needed.
+  //
+  // Asset naming: {ANIMAL}_{STATE}_F{N}  (up to 5 frames per sequence)
+  //
+  // IMPORTANT: finalise this config before starting artwork.
+  // Adding or reordering assets shifts all cell positions in the PNG.
+
+  image: "bornpets-sprites.png",
+  output: "src/fw/game/sprites.rs",
+  format: "rle",
+
+  assets: [
+    // ─────────────────────────────────────────────────────────────────
+    // A1 — SNAIL IDLE STATE SPRITES
+    // Up to 5 frames each.  Frame 1 = base pose, remaining frames =
+    // subtle variation (antenna twitch, shell shimmer, eye blink).
+    // These map to DisplayAnim::Idle plus the engine stats.
+    // ─────────────────────────────────────────────────────────────────
+    {
+      type: "sequence",
+      name: "start_screen",
+      comment: "Full 152x152 pixel start screen graphic.",
+      frames: ,
+      frame_width: 152,
+      frame_height: 152,
+    },
+
+    {
+      type: "sequence",
+      name: "snail_idle_neutral",
+      comment: "DisplayAnim::Idle — default resting state.  Gentle antenna sway.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_happy",
+      comment: "DisplayAnim::Idle when happy > 75%.  Bright eyes, antennae up, slight shell glow.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A2 — SNAIL CRITICAL STATE SPRITES
+    // Up to 5 frames each.  Shown when a stat crosses the critical
+    // threshold.  Maps to DisplayAnim::Critical* variants.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_critical_sick",
+      comment: "DisplayAnim::CriticalSick — unhealthy.  Pale, droopy eyes, shell dull.  Sweat drops.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_critical_tired",
+      comment: "DisplayAnim::CriticalTired — exhausted.  Heavy eyelids, sagging antennae, yawning.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_critical_hungry",
+      comment: "DisplayAnim::CriticalHungry — starving.  Looking around for food, hollow expression.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_critical_drained",
+      comment: "DisplayAnim::CriticalDrained — burnt out / uninspired.  Slumped, lifeless posture, dull shell.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A2b — SNAIL WARNING STATE SPRITES
+    // Up to 5 frames each.  Shown when a stat crosses the warning
+    // threshold (below critical).  Pet looks uncomfortable — player
+    // should act soon but it's not yet urgent.
+    // Maps to DisplayAnim::Warning* variants.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_warning_sick",
+      comment: "DisplayAnim::WarningSick — slightly unwell.  Slower movement, occasional sniffle.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_warning_tired",
+      comment: "DisplayAnim::WarningTired — getting sleepy.  Occasional yawn, drooping antennae.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_warning_hungry",
+      comment: "DisplayAnim::WarningHungry — peckish.  Glancing around, antenna perked toward food direction.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_warning_drained",
+      comment: "DisplayAnim::WarningDrained — listless.  Reduced movement, shell slightly duller.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_warning_miserable",
+      comment: "DisplayAnim::WarningMiserable — unhappy.  Withdrawn into shell slightly, sad expression.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A3 — SNAIL ACTIVITY SPRITES
+    // Up to 5 frames each.  Shown during active player actions.
+    // Maps to DisplayAnim::Feeding/Healing/Relaxing/Playing.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_feeding",
+      comment: "DisplayAnim::Feeding — feed action.  F1: food appears.  F2: snail approaches.  F3: eating.  F4: satisfied.  F5: food gone.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_healing",
+      comment: "DisplayAnim::Healing — heal action.  F1: medicine appears.  F2: snail takes it.  F3: glow effect.  F4: recovering.  F5: healthy again.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_relaxing",
+      comment: "DisplayAnim::Relaxing — relax action.  F1: snail settles in.  F2: relaxed pose.  F3: content expression.  F4: slightly drowsy.  F5: refreshed.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "snail_playing",
+      comment: "DisplayAnim::Playing — play action.  F1: toy appears.  F2: snail investigates.  F3: playing.  F4: excitement.  F5: happy, miserable zeroed.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A4 — SNAIL SLEEPING
+    // Up to 5 frames.  Maps to DisplayAnim::Sleeping.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_sleeping",
+      comment: "DisplayAnim::Sleeping — eyes closed, Zzz, gentle shell shimmer.  Subtle breath movement between frames.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A5 — SNAIL LEAVING SEQUENCE
+    // Up to 5 frames.  Maps to DisplayAnim::Leaving.
+    // Urgency increases with maxed_count (1–4).
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_leaving",
+      comment: "DisplayAnim::Leaving — pet is about to leave.  Increasingly urgent: F1: looking away.  F2: turning.  F3: moving toward exit.  F4: almost gone.  F5: final glance back.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A6 — SNAIL FAREWELL / GONE
+    // Up to 5 frames.  Maps to DisplayAnim::Gone.
+    // Peaceful departure — not distressing.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_gone",
+      comment: "DisplayAnim::Gone — pet has left.  F1: glowing softly.  F2: rising.  F3: sparkles.  F4: fading.  F5: empty scene, stars remain.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // A7 — SNAIL HIBERNATING
+    // Up to 5 frames.  Maps to DisplayAnim::Hibernating.
+    // Overlay on top of last shown state.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "snail_hibernating",
+      comment: "DisplayAnim::Hibernating — frozen overlay.  Snowflake or frost effect, pet still visible underneath.  Subtle shimmer between frames.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // B — EGG HATCHING SEQUENCE
+    // Up to 5 frames.  Maps to DisplayAnim::Hatching.
+    // Loops during the 5-minute hatch countdown.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "egg_hatch",
+      comment: "DisplayAnim::Hatching — egg cracking open.  F1: intact egg.  F2: hairline crack.  F3: chip falls.  F4: large crack, movement inside.  F5: egg splits, pet emerging.",
+      frames: 5,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // C — ENVIRONMENT SPRITES
+    // Static, 1 frame each.  Props and backgrounds.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "env_food_item",
+      comment: "Food item shown during feeding animation.",
+      frames: 1,
+      frame_width: 20,
+      frame_height: 20,
+    },
+    {
+      type: "sequence",
+      name: "env_medicine",
+      comment: "Medicine item shown during healing animation.",
+      frames: 1,
+      frame_width: 20,
+      frame_height: 20,
+    },
+    {
+      type: "sequence",
+      name: "env_toy",
+      comment: "Toy shown during playing animation.",
+      frames: 1,
+      frame_width: 20,
+      frame_height: 20,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // D — STATS BAR ICONS
+    // Static, 1 frame each.  Small icons for the stat display.
+    // Firmware draws bar fills separately.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "icon_hunger",
+      comment: "Stats icon for hunger (0=starving, 100=full).",
+      frames: 1,
+      frame_width: 12,
+      frame_height: 12,
+    },
+    {
+      type: "sequence",
+      name: "icon_tired",
+      comment: "Stats icon for tiredness (0=exhausted, 100=alert).",
+      frames: 1,
+      frame_width: 12,
+      frame_height: 12,
+    },
+    {
+      type: "sequence",
+      name: "icon_inspired",
+      comment: "Stats icon for inspiration/energy (0=burnt out, 100=energized).  Internal: drained.",
+      frames: 1,
+      frame_width: 12,
+      frame_height: 12,
+    },
+    {
+      type: "sequence",
+      name: "icon_healthy",
+      comment: "Stats icon for health (0=critically ill, 100=healthy).  Internal: sick.",
+      frames: 1,
+      frame_width: 12,
+      frame_height: 12,
+    },
+    {
+      type: "sequence",
+      name: "icon_happy",
+      comment: "Stats icon for happiness (0=miserable, 100=happy).  Internal: miserable.",
+      frames: 1,
+      frame_width: 12,
+      frame_height: 12,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // E — UI OVERLAYS
+    // Static, 1 frame each.  Drawn on top of the main scene.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "ui_attention",
+      comment: "Attention alert overlay.  Large '!' shown when pet needs urgent care.  Must be unmistakable at a glance.",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // Z — PLACEHOLDER
+    // Used during development for any animation not yet drawn.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "placeholder_not_implemented",
+      comment: "Development placeholder.  Shown when the required animation has not been drawn yet.  Should contain text like 'NOT IMPLEMENTED' or a recognizable test pattern.",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
+  ],
+}

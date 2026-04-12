@@ -72,6 +72,21 @@ pub const SICK_TRIGGER_TIRED: u16 = 49151;
 pub const SICK_TRIGGER_DRAINED: u16 = 43908;
 
 // ---------------------------------------------------------------------------
+// Display warning thresholds (below critical, player should act soon)
+// ---------------------------------------------------------------------------
+
+/// Hunger warning threshold (~30%).  Pet looks peckish.
+pub const WARNING_HUNGER: u16 = 19660;
+/// Tired warning threshold (~40%).  Pet looks sleepy.
+pub const WARNING_TIRED: u16 = 26214;
+/// Drained warning threshold (~35%).  Pet looks listless.
+pub const WARNING_DRAINED: u16 = 22937;
+/// Sick warning threshold (~40%).  Pet looks unwell.
+pub const WARNING_SICK: u16 = 26214;
+/// Miserable warning threshold (~50%).  Pet looks unhappy.
+pub const WARNING_MISERABLE: u16 = 32768;
+
+// ---------------------------------------------------------------------------
 // Miserable
 // ---------------------------------------------------------------------------
 
@@ -129,8 +144,8 @@ pub const PLAY_DRAINED_COST: u16 = 1965;
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-/// Hatching duration (ticks).  30 ticks = 5 minutes.
-pub const HATCHING_TICKS: u16 = 30;
+/// Hatching duration (ticks).  6 ticks = 1 minute.
+pub const HATCHING_TICKS: u16 = 6;
 
 /// Ticks of maxed stats before pet leaves, indexed by count of maxed stats.
 /// Index 0 unused, 1 = one maxed stat, etc.
@@ -144,6 +159,10 @@ pub const LEAVING_THRESHOLDS: [u32; 5] = [
 
 /// Maximum sleep between wake-ups (ticks).  180 ticks = 30 minutes.
 pub const MAX_SLEEP_TICKS: u32 = 180;
+
+/// Minimum interval between saves to flash (ticks).  90 ticks = 15 minutes.
+/// Saves piggyback on update cycles — no extra wake-ups.
+pub const SAVE_INTERVAL_TICKS: u32 = 90;
 
 // ---------------------------------------------------------------------------
 // Traits

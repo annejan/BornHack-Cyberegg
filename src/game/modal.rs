@@ -30,75 +30,98 @@ use super::nav::Row;
 // ── Modal kind ────────────────────────────────────────────────────────────────
 
 /// Which in-game modal is currently open.  Stored as a `u8` in [`MODAL_KIND`].
+///
+/// Layout:
+///   Top row (info/meta):    Stats, Hibernate, (empty), (empty)
+///   Bottom row (actions):   Feed,  Heal,      Play,    Rest
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ModalKind {
     None       = 0,
-    Feed       = 1,   // top row, col 0: fork
-    Light      = 2,   // top row, col 1: bulb
-    Play       = 3,   // top row, col 2: bat
-    Medicine   = 4,   // top row, col 3: syringe
-    Rest       = 5,   // bot row, col 0: duck
-    Stats      = 6,   // bot row, col 1: meter
-    Discipline = 7,   // bot row, col 2: face
-    Attention  = 8,   // bot row, col 3: twofaces
+    // Top row — info / meta.
+    Stats      = 1,   // top row, col 0
+    Hibernate  = 2,   // top row, col 1
+    // Bottom row — actions.
+    Feed       = 3,   // bot row, col 0
+    Heal       = 4,   // bot row, col 1
+    Play       = 5,   // bot row, col 2
+    Rest       = 6,   // bot row, col 3
 }
 
 impl ModalKind {
     pub fn from_u8(v: u8) -> Self {
         match v {
-            1 => Self::Feed,
-            2 => Self::Light,
-            3 => Self::Play,
-            4 => Self::Medicine,
-            5 => Self::Rest,
-            6 => Self::Stats,
-            7 => Self::Discipline,
-            8 => Self::Attention,
+            1 => Self::Stats,
+            2 => Self::Hibernate,
+            3 => Self::Feed,
+            4 => Self::Heal,
+            5 => Self::Play,
+            6 => Self::Rest,
             _ => Self::None,
         }
     }
 
     fn title(self) -> &'static str {
         match self {
-            Self::None       => "",
-            Self::Feed       => "Feed",
-            Self::Light      => "Light",
-            Self::Play       => "Play",
-            Self::Medicine   => "Medicine",
-            Self::Rest       => "Rest",
-            Self::Stats      => "Stats",
-            Self::Discipline => "Discipline",
-            Self::Attention  => "Attention",
+            Self::None      => "",
+            Self::Stats     => "Stats",
+            Self::Hibernate => "Hibernate",
+            Self::Feed      => "Feed",
+            Self::Heal      => "Heal",
+            Self::Play      => "Play",
+            Self::Rest      => "Rest",
         }
     }
 
     fn items(self) -> &'static [&'static str] {
         match self {
-            Self::Feed       => &["Feed now",     "Cancel"],
-            Self::Light      => &["Light on",     "Light off", "Cancel"],
-            Self::Play       => &["Mini-game",    "Music",     "Cancel"],
-            Self::Medicine   => &["Give dose",    "Cancel"],
-            Self::Rest       => &["Sleep",        "Relax",     "Cancel"],
-            Self::Stats      => &["View stats",   "Cancel"],
-            Self::Discipline => &["Scold",        "Cancel"],
-            Self::Attention  => &["Acknowledge",  "Cancel"],
-            Self::None       => &[],
+            Self::Stats     => &["View stats",   "Cancel"],
+            Self::Hibernate => &["Hibernate",    "Wake up",     "Cancel"],
+            Self::Feed      => &["Feed now",     "Cancel"],
+            Self::Heal      => &["Give dose",    "Cancel"],
+            Self::Play      => &["Play now",     "Cancel"],
+            Self::Rest      => &["Sleep",        "Relax",       "Cancel"],
+            Self::None      => &[],
         }
+    }
+}
+
+/// Check if a menu item action is currently available (not on cooldown).
+/// "Cancel", "View stats", and other non-action items are always available.
+fn is_item_available(label: &str) -> bool {
+    use super::lifecycle;
+
+    let stats = match lifecycle::cycle() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    match label {
+        "Feed now"   => stats.can_feed,
+        "Give dose"  => stats.can_heal,
+        "Sleep"      => stats.can_sleep,
+        "Relax"      => stats.can_relax,
+        "Play now"   => stats.can_play,
+        "Hibernate"  => !stats.hibernating,
+        "Wake up"    => stats.hibernating,
+        _            => true, // Cancel, View stats, etc.
     }
 }
 
 /// Map an icon (row, col) to the modal it should open.
 pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
     match (row, col) {
-        (Row::Top,    0) => ModalKind::Feed,
-        (Row::Top,    1) => ModalKind::Light,
-        (Row::Top,    2) => ModalKind::Play,
-        (Row::Top,    3) => ModalKind::Medicine,
-        (Row::Bottom, 0) => ModalKind::Rest,
-        (Row::Bottom, 1) => ModalKind::Stats,
-        (Row::Bottom, 2) => ModalKind::Discipline,
-        _                => ModalKind::Attention,
+        // Top row: info / meta.
+        (Row::Top,    0) => ModalKind::Stats,
+        (Row::Top,    1) => ModalKind::Hibernate,
+        // Top row cols 2-3: empty (no modal).
+        (Row::Top,    _) => ModalKind::None,
+        // Bottom row: actions.
+        (Row::Bottom, 0) => ModalKind::Feed,
+        (Row::Bottom, 1) => ModalKind::Heal,
+        (Row::Bottom, 2) => ModalKind::Play,
+        (Row::Bottom, 3) => ModalKind::Rest,
+        _                => ModalKind::None,
     }
 }
 
@@ -106,6 +129,8 @@ pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
 
 static MODAL_KIND: AtomicU8 = AtomicU8::new(0);
 static MODAL_POS:  AtomicU8 = AtomicU8::new(0);
+/// When true, the Stats modal shows stat bars instead of the menu list.
+static STATS_VIEW: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub fn open(kind: ModalKind) {
     MODAL_POS.store(0, Ordering::Relaxed);
@@ -113,6 +138,7 @@ pub fn open(kind: ModalKind) {
 }
 
 pub fn close() {
+    STATS_VIEW.store(false, Ordering::Relaxed);
     MODAL_KIND.store(ModalKind::None as u8, Ordering::Relaxed);
     MODAL_POS.store(0, Ordering::Relaxed);
 }
@@ -141,17 +167,42 @@ pub fn cursor_down() {
 
 /// Activate the currently selected item.
 ///
-/// "Cancel" items (last item in every list) close the modal.
-/// All other items are stubs until Phase 3 wires in `GameState`.
+/// "Cancel" closes the modal.  Action items dispatch to the game engine
+/// via [`lifecycle`].  "View stats" opens the stats bar display.
 pub fn activate() {
+    // If stats view is showing, any activation closes it.
+    if STATS_VIEW.load(Ordering::Relaxed) {
+        STATS_VIEW.store(false, Ordering::Relaxed);
+        return;
+    }
+
     let kind = ModalKind::from_u8(MODAL_KIND.load(Ordering::Relaxed));
     let pos  = MODAL_POS.load(Ordering::Relaxed) as usize;
     let items = kind.items();
-    if let Some(&label) = items.get(pos) {
-        if label == "Cancel" {
-            close();
-        }
-        // TODO(Phase 3): dispatch real game actions here.
+    let Some(&label) = items.get(pos) else { return; };
+
+    if label == "Cancel" {
+        close();
+        return;
+    }
+
+    // Block actions that are on cooldown.
+    if !is_item_available(label) {
+        return;
+    }
+
+    use super::lifecycle;
+
+    match label {
+        "View stats"  => { STATS_VIEW.store(true, Ordering::Relaxed); }
+        "Feed now"    => { lifecycle::feed(); close(); }
+        "Give dose"   => { lifecycle::heal(); close(); }
+        "Sleep"       => { lifecycle::sleep(); close(); }
+        "Relax"       => { lifecycle::relax(); close(); }
+        "Play now"    => { lifecycle::play(); close(); }
+        "Hibernate"   => { lifecycle::hibernate(); close(); }
+        "Wake up"     => { lifecycle::wake_from_hibernation(); close(); }
+        _ => {}
     }
 }
 
@@ -174,6 +225,12 @@ where
     if kind == ModalKind::None {
         return Ok(());
     }
+
+    // Stats view: show stat bars instead of the menu.
+    if STATS_VIEW.load(Ordering::Relaxed) {
+        return draw_stats_view(display);
+    }
+
     let pos   = MODAL_POS.load(Ordering::Relaxed) as usize;
     let items = kind.items();
 
@@ -224,21 +281,43 @@ where
             break;
         }
 
-        if i == pos {
-            // Selected: inverted row
+        let available = is_item_available(label);
+
+        // Build display text: append " (wait)" for cooldown items.
+        let mut display_label: heapless::String<24> = heapless::String::new();
+        let _ = display_label.push_str(label);
+        if !available {
+            let _ = display_label.push_str(" (wait)");
+        }
+
+        if i == pos && available {
+            // Selected and available: inverted row.
             Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
                 .into_styled(PrimitiveStyle::with_fill(BLACK))
                 .draw(display)?;
             Text::with_text_style(
-                label,
+                display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
                 MonoTextStyle::new(&FONT_7X13, WHITE),
                 left_style,
             )
             .draw(display)?;
-        } else {
+        } else if i == pos && !available {
+            // Selected but on cooldown: dashed outline, not filled.
+            Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
+                .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+                .draw(display)?;
             Text::with_text_style(
-                label,
+                display_label.as_str(),
+                Point::new(list_x + 4, row_mid),
+                MonoTextStyle::new(&FONT_7X13, BLACK),
+                left_style,
+            )
+            .draw(display)?;
+        } else {
+            // Not selected.
+            Text::with_text_style(
+                display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
                 MonoTextStyle::new(&FONT_7X13, BLACK),
                 left_style,
@@ -246,6 +325,130 @@ where
             .draw(display)?;
         }
     }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Stats view — 5 labeled bars showing pet health at a glance
+// ---------------------------------------------------------------------------
+
+/// Bar width in pixels for a 0–100 value (fits within modal: 128 - label - margins).
+const BAR_MAX_W: u32 = 60;
+/// Bar height.
+const BAR_H: u32 = 8;
+/// Vertical spacing between bars (compact to fit 5 bars + footer in modal).
+const BAR_SPACING: i32 = 16;
+
+fn draw_stats_view<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use crate::RED;
+    use super::lifecycle;
+
+    // Get fresh stats (triggers an update if needed).
+    let stats = match lifecycle::cycle() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    // White background + border.
+    Rectangle::new(Point::new(MARGIN, MARGIN), Size::new(MODAL_W, MODAL_H))
+        .into_styled(PrimitiveStyle::with_fill(WHITE))
+        .draw(display)?;
+    Rectangle::new(Point::new(MARGIN, MARGIN), Size::new(MODAL_W, MODAL_H))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, BORDER))
+        .draw(display)?;
+
+    // Title bar.
+    let inner_x = MARGIN + BORDER as i32;
+    let inner_y = MARGIN + BORDER as i32;
+    let inner_w = MODAL_W - BORDER * 2;
+    Rectangle::new(Point::new(inner_x, inner_y), Size::new(inner_w, TITLE_H as u32))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    Text::with_text_style(
+        "Pet Stats",
+        Point::new(MARGIN + MODAL_W as i32 / 2, inner_y + TITLE_H / 2),
+        MonoTextStyle::new(&FONT_7X13, WHITE),
+        TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Center)
+            .build(),
+    )
+    .draw(display)?;
+
+    // Stat bars.
+    let bars: [(&str, u8); 5] = [
+        ("Hunger",   stats.hunger),
+        ("Rested",   stats.tired),
+        ("Inspired", stats.inspired),
+        ("Healthy",  stats.healthy),
+        ("Happy",    stats.happy),
+    ];
+
+    let bar_x = inner_x + 4;
+    let label_style = TextStyleBuilder::new()
+        .baseline(Baseline::Bottom)
+        .alignment(Alignment::Left)
+        .build();
+
+    for (i, (label, value)) in bars.iter().enumerate() {
+        let y_base = inner_y + TITLE_H + 4 + i as i32 * BAR_SPACING;
+
+        // Label.
+        Text::with_text_style(
+            label,
+            Point::new(bar_x, y_base + 9),
+            MonoTextStyle::new(&FONT_7X13, BLACK),
+            label_style,
+        )
+        .draw(display)?;
+
+        // Bar background (empty).
+        let bar_left = bar_x + 50;
+        let bar_y = y_base;
+        Rectangle::new(
+            Point::new(bar_left, bar_y),
+            Size::new(BAR_MAX_W, BAR_H),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+        .draw(display)?;
+
+        // Bar fill.
+        let fill_w = (*value as u32 * BAR_MAX_W) / 100;
+        if fill_w > 0 {
+            // Color: red when critical (< 25%), black otherwise.
+            let fill_color = if *value < 25 { RED } else { BLACK };
+            Rectangle::new(
+                Point::new(bar_left + 1, bar_y + 1),
+                Size::new(fill_w.min(BAR_MAX_W - 2), BAR_H - 2),
+            )
+            .into_styled(PrimitiveStyle::with_fill(fill_color))
+            .draw(display)?;
+        }
+    }
+
+    // Footer: generation + age.
+    let age_hours = stats.age_ticks / 360;
+    let age_days = age_hours / 24;
+    let footer_y = MARGIN + MODAL_H as i32 - BORDER as i32 - 14;
+    let mut footer: heapless::String<32> = heapless::String::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut footer,
+        format_args!("Gen {} | {}d {}h", stats.generation, age_days, age_hours % 24),
+    );
+    Text::with_text_style(
+        footer.as_str(),
+        Point::new(MARGIN + MODAL_W as i32 / 2, footer_y),
+        MonoTextStyle::new(&FONT_7X13, BLACK),
+        TextStyleBuilder::new()
+            .baseline(Baseline::Bottom)
+            .alignment(Alignment::Center)
+            .build(),
+    )
+    .draw(display)?;
 
     Ok(())
 }

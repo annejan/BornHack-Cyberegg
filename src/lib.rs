@@ -98,6 +98,7 @@ use std::sync::Mutex;
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
+
 /// UTC offset in whole hours (-12..=+14). Default: 0 (UTC).
 pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(0);
 
@@ -330,6 +331,20 @@ where
     Ok(())
 }
 
+/// Format battery percentage with charging indicator prefix.
+fn bat_text(pct: &u8) -> heapless::String<5> {
+    #[cfg(feature = "embassy-base")]
+    let charging = fw::battery::is_charging();
+    #[cfg(not(feature = "embassy-base"))]
+    let charging = false;
+
+    if charging {
+        format!(5; "+{}%", pct).unwrap()
+    } else {
+        format!(5; "{}%", pct).unwrap()
+    }
+}
+
 fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -359,7 +374,7 @@ where
     let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BLACK);
     let bat_style = MonoTextStyle::new(&FONT_7X13, BLACK);
 
-    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    let bat_text = bat_text(bat_prc);
     Text::with_text_style(
         &bat_text,
         Point::new(110, 16),
@@ -468,7 +483,7 @@ where
     // Header bar: "Direct Message" + battery
     Text::with_text_style("Direct Message", Point::new(4, 14), style_bold, bottom)
         .draw(display)?;
-    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    let bat_text = bat_text(bat_prc);
     Text::with_text_style(
         &bat_text,
         Point::new(148, 14),
@@ -533,7 +548,7 @@ where
     // Header bar: "Channel" + battery
     Text::with_text_style("Channel", Point::new(4, 14), style_bold, bottom)
         .draw(display)?;
-    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    let bat_text = bat_text(bat_prc);
     Text::with_text_style(
         &bat_text,
         Point::new(148, 14),
@@ -599,7 +614,7 @@ where
     let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
-    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    let bat_text = bat_text(bat_prc);
     Text::with_text_style(
         &bat_text,
         Point::new(148, 14),

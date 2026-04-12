@@ -338,6 +338,27 @@ Runs all player profiles (perfect, attentive, casual, absent, night owl, etc.) a
 
 See [`simulation_py/README.md`](simulation_py/README.md) for the original Python balance simulator. The Python and Rust engines should produce similar results for the same player profiles — discrepancies indicate policy or engine bugs.
 
+### Game assets
+
+The badge stores sprite artwork on an external QSPI flash chip formatted as FAT12. When connected via USB, the badge appears as a removable drive where you can drag-and-drop PCX sprite files.
+
+The ready-to-use asset files are in [`assets/to-badge/`](assets/to-badge/). Copy all `.PCX` files from that directory to the badge's USB drive. The [`MANIFEST.TXT`](assets/to-badge/MANIFEST.TXT) in that directory documents the mapping between filenames and animations.
+
+#### Asset file format
+
+Sprites use the **PCX** image format (2 bits per pixel, RLE compressed). The 4-colour palette is:
+
+| Index | Colour      |
+| ----- | ----------- |
+| 0     | Black       |
+| 1     | Red         |
+| 2     | White       |
+| 3     | Transparent |
+
+PCX files can be opened and edited in **GIMP** (File > Open) or any other image editor that supports the PCX format. When saving, keep the format as 2bpp PCX with the palette above.
+
+Missing animation files fall back to the placeholder sprite (`1E000000.PCX`).
+
 ### Game Architecture
 
 ```text

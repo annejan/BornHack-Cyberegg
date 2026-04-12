@@ -140,9 +140,12 @@ async fn main(spawner: Spawner) {
         identity
     };
 
-    // ── Sprite loader (game assets from FAT12 partition) ────────────────
+    // ── Game engine + sprite loader ─────────────────────────────────────
     #[cfg(feature = "game")]
-    hello_graphics::game::sprite_loader::init().await;
+    {
+        hello_graphics::game::lifecycle::init().await;
+        hello_graphics::game::sprite_loader::init().await;
+    }
 
     // ── Temperature ──────────────────────────────────────────────────────
     let temp_celsius = hello_graphics::fw::temperature::read_and_cache().await;
@@ -202,7 +205,7 @@ async fn main(spawner: Spawner) {
         board!(p, buzzer),
         &Default::default(),
     ))));
-    let battery_monitor = match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await {
+    let battery_monitor = match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd).into(), board!(p, charge).into()).await {
         Ok(m) => m,
         Err(e) => {
             defmt::error!("Battery init failed: {:?}", e);
@@ -289,24 +292,10 @@ async fn display_loop(
         let _ = display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 
-        // Load current sprite frame into the display buffers before drawing.
-        // Each redraw of the game screen advances to the next frame.
-        // The sprite timer in wait_display_event ensures this happens
-        // every 10 seconds (not on every button press).
+        // ── Game cycle: update engine, render animation ────────────────
         #[cfg(feature = "game")]
-        {
-            if active_screen == hello_graphics::SCREEN_GAME
-                && hello_graphics::game::sprite_loader::frame_count() > 0
-            {
-                defmt::info!("sprite: displaying frame {}", sprite_frame);
-                hello_graphics::game::sprite_loader::blit(
-                    display,
-                    sprite_frame,
-                    0,
-                    hello_graphics::game::PET_AREA_TOP as i32,
-                )
-                .await;
-            }
+        if active_screen == hello_graphics::SCREEN_GAME {
+            hello_graphics::game::render(display, sprite_frame).await;
         }
 
         #[cfg(feature = "mesh")]
@@ -374,14 +363,26 @@ async fn wait_display_event(
 
     #[cfg(feature = "game")]
     let sprite_active = active_screen == hello_graphics::SCREEN_GAME
-        && hello_graphics::game::sprite_loader::frame_count() > 0;
+        && (hello_graphics::game::sprite_loader::frame_count() > 0
+            || hello_graphics::game::lifecycle::is_started());
 
     loop {
         #[cfg(feature = "game")]
         let sprite_tick = async {
-            // Wait for 2 seconds to advance the sprite frame.
             if sprite_active {
-                Timer::after_secs(2).await;
+                // Compute frame interval from the current animation.
+                // Hatching: spread frames over the full countdown.
+                // Everything else: 10 seconds per frame (EPD is slow with red).
+                let anim = hello_graphics::game::lifecycle::display_anim();
+                let frame_count = hello_graphics::game::engine::anim_files::frame_count(anim);
+                let interval_secs = match anim {
+                    hello_graphics::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
+                        let total_secs = ticks_remaining as u64 * 10;
+                        if frame_count > 0 { total_secs / frame_count as u64 } else { 10 }
+                    }
+                    _ => 10,
+                };
+                Timer::after_secs(interval_secs.max(1)).await;
             } else {
                 core::future::pending::<()>().await;
             }

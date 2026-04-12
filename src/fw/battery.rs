@@ -24,11 +24,11 @@
 //! let mv  = battery::read_mv();
 //! ```
 
-use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use embassy_nrf::{
     Peri,
-    gpio::{Level, Output, OutputDrive},
+    gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull},
     peripherals,
     saadc::{self, Config, Saadc},
 };
@@ -42,8 +42,9 @@ embassy_nrf::bind_interrupts!(pub struct BatteryIrqs {
 // Cached state — updated by battery_task, read by anyone synchronously
 // ---------------------------------------------------------------------------
 
-static CACHED_MV:  AtomicU16 = AtomicU16::new(0);
-static CACHED_PCT: AtomicU8  = AtomicU8::new(0);
+static CACHED_MV: AtomicU16 = AtomicU16::new(0);
+static CACHED_PCT: AtomicU8 = AtomicU8::new(0);
+static CACHED_CHARGING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Read the last measured battery voltage in millivolts.
 /// Returns 0 until the first measurement has completed.
@@ -57,27 +58,36 @@ pub fn read_pct() -> u8 {
     CACHED_PCT.load(Ordering::Relaxed)
 }
 
+/// Returns true when the battery is currently charging.
+pub fn is_charging() -> bool {
+    CACHED_CHARGING.load(Ordering::Relaxed)
+}
+
 // ---------------------------------------------------------------------------
 // BatteryMonitor — owns the peripherals, reborrowed on each measurement
 // ---------------------------------------------------------------------------
 
 pub struct BatteryMonitor {
-    saadc:   Peri<'static, peripherals::SAADC>,
-    vbat:    Peri<'static, peripherals::P0_31>,
+    saadc: Peri<'static, peripherals::SAADC>,
+    vbat: Peri<'static, peripherals::P0_31>,
     vbat_rd: Output<'static>,
+    charge: Input<'static>,
 }
 
 impl BatteryMonitor {
     fn new(
-        saadc:   Peri<'static, peripherals::SAADC>,
-        vbat:    Peri<'static, peripherals::P0_31>,
-        vbat_rd: Peri<'static, peripherals::P0_07>,
+        saadc: Peri<'static, peripherals::SAADC>,
+        vbat: Peri<'static, peripherals::P0_31>,
+        vbat_rd: Peri<'static, AnyPin>,
+        charge: Peri<'static, AnyPin>,
     ) -> Self {
         Self {
             saadc,
             vbat,
             // Keep the divider disabled (high) between measurements.
             vbat_rd: Output::new(vbat_rd, Level::High, OutputDrive::Standard),
+            // External 10k pullup on PCB; no internal pull needed.
+            charge: Input::new(charge, Pull::None),
         }
     }
 
@@ -114,27 +124,27 @@ impl BatteryMonitor {
 // ---------------------------------------------------------------------------
 
 /// Voltages outside this range trigger a `BatteryError` during `init()`.
-const VBAT_MIN_MV: u16 = 3000;
-const VBAT_MAX_MV: u16 = 4300;
+const VBAT_MIN_MV: u16 = 3000; // as per trickle charge threshold voltage
+const VBAT_MAX_MV: u16 = 4250; // as per datasheet max rating
 
 /// (millivolts, percent) pairs, sorted ascending by voltage.
 /// Edit this table to recalibrate for a different cell chemistry or pack.
 static BATTERY_CURVE: &[(u16, u8)] = &[
-    (3300,   0),
-    (3400,   5),
-    (3500,  10),
-    (3600,  15),
-    (3650,  20),
-    (3700,  30),
-    (3750,  40),
-    (3800,  50),
-    (3850,  60),
-    (3900,  70),
-    (3950,  75),
-    (4000,  80),
-    (4050,  85),
-    (4100,  90),
-    (4150,  95),
+    (3200, 0),
+    (3300, 5),
+    (3400, 10),
+    (3500, 15),
+    (3550, 20),
+    (3600, 30),
+    (3650, 40),
+    (3700, 50),
+    (3750, 60),
+    (3800, 70),
+    (3850, 75),
+    (3900, 80),
+    (3950, 85),
+    (4000, 90),
+    (4050, 95),
     (4200, 100),
 ];
 
@@ -144,8 +154,12 @@ fn mv_to_pct(mv: u16) -> u8 {
     let &(lo_mv, lo_pct) = BATTERY_CURVE.first().unwrap();
     let &(hi_mv, hi_pct) = BATTERY_CURVE.last().unwrap();
 
-    if mv <= lo_mv { return lo_pct; }
-    if mv >= hi_mv { return hi_pct; }
+    if mv <= lo_mv {
+        return lo_pct;
+    }
+    if mv >= hi_mv {
+        return hi_pct;
+    }
 
     for window in BATTERY_CURVE.windows(2) {
         let (a_mv, a_pct) = window[0];
@@ -183,17 +197,24 @@ pub enum BatteryError {
 /// [3000 mV, 4300 mV]; the cache is still populated so callers can
 /// choose to continue with a warning rather than panicking.
 pub async fn init(
-    saadc:   Peri<'static, peripherals::SAADC>,
-    vbat:    Peri<'static, peripherals::P0_31>,
-    vbat_rd: Peri<'static, peripherals::P0_07>,
+    saadc: Peri<'static, peripherals::SAADC>,
+    vbat: Peri<'static, peripherals::P0_31>,
+    vbat_rd: Peri<'static, AnyPin>,
+    charge: Peri<'static, AnyPin>,
 ) -> Result<BatteryMonitor, BatteryError> {
-    let mut monitor = BatteryMonitor::new(saadc, vbat, vbat_rd);
+    let mut monitor = BatteryMonitor::new(saadc, vbat, vbat_rd, charge);
     let mv = monitor.read_mv().await;
 
     CACHED_MV.store(mv, Ordering::Relaxed);
     CACHED_PCT.store(mv_to_pct(mv), Ordering::Relaxed);
+    CACHED_CHARGING.store(monitor.charge.is_low(), Ordering::Relaxed);
 
-    defmt::debug!("Battery: {} mV ({}%)", mv, mv_to_pct(mv));
+    defmt::debug!(
+        "Battery: {} mV ({}%) charging={}",
+        mv,
+        mv_to_pct(mv),
+        monitor.charge.is_low()
+    );
 
     if mv < VBAT_MIN_MV {
         defmt::warn!("Battery voltage too low: {} mV", mv);
@@ -219,7 +240,13 @@ pub async fn battery_task(mut monitor: BatteryMonitor) {
         let mv = monitor.read_mv().await;
         CACHED_MV.store(mv, Ordering::Relaxed);
         CACHED_PCT.store(mv_to_pct(mv), Ordering::Relaxed);
+        CACHED_CHARGING.store(monitor.charge.is_low(), Ordering::Relaxed);
 
-        defmt::debug!("Battery: {} mV ({}%)", mv, mv_to_pct(mv));
+        defmt::debug!(
+            "Battery: {} mV ({}%) charging={}",
+            mv,
+            mv_to_pct(mv),
+            monitor.charge.is_low()
+        );
     }
 }

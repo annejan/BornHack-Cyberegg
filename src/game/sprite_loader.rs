@@ -187,23 +187,26 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 // Blit
 // ---------------------------------------------------------------------------
 
-/// Blit PCX frame `index` onto the display at position (`x`, `y`).
+/// Blit PCX frame `index` (from the init-time file list) onto the display.
+#[cfg(feature = "embassy-base")]
+pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
+    let count = frame_count();
+    if count == 0 || index >= count { return; }
+    let file = unsafe { &(*FRAMES.get())[index as usize] };
+    blit_file(display, file, x, y).await;
+}
+
+/// Blit a PCX file (by [`FileRef`]) onto the display at position (`x`, `y`).
 ///
 /// Reads the PCX header for size, RLE-decodes scanlines via the work
 /// buffer, and writes 2bpp pixels into the black and red framebuffers.
 /// Clips to display bounds.  Transparent pixels (index 3) are skipped.
 #[cfg(feature = "embassy-base")]
-pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
-    let count = frame_count();
-    if count == 0 || index >= count { return; }
-
-    let file = unsafe { &(*FRAMES.get())[index as usize] };
-
-    // Read entire file into the work buffer (PCX files are small due to RLE).
+pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, y: i32) {
     let file_size = file.size as usize;
     let work_len = display.work_buffer_mut().len();
     if file_size > work_len || file_size < PCX_HEADER_SIZE {
-        defmt::warn!("sprite: PCX frame {} too large or too small ({}B)", index, file_size);
+        defmt::warn!("sprite: PCX too large or too small ({}B)", file_size);
         return;
     }
 
@@ -213,7 +216,7 @@ pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
             .await
             .unwrap_or(0);
         if n < file_size {
-            defmt::warn!("sprite: short read frame {}: {} of {}", index, n, file_size);
+            defmt::warn!("sprite: short read: {} of {}", n, file_size);
             return;
         }
     }
@@ -223,7 +226,7 @@ pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
     let info = match parse_pcx_header(&work[..PCX_HEADER_SIZE]) {
         Some(i) => i,
         None => {
-            defmt::warn!("sprite: invalid PCX header for frame {}", index);
+            defmt::trace!("sprite: invalid PCX header");
             return;
         }
     };

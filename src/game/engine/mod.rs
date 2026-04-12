@@ -9,9 +9,12 @@
 //! This lets the CPU sleep for minutes or hours when nothing interesting
 //! is about to happen, saving significant battery on the badge.
 
+pub mod anim_files;
 pub mod thresholds;
+pub mod to_display;
 
 use thresholds::*;
+pub use to_display::DisplayAnim;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +84,16 @@ pub struct GameState {
 
     // Sleep.
     pub is_sleeping: bool,
+
+    // Hibernation — all progression frozen, time stands still.
+    pub hibernating: bool,
+    /// Total ticks spent in hibernation during this pet's life.
+    pub hibernate_ticks: u32,
+
+    // Persistence — tracks when state was last saved to flash.
+    /// `age_ticks` at the time of the last successful save.
+    /// Not part of the game logic — only used by the save system.
+    last_save_tick: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +148,9 @@ impl GameState {
             tired_passive_counter: 0,
 
             is_sleeping: false,
+            hibernating: false,
+            hibernate_ticks: 0,
+            last_save_tick: 0,
         }
     }
 
@@ -222,6 +238,14 @@ impl GameState {
         let total_delta = now_tick.saturating_sub(self.last_update_tick);
         if total_delta == 0 { return; }
         self.last_update_tick = now_tick;
+
+        // Hibernation: time stands still.  Track hibernated time but
+        // don't advance age or any game state.
+        if self.hibernating {
+            self.hibernate_ticks += total_delta;
+            return;
+        }
+
         self.age_ticks += total_delta;
 
         match self.phase {
@@ -610,6 +634,25 @@ impl GameState {
         self.is_sleeping = false;
         true
     }
+
+    /// Hibernate the pet — all progression freezes.
+    pub fn hibernate(&mut self) -> bool {
+        if self.hibernating || self.phase == Phase::Gone { return false; }
+        self.hibernating = true;
+        true
+    }
+
+    /// End hibernation — progression resumes from this moment.
+    pub fn wake_from_hibernation(&mut self) -> bool {
+        if !self.hibernating { return false; }
+        self.hibernating = false;
+        true
+    }
+
+    /// Total hours the pet has spent in hibernation during its life.
+    pub fn hibernate_hours(&self) -> u32 {
+        self.hibernate_ticks / 360 // 360 ticks = 1 hour
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -622,7 +665,7 @@ impl GameState {
     /// Returns the absolute tick time to wake up at.  The caller should
     /// set a timer for `next_wake_tick - last_update_tick` ticks.
     pub fn next_wake_tick(&self) -> u32 {
-        if self.phase == Phase::Gone { return u32::MAX; }
+        if self.phase == Phase::Gone || self.hibernating { return u32::MAX; }
 
         let now = self.last_update_tick;
         let mut earliest = now + MAX_SLEEP_TICKS;
@@ -705,14 +748,232 @@ impl GameState {
 }
 
 // ---------------------------------------------------------------------------
-// Stat percentage helpers (for display)
+// PetStats — display-friendly snapshot (0 = bad, 100 = good)
+// ---------------------------------------------------------------------------
+
+/// Display-friendly snapshot of the pet's state.
+///
+/// All stats are scaled 0–100 with **positive semantics**: 100 = perfect,
+/// 0 = critical.  This is the inverse of the internal u16 representation
+/// where 0 = best.
+///
+/// Obtain via [`GameState::stats()`] which triggers a state update first.
+/// The result is cached — calling `stats()` again at the same tick is free.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+pub struct PetStats {
+    /// How well-fed the pet is (100 = full, 0 = starving).
+    pub hunger: u8,
+    /// How rested the pet is (100 = alert, 0 = exhausted).
+    pub tired: u8,
+    /// How inspired/energised the pet is (100 = energised, 0 = burnt out).
+    pub inspired: u8,
+    /// How healthy the pet is (100 = healthy, 0 = critically ill).
+    pub healthy: u8,
+    /// How happy the pet is (100 = happy, 0 = miserable).
+    pub happy: u8,
+
+    /// Current lifecycle phase.
+    pub phase: Phase,
+    /// Whether the pet is sleeping.
+    pub is_sleeping: bool,
+    /// Age in ticks (1 tick = 10 seconds).
+    pub age_ticks: u32,
+    /// Generation number (0 = first pet).
+    pub generation: u16,
+
+    /// Currently active action (if any).
+    pub active_action: Option<Action>,
+    /// Ticks remaining on the active action.
+    pub action_ticks_remaining: u8,
+
+    /// Action availability (true = can be started right now).
+    pub can_feed: bool,
+    pub can_heal: bool,
+    pub can_relax: bool,
+    pub can_play: bool,
+    pub can_sleep: bool,
+    pub can_wake: bool,
+
+    /// Whether the pet is hibernating (all progression frozen).
+    pub hibernating: bool,
+    /// Total hours spent in hibernation during this pet's life.
+    pub hibernate_hours: u32,
+}
+
+/// Convert internal stat (0=good, 65535=bad) to display (0=bad, 100=good).
+fn to_display_pct(val: u16) -> u8 {
+    100 - (val as u32 * 100 / STAT_MAX as u32) as u8
+}
+
+impl GameState {
+    /// Update the game state to `now_tick` and return a display snapshot.
+    ///
+    /// This is the primary API for the UI layer.  It triggers a state
+    /// update, then returns the snapshot.  The result is cached internally —
+    /// calling `stats()` again at the same tick skips the update and
+    /// returns the cached snapshot.
+    pub fn stats(&mut self, now_tick: u32) -> PetStats {
+        // Only update if time has advanced since last call.
+        if now_tick != self.last_update_tick {
+            self.update(now_tick);
+        }
+
+        let action_idle = self.active_action.is_none();
+        let awake_active = self.phase == Phase::Active && !self.is_sleeping;
+
+        PetStats {
+            hunger:   to_display_pct(self.hunger),
+            tired:    to_display_pct(self.tired),
+            inspired: to_display_pct(self.drained),
+            healthy:  to_display_pct(self.sick),
+            happy:    to_display_pct(self.miserable),
+
+            phase: self.phase,
+            is_sleeping: self.is_sleeping,
+            age_ticks: self.age_ticks,
+            generation: self.generation,
+
+            active_action: self.active_action,
+            action_ticks_remaining: self.action_ticks_remaining,
+
+            can_feed:  awake_active && action_idle && self.cooldown_feed == 0,
+            can_heal:  awake_active && action_idle && self.cooldown_heal == 0,
+            can_relax: awake_active && action_idle && self.cooldown_relax == 0,
+            can_play:  awake_active && action_idle && self.cooldown_play == 0,
+            can_sleep: self.phase == Phase::Active && !self.is_sleeping,
+            can_wake:  self.is_sleeping,
+
+            hibernating: self.hibernating,
+            hibernate_hours: self.hibernate_hours(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Persistence helpers
 // ---------------------------------------------------------------------------
 
 impl GameState {
-    /// Return a stat as a percentage (0–100).
-    pub fn hunger_pct(&self) -> u8 { (self.hunger as u32 * 100 / STAT_MAX as u32) as u8 }
-    pub fn tired_pct(&self) -> u8 { (self.tired as u32 * 100 / STAT_MAX as u32) as u8 }
-    pub fn drained_pct(&self) -> u8 { (self.drained as u32 * 100 / STAT_MAX as u32) as u8 }
-    pub fn sick_pct(&self) -> u8 { (self.sick as u32 * 100 / STAT_MAX as u32) as u8 }
-    pub fn miserable_pct(&self) -> u8 { (self.miserable as u32 * 100 / STAT_MAX as u32) as u8 }
+    /// Returns `true` if the state should be saved to flash.
+    ///
+    /// Becomes true when at least `SAVE_INTERVAL_TICKS` (15 minutes)
+    /// have elapsed since the last save.  The caller does the async
+    /// save and then calls [`mark_saved()`].
+    ///
+    /// No extra wake-ups are scheduled for saving — this check
+    /// piggybacks on whatever triggered the current update.
+    pub fn needs_save(&self) -> bool {
+        self.age_ticks.saturating_sub(self.last_save_tick) >= SAVE_INTERVAL_TICKS
+    }
+
+    /// Mark the state as successfully saved.  Resets the save timer.
+    pub fn mark_saved(&mut self) {
+        self.last_save_tick = self.age_ticks;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Serialization — manual, no serde, fixed-size
+// ---------------------------------------------------------------------------
+
+/// Serialized size of GameState in bytes.
+pub const SAVE_SIZE: usize = 64;
+
+impl GameState {
+    /// Serialize the game state to a fixed-size byte buffer for ekv.
+    pub fn to_bytes(&self) -> [u8; SAVE_SIZE] {
+        let mut b = [0u8; SAVE_SIZE];
+        let mut i = 0;
+
+        macro_rules! w16 { ($v:expr) => { b[i..i+2].copy_from_slice(&$v.to_le_bytes()); i += 2; }; }
+        macro_rules! w32 { ($v:expr) => { b[i..i+4].copy_from_slice(&$v.to_le_bytes()); i += 4; }; }
+        macro_rules! w8  { ($v:expr) => { b[i] = $v; i += 1; }; }
+
+        // Stats (10 bytes).
+        w16!(self.hunger); w16!(self.tired); w16!(self.drained);
+        w16!(self.sick); w16!(self.miserable);
+        // Traits (6 bytes).
+        w16!(self.vitality); w16!(self.curiosity); w16!(self.resilience);
+        // Timing (8 bytes).
+        w32!(self.last_update_tick); w32!(self.age_ticks);
+        // Lifecycle (9 bytes).
+        w8!(self.phase as u8);
+        w16!(self.hatching_countdown);
+        w32!(self.leaving_countdown);
+        w16!(self.generation);
+        // Action state (9 bytes).
+        w8!(self.active_action.map_or(0xFF, |a| a as u8));
+        w8!(self.action_ticks_remaining);
+        w16!(self.cooldown_feed); w16!(self.cooldown_heal);
+        w16!(self.cooldown_relax); w16!(self.cooldown_play);
+        // Interval counters (12 bytes).
+        w32!(self.drained_interval_counter);
+        w32!(self.miserable_interval_counter);
+        w32!(self.tired_passive_counter);
+        // Flags (2 bytes).
+        w8!(self.is_sleeping as u8);
+        w8!(self.hibernating as u8);
+        // Hibernation (4 bytes).
+        w32!(self.hibernate_ticks);
+        // Save tick (4 bytes).
+        w32!(self.last_save_tick);
+        // Total: 64 bytes.
+        b
+    }
+
+    /// Deserialize a game state from a byte buffer.
+    /// Returns `None` if the buffer is too short.
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < SAVE_SIZE { return None; }
+        let mut i = 0;
+
+        macro_rules! r16 { () => {{ let v = u16::from_le_bytes([b[i], b[i+1]]); i += 2; v }}; }
+        macro_rules! r32 { () => {{ let v = u32::from_le_bytes([b[i], b[i+1], b[i+2], b[i+3]]); i += 4; v }}; }
+        macro_rules! r8  { () => {{ let v = b[i]; i += 1; v }}; }
+
+        let hunger = r16!(); let tired = r16!(); let drained = r16!();
+        let sick = r16!(); let miserable = r16!();
+        let vitality = r16!(); let curiosity = r16!(); let resilience = r16!();
+        let last_update_tick = r32!(); let age_ticks = r32!();
+        let phase = match r8!() {
+            0 => Phase::Hatching,
+            1 => Phase::Active,
+            2 => Phase::Leaving,
+            _ => Phase::Gone,
+        };
+        let hatching_countdown = r16!();
+        let leaving_countdown = r32!();
+        let generation = r16!();
+        let action_byte = r8!();
+        let active_action = match action_byte {
+            0 => Some(Action::Feed),
+            1 => Some(Action::Heal),
+            2 => Some(Action::Relax),
+            3 => Some(Action::Play),
+            _ => None,
+        };
+        let action_ticks_remaining = r8!();
+        let cooldown_feed = r16!(); let cooldown_heal = r16!();
+        let cooldown_relax = r16!(); let cooldown_play = r16!();
+        let drained_interval_counter = r32!();
+        let miserable_interval_counter = r32!();
+        let tired_passive_counter = r32!();
+        let is_sleeping = r8!() != 0;
+        let hibernating = r8!() != 0;
+        let hibernate_ticks = r32!();
+        let last_save_tick = r32!();
+
+        Some(Self {
+            hunger, tired, drained, sick, miserable,
+            vitality, curiosity, resilience,
+            last_update_tick, age_ticks,
+            phase, hatching_countdown, leaving_countdown, generation,
+            active_action, action_ticks_remaining,
+            cooldown_feed, cooldown_heal, cooldown_relax, cooldown_play,
+            drained_interval_counter, miserable_interval_counter, tired_passive_counter,
+            is_sleeping, hibernating, hibernate_ticks,
+            last_save_tick,
+        })
+    }
 }
