@@ -233,6 +233,19 @@ pub struct TxStatusReq {
 pub static TX_STATUS_REQ_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxStatusReq, 2> =
     embassy_sync::channel::Channel::new();
 
+/// `PAYLOAD_TYPE_REQ` with `REQ_TYPE_GET_STATUS` (0x01) — authenticated
+/// repeater-stats query sent after a successful login to a repeater.
+/// `tag` is the request's sender-timestamp, echoed by the repeater in the
+/// response's first 4 bytes for transaction matching.
+pub struct TxAdminStatusReq {
+    pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag:     u32,
+}
+
+pub static TX_ADMIN_STATUS_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex, TxAdminStatusReq, 2,
+> = embassy_sync::channel::Channel::new();
+
 pub struct TxTelemReq {
     pub pub_key: [u8; 32],
     pub tag: u32,
@@ -267,14 +280,51 @@ pub static DISCOVERY_RESULT_CHANNEL: embassy_sync::channel::Channel<
     CriticalSectionRawMutex, DiscoveryResult, 2,
 > = embassy_sync::channel::Channel::new();
 
+/// Raw `RepeaterStats` blob from a `REQ_TYPE_GET_STATUS` reply, ready for the
+/// companion protocol's `PUSH_CODE_STATUS_RESPONSE` (0x87) wire format.
+///
+/// The legacy anonymous status-ping path also produces this struct, with only
+/// `batt_milli_volts` and `total_up_time_secs` populated and the rest zeroed.
 pub struct StatusResult {
     pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
-    pub uptime_secs: u32,
-    pub battery_mv: u16,
+    /// Raw 56-byte `RepeaterStats` C struct. Forwarded verbatim to the phone.
+    pub stats:   [u8; 56],
 }
 
 pub static STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
     CriticalSectionRawMutex, StatusResult, 2,
+> = embassy_sync::channel::Channel::new();
+
+/// Parsed fields of a `RepeaterStats` reply to `REQ_TYPE_GET_STATUS`.
+///
+/// C++ reference: `examples/simple_repeater/MyMesh.h` `struct RepeaterStats` —
+/// 56 bytes of tightly-packed little-endian fields, no padding.
+#[derive(Clone, Copy, Default)]
+pub struct AdminStatusResult {
+    pub pub_key:                [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag:                    u32,
+    pub batt_milli_volts:       u16,
+    pub curr_tx_queue_len:      u16,
+    pub noise_floor:            i16,
+    pub last_rssi:              i16,
+    pub n_packets_recv:         u32,
+    pub n_packets_sent:         u32,
+    pub total_air_time_secs:    u32,
+    pub total_up_time_secs:     u32,
+    pub n_sent_flood:           u32,
+    pub n_sent_direct:          u32,
+    pub n_recv_flood:           u32,
+    pub n_recv_direct:          u32,
+    pub err_events:             u16,
+    pub last_snr_x4:            i16,
+    pub n_direct_dups:          u16,
+    pub n_flood_dups:           u16,
+    pub total_rx_air_time_secs: u32,
+    pub n_recv_errors:          u32,
+}
+
+pub static ADMIN_STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex, AdminStatusResult, 2,
 > = embassy_sync::channel::Channel::new();
 
 pub struct TraceResult {
@@ -354,4 +404,29 @@ pub static PENDING_STATUS_PUBKEY: Mutex<
 pub static PENDING_TELEM_TAG: Mutex<
     CriticalSectionRawMutex,
     core::cell::Cell<Option<u32>>,
+> = Mutex::new(core::cell::Cell::new(None));
+
+/// Tag of the in-flight `REQ_TYPE_GET_STATUS` request. The repeater echoes
+/// this value as the first 4 bytes of its `PAYLOAD_TYPE_RESPONSE` plaintext,
+/// and we match it here to route the parsed `RepeaterStats` to the result channel.
+pub static PENDING_ADMIN_STATUS_TAG: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<u32>>,
+> = Mutex::new(core::cell::Cell::new(None));
+
+/// Fast-path hint for the contact-scan loops in the receive handlers.
+///
+/// Every outbound request handler (`send_login`, `send_admin_status_request`,
+/// `send_telem_request`, ...) sets this to the target's pub_key. The receive
+/// handlers try `find_by_key` on this hint first — a single O(1) KV lookup
+/// against the prefix index — before falling back to the O(N) linear scan
+/// over all contact slots. The scan is required only for unsolicited messages
+/// from a peer we haven't recently talked to.
+///
+/// Without this hint, the ekv log scan costs ~50 ms per slot × 300 slots =
+/// ~15 s per decrypt, which is what we were observing for login and status
+/// responses.
+pub static LAST_REQ_TARGET: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<[u8; ::meshcore::PUB_KEY_SIZE]>>,
 > = Mutex::new(core::cell::Cell::new(None));

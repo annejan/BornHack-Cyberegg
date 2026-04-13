@@ -1419,12 +1419,19 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::SendStatusRequest { pub_key }) => {
+                                    // Route to the authenticated REQ_TYPE_GET_STATUS path.
+                                    // Requires the caller to already be logged in to the
+                                    // repeater so the shared secret is in the ACL cache.
+                                    let tag = crate::unix_now().unwrap_or(0);
                                     defmt::info!(
-                                        "companion: SEND_STATUS_REQUEST key={=[u8]:02x}",
-                                        &pub_key[..6],
+                                        "companion: SEND_STATUS_REQUEST key={=[u8]:02x} tag={=u32:#010x} (admin path)",
+                                        &pub_key[..6], tag,
                                     );
-                                    let _ = crate::TX_STATUS_REQ_CHANNEL
-                                        .try_send(crate::TxStatusReq { pub_key: *pub_key });
+                                    let _ = crate::TX_ADMIN_STATUS_CHANNEL
+                                        .try_send(crate::TxAdminStatusReq {
+                                            pub_key: *pub_key,
+                                            tag,
+                                        });
                                     companion::Response::Ok
                                 }
 
@@ -1886,17 +1893,15 @@ async fn nus_peripheral_loop<C>(
                         let mut prefix = [0u8; 6];
                         prefix.copy_from_slice(&status.pub_key[..6]);
                         defmt::info!(
-                            "BLE: status from {:02x} uptime={=u32}s batt={=u16}mV, pushing 0x87",
+                            "BLE: status from {:02x} ({=usize}B stats), pushing 0x87",
                             &status.pub_key[..6],
-                            status.uptime_secs,
-                            status.battery_mv,
+                            status.stats.len(),
                         );
                         outbox_push(
                             outbox,
                             &companion::Response::StatusResponse {
                                 pub_key_prefix: prefix,
-                                uptime_secs: status.uptime_secs,
-                                battery_mv: status.battery_mv,
+                                stats: &status.stats,
                             },
                         );
                     }

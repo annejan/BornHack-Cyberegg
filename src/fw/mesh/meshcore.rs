@@ -174,6 +174,9 @@ pub async fn run_meshcore_listener<'a>(
         while let Ok(req) = crate::TX_TELEM_REQ_CHANNEL.try_receive() {
             send_telem_request(&mut lora, req, identity).await;
         }
+        while let Ok(req) = crate::TX_ADMIN_STATUS_CHANNEL.try_receive() {
+            send_admin_status_request(&mut lora, req, identity).await;
+        }
         while let Ok(req) = crate::TX_DISCOVERY_CHANNEL.try_receive() {
             send_discovery_request(&mut lora, req, identity).await;
         }
@@ -1262,6 +1265,9 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::MAX_TRANS_UNIT;
 
+    // Hint for the RX fast path so we skip the 300-slot contact scan.
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
+
     let timestamp = crate::unix_now().unwrap_or(0);
 
     let payload = match meshcore::payload::anon_req::encrypt(
@@ -1333,6 +1339,8 @@ async fn send_status_request(
 ) {
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::MAX_TRANS_UNIT;
+
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
 
     let timestamp = crate::unix_now().unwrap_or(0);
 
@@ -1413,6 +1421,8 @@ async fn send_telem_request(
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::MAX_TRANS_UNIT;
 
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
+
     // REQ_TYPE_GET_TELEMETRY_DATA = 0x03.
     // txt_msg::encrypt encodes flags = (attempt & 3) | (txt_type << 2).
     // To get flags = 0x03: attempt = 3, txt_type = 0.
@@ -1491,6 +1501,159 @@ async fn send_telem_request(
 }
 
 // ---------------------------------------------------------------------------
+// RepeaterStats parser (shared by Response and Path receive handlers)
+// ---------------------------------------------------------------------------
+
+/// Parse the 56-byte `RepeaterStats` blob returned by `REQ_TYPE_GET_STATUS`.
+///
+/// `blob` must be at least 56 bytes; shorter inputs are tolerated by
+/// reading from a zero-padded local buffer (the tail fields become 0).
+///
+/// C++ reference: `examples/simple_repeater/MyMesh.h` `struct RepeaterStats`.
+fn parse_repeater_stats(
+    blob:    &[u8],
+    pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    tag:     u32,
+) -> crate::AdminStatusResult {
+    let mut s = [0u8; 56];
+    let n = blob.len().min(56);
+    s[..n].copy_from_slice(&blob[..n]);
+
+    let rd_u16 = |o: usize| u16::from_le_bytes([s[o], s[o + 1]]);
+    let rd_i16 = |o: usize| i16::from_le_bytes([s[o], s[o + 1]]);
+    let rd_u32 = |o: usize| u32::from_le_bytes([s[o], s[o + 1], s[o + 2], s[o + 3]]);
+
+    crate::AdminStatusResult {
+        pub_key,
+        tag,
+        batt_milli_volts:       rd_u16(0),
+        curr_tx_queue_len:      rd_u16(2),
+        noise_floor:            rd_i16(4),
+        last_rssi:              rd_i16(6),
+        n_packets_recv:         rd_u32(8),
+        n_packets_sent:         rd_u32(12),
+        total_air_time_secs:    rd_u32(16),
+        total_up_time_secs:     rd_u32(20),
+        n_sent_flood:           rd_u32(24),
+        n_sent_direct:          rd_u32(28),
+        n_recv_flood:           rd_u32(32),
+        n_recv_direct:          rd_u32(36),
+        err_events:             rd_u16(40),
+        last_snr_x4:            rd_i16(42),
+        n_direct_dups:          rd_u16(44),
+        n_flood_dups:           rd_u16(46),
+        total_rx_air_time_secs: rd_u32(48),
+        n_recv_errors:          rd_u32(52),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Admin status request transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit a `PAYLOAD_TYPE_REQ` with `REQ_TYPE_GET_STATUS` (0x01).
+///
+/// This is the **authenticated** status query — the caller must already be
+/// logged in to the repeater (the repeater decrypts using the ACL-stored
+/// shared secret it cached during `handleLoginReq`). Guests also receive a
+/// reply in the current C++ reference (`simple_repeater/MyMesh.cpp`
+/// around line 219: "guests can also access this now"), so this works
+/// regardless of admin bit.
+///
+/// Plaintext layout produced here (13 bytes, matches C++ `sendRequest`):
+/// ```text
+/// [tag:4 LE][req_type:1 = 0x01][reserved:4 zeros][random:4 zeros]
+/// ```
+///
+/// `txt_msg::encrypt` encodes the flags byte as `(attempt & 3) | (txt_type << 2)`.
+/// To get flags = `0x01`, we pass `attempt = 1`, `txt_type = 0`. The rest of
+/// the plaintext is the 8-byte `text` field (reserved + random, zeros acceptable).
+async fn send_admin_status_request(
+    lora:     &mut SimpleLoRa<'_>,
+    req:      crate::TxAdminStatusReq,
+    identity: &DeviceIdentity,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+    use meshcore::payload::txt_msg;
+
+    const REQ_TYPE_GET_STATUS: u8 = 0x01;
+    let text: [u8; 8] = [0u8; 8];
+
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
+
+    let (encrypted, _ack_hash) = match txt_msg::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &req.pub_key,
+        req.tag,
+        0,                   // txt_type = 0
+        REQ_TYPE_GET_STATUS, // attempt → flags & 3 = 0x01
+        &text,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            defmt::warn!("send_admin_status_req: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; meshcore::MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = txt_msg::serialize(&encrypted, &mut payload_buf, &mut payload_len) {
+        defmt::warn!("send_admin_status_req: serialize failed: {:?}", defmt::Debug2Format(&e));
+        return;
+    }
+
+    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+    };
+
+    let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
+    let _ = payload_vec.extend_from_slice(&payload_buf[..payload_len]);
+
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::Req.to_u8(), &payload_vec),
+        r => (r, 0),
+    };
+    let msg = Message {
+        payload_type:   PayloadType::Req,
+        route,
+        version:        0,
+        transport_code,
+        path_len_byte,
+        path:           path_bytes,
+        payload:        payload_vec,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(Some(req.tag)));
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_admin_status_req: TX failed: {:?}", e);
+                crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
+            } else {
+                defmt::info!(
+                    "Admin status req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B)",
+                    &req.pub_key[..6], req.tag, len,
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_admin_status_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Path-discovery request transmission
 // ---------------------------------------------------------------------------
 
@@ -1513,6 +1676,8 @@ async fn send_discovery_request(
 ) {
     use meshcore::packet::{Message, PayloadType};
     use meshcore::MAX_TRANS_UNIT;
+
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
 
     // Discovery uses flags = 0x03 (REQ_TYPE_GET_TELEMETRY_DATA), same as telemetry,
     // but the text body starts with 0xFE (~TELEM_PERM_BASE) to signal discovery intent.
@@ -1670,8 +1835,22 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
         return;
     }
 
-    // Try each stored contact as the potential sender (server).
+    // Fast path: try the most recently hinted target contact (set by any
+    // outbound request function) via the O(1) prefix index, skipping the
+    // 300-slot linear scan. Falls through to the scan on mismatch.
     let store = contacts::ContactStore::new();
+    let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
+    if let Some(hint_pk) = hint {
+        if hint_pk[0] == msg.src_hash {
+            if let Some(c) = store.find_by_key(&hint_pk).await {
+                if try_dispatch_response(&c, &msg, identity).await.is_ok() {
+                    return;
+                }
+            }
+        }
+    }
+
+    // Fallback: scan all stored contacts as the potential sender.
     let count = store.count().await;
     let mut found_count = 0u16;
     for idx in 0..contacts::MAX_CONTACTS {
@@ -1680,122 +1859,189 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
         found_count += 1;
 
         if c.pub_key[0] != msg.src_hash { continue; }
-        if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_err() {
-            continue;
+        // Skip the hint — already tried above.
+        if hint.map_or(false, |h| h == c.pub_key) { continue; }
+
+        if try_dispatch_response(&c, &msg, identity).await.is_ok() {
+            return;
         }
-        let Ok((dec, _ack_hash)) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) else {
-            continue;
-        };
-
-        // Decrypted plaintext layout (same as C++ onContactResponse `data` arg):
-        //   [0..4]  = tag / timestamp (u32 LE)      → dec.timestamp
-        //   [4]     = resp_type                      → dec.text_type
-        //
-        // For a LOGIN response:
-        //   [5]     = keep_alive_secs / 16           → dec.text[0]
-        //   [6]     = is_admin                       → dec.text[1]
-        //   [7]     = acl_perms                      → dec.text[2]
-        //   [12]    = fw_ver_level                   → dec.text[7]
-        //   RESP_SERVER_LOGIN_OK = 0 (new), legacy = b'O'/b'K'
-        //
-        // For a STATUS PONG response (AnonReq with empty password):
-        //   The server's resp_type value for status is not firmly documented;
-        //   we distinguish via the PENDING_STATUS_PUBKEY flag set before TX.
-        //   dec.text[0..4] = uptime_secs (u32 LE), dec.text[4..6] = battery_mv (u16 LE)
-        // In the Response payload, dec.flags = resp_type byte, dec.text = body after flags.
-        let resp_type = dec.flags;
-        let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-        pub_key.copy_from_slice(&c.pub_key);
-
-        // Check if this is a response to a pending status request.
-        let pending_status = crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.get());
-        if let Some(pending_key) = pending_status {
-            if pending_key == pub_key {
-                crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
-
-                // Status pong body: [uptime:4 LE][battery_mv:2 LE]
-                let uptime_secs = if dec.text.len() >= 4 {
-                    u32::from_le_bytes([
-                        dec.text.get(0).copied().unwrap_or(0),
-                        dec.text.get(1).copied().unwrap_or(0),
-                        dec.text.get(2).copied().unwrap_or(0),
-                        dec.text.get(3).copied().unwrap_or(0),
-                    ])
-                } else { 0 };
-                let battery_mv = if dec.text.len() >= 6 {
-                    u16::from_le_bytes([
-                        dec.text.get(4).copied().unwrap_or(0),
-                        dec.text.get(5).copied().unwrap_or(0),
-                    ])
-                } else { 0 };
-
-                defmt::info!(
-                    "Response recv: STATUS from {=[u8]:02x} resp_type={=u8} uptime={=u32}s batt={=u16}mV",
-                    &c.pub_key[..6], resp_type, uptime_secs, battery_mv,
-                );
-
-                let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult {
-                    pub_key,
-                    uptime_secs,
-                    battery_mv,
-                });
-                return;
-            }
-        }
-
-        // Check if this is a response to a pending telemetry request (tag-based match).
-        let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
-        if let Some(telem_tag) = pending_telem {
-            if dec.timestamp == telem_tag {
-                crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
-
-                // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
-                let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
-                let _ = lpp.push(dec.flags);
-                let _ = lpp.extend_from_slice(&dec.text);
-
-                defmt::info!(
-                    "Response recv: TELEM from {=[u8]:02x} lpp={=usize}B",
-                    &c.pub_key[..6], lpp.len(),
-                );
-
-                let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult {
-                    pub_key,
-                    lpp,
-                });
-                return;
-            }
-        }
-
-        // No pending status or telemetry request — treat as a login response.
-        let success = resp_type == 0
-            || (resp_type == b'O' && dec.text.first() == Some(&b'K'));
-
-        defmt::info!(
-            "Response recv: login {} from {=[u8]:02x} resp_type={=u8}",
-            if success { "OK" } else { "FAIL" },
-            &c.pub_key[..6],
-            resp_type,
-        );
-
-        let tag = dec.timestamp;
-
-        let is_admin      = if success { dec.text.get(1).copied().unwrap_or(0) } else { 0 };
-        let acl_perms     = if success { dec.text.get(2).copied().unwrap_or(0) } else { 0 };
-        let fw_ver_level  = if success { dec.text.get(7).copied().unwrap_or(0) } else { 0 };
-
-        let _ = crate::LOGIN_RESULT_CHANNEL.try_send(crate::LoginResult {
-            success,
-            is_admin,
-            pub_key,
-            tag,
-            acl_perms,
-            fw_ver_level,
-        });
-        return; // Only process the first matching contact.
     }
 
     defmt::debug!("Response recv: could not decrypt with any known contact");
+}
+
+/// Verify MAC, decrypt and dispatch a `PayloadType::Response` packet under
+/// the given contact's shared secret.
+///
+/// Returns `Ok(())` if this contact is the right peer for the packet (the
+/// MAC verifies and the body has been dispatched to whichever pending-request
+/// branch matched, or treated as a login response). Returns
+/// `Err(meshcore::Error::MacMismatch)` if the contact is not the sender —
+/// the caller should try the next candidate.
+async fn try_dispatch_response(
+    c:        &contacts::Contact,
+    msg:      &meshcore::payload::txt_msg::TxtMsg,
+    identity: &DeviceIdentity,
+) -> Result<(), meshcore::Error> {
+    use meshcore::payload::txt_msg;
+
+    txt_msg::verify_mac(&identity.sec_key, &c.pub_key, msg)?;
+    let (dec, _ack_hash) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, msg)?;
+
+    // Decrypted plaintext layout (same as C++ onContactResponse `data` arg):
+    //   [0..4]  = tag / timestamp (u32 LE)      → dec.timestamp
+    //   [4]     = resp_type                      → dec.flags
+    //
+    // For a LOGIN response:
+    //   [5]     = keep_alive_secs / 16           → dec.text[0]
+    //   [6]     = is_admin                       → dec.text[1]
+    //   [7]     = acl_perms                      → dec.text[2]
+    //   [12]    = fw_ver_level                   → dec.text[7]
+    //   RESP_SERVER_LOGIN_OK = 0 (new), legacy = b'O'/b'K'
+    //
+    // For a STATUS PONG response (AnonReq with empty password):
+    //   The server's resp_type value for status is not firmly documented;
+    //   we distinguish via the PENDING_STATUS_PUBKEY flag set before TX.
+    //   dec.text[0..4] = uptime_secs (u32 LE), dec.text[4..6] = battery_mv (u16 LE)
+    // In the Response payload, dec.flags = resp_type byte, dec.text = body after flags.
+    let resp_type = dec.flags;
+    let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+    pub_key.copy_from_slice(&c.pub_key);
+
+    // Pending anonymous status ping (legacy ANON_REQ-with-empty-password path).
+    let pending_status = crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.get());
+    if let Some(pending_key) = pending_status {
+        if pending_key == pub_key {
+            crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
+
+            // Status pong body: [uptime:4 LE][battery_mv:2 LE]
+            let uptime_secs = if dec.text.len() >= 4 {
+                u32::from_le_bytes([
+                    dec.text.get(0).copied().unwrap_or(0),
+                    dec.text.get(1).copied().unwrap_or(0),
+                    dec.text.get(2).copied().unwrap_or(0),
+                    dec.text.get(3).copied().unwrap_or(0),
+                ])
+            } else { 0 };
+            let battery_mv = if dec.text.len() >= 6 {
+                u16::from_le_bytes([
+                    dec.text.get(4).copied().unwrap_or(0),
+                    dec.text.get(5).copied().unwrap_or(0),
+                ])
+            } else { 0 };
+
+            defmt::info!(
+                "Response recv: STATUS from {=[u8]:02x} resp_type={=u8} uptime={=u32}s batt={=u16}mV",
+                &c.pub_key[..6], resp_type, uptime_secs, battery_mv,
+            );
+
+            // Build a synthetic RepeaterStats blob with only the two fields the
+            // anonymous ping carries; the phone parses the same wire format as
+            // for the authenticated GET_STATUS reply.
+            let mut stats = [0u8; 56];
+            stats[0..2].copy_from_slice(&battery_mv.to_le_bytes());     // batt_milli_volts
+            stats[20..24].copy_from_slice(&uptime_secs.to_le_bytes());  // total_up_time_secs
+
+            let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult {
+                pub_key,
+                stats,
+            });
+            return Ok(());
+        }
+    }
+
+    // Pending admin status request (REQ_TYPE_GET_STATUS, tag-based match).
+    // Plaintext layout: [ts:4 LE][RepeaterStats:56]. After txt_msg::decrypt
+    // that becomes dec.timestamp = ts, dec.flags = stats[0], dec.text =
+    // stats[1..] (with trailing zero bytes stripped). We reassemble the full
+    // 56-byte blob and parse it manually.
+    let pending_admin_status = crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.get());
+    if let Some(admin_tag) = pending_admin_status {
+        if dec.timestamp == admin_tag {
+            crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
+
+            let mut stats = [0u8; 56];
+            stats[0] = dec.flags;
+            let tail_len = dec.text.len().min(55);
+            stats[1..1 + tail_len].copy_from_slice(&dec.text[..tail_len]);
+
+            let result = parse_repeater_stats(&stats, pub_key, dec.timestamp);
+
+            defmt::info!(
+                "Response recv: ADMIN_STATUS from {=[u8]:02x} tag={=u32:#010x} up={=u32}s batt={=u16}mV queue={=u16} rssi={=i16} snrX4={=i16} recv={=u32} sent={=u32}",
+                &c.pub_key[..6],
+                result.tag,
+                result.total_up_time_secs,
+                result.batt_milli_volts,
+                result.curr_tx_queue_len,
+                result.last_rssi,
+                result.last_snr_x4,
+                result.n_packets_recv,
+                result.n_packets_sent,
+            );
+
+            let _ = crate::ADMIN_STATUS_RESULT_CHANNEL.try_send(result);
+
+            // Forward the raw stats blob to BLE for PUSH_CODE_STATUS_RESPONSE.
+            let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult {
+                pub_key,
+                stats,
+            });
+            return Ok(());
+        }
+    }
+
+    // Pending telemetry request (tag-based match).
+    let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
+    if let Some(telem_tag) = pending_telem {
+        if dec.timestamp == telem_tag {
+            crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
+
+            // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
+            let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
+            let _ = lpp.push(dec.flags);
+            let _ = lpp.extend_from_slice(&dec.text);
+
+            defmt::info!(
+                "Response recv: TELEM from {=[u8]:02x} lpp={=usize}B",
+                &c.pub_key[..6], lpp.len(),
+            );
+
+            let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult {
+                pub_key,
+                lpp,
+            });
+            return Ok(());
+        }
+    }
+
+    // No pending status / admin-status / telemetry request — treat as a
+    // login response. The MAC verified, so this contact is the right peer.
+    let success = resp_type == 0
+        || (resp_type == b'O' && dec.text.first() == Some(&b'K'));
+
+    defmt::info!(
+        "Response recv: login {} from {=[u8]:02x} resp_type={=u8}",
+        if success { "OK" } else { "FAIL" },
+        &c.pub_key[..6],
+        resp_type,
+    );
+
+    let tag = dec.timestamp;
+
+    let is_admin     = if success { dec.text.get(1).copied().unwrap_or(0) } else { 0 };
+    let acl_perms    = if success { dec.text.get(2).copied().unwrap_or(0) } else { 0 };
+    let fw_ver_level = if success { dec.text.get(7).copied().unwrap_or(0) } else { 0 };
+
+    let _ = crate::LOGIN_RESULT_CHANNEL.try_send(crate::LoginResult {
+        success,
+        is_admin,
+        pub_key,
+        tag,
+        acl_perms,
+        fw_ver_level,
+    });
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1837,100 +2083,163 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
         msg.dest_hash, msg.src_hash, rssi,
     );
 
-    // Scan contacts for a matching src_hash and try to decrypt.
+    // Fast path: try the most recently hinted target contact via the O(1)
+    // prefix index, skipping the 300-slot linear scan. Falls through on miss.
     let store = contacts::ContactStore::new();
+    let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
+    if let Some(hint_pk) = hint {
+        if hint_pk[0] == msg.src_hash {
+            if let Some(c) = store.find_by_key(&hint_pk).await {
+                if try_dispatch_path(&c, &msg, rssi, &store, identity).await.is_ok() {
+                    return;
+                }
+            }
+        }
+    }
+
+    // Fallback: scan all contacts looking for a candidate with matching src_hash.
     let count = store.count().await;
     let mut found_count = 0u16;
-
     for idx in 0..contacts::MAX_CONTACTS {
         if found_count >= count { break; }
         let Some(c) = store.read_slot(idx).await else { continue; };
         found_count += 1;
 
         if c.pub_key[0] != msg.src_hash { continue; }
+        if hint.map_or(false, |h| h == c.pub_key) { continue; }
 
-        let dec = match path_msg::verify_and_decrypt(&identity.sec_key, &c.pub_key, &msg) {
-            Ok(d) => d,
-            Err(meshcore::Error::MacMismatch) => continue, // wrong contact
-            Err(e) => {
-                defmt::warn!(
-                    "Path recv: decrypt failed for {=[u8]:02x}: {:?}",
-                    &c.pub_key[..6],
-                    defmt::Debug2Format(&e),
-                );
-                continue;
-            }
-        };
-
-        defmt::info!(
-            "Path recv: decrypted from {=[u8]:02x} path_len={=u8} extra_type={=u8} extra_len={=usize}",
-            &c.pub_key[..6], dec.path_len_byte, dec.extra_type, dec.extra.len(),
-        );
-
-        // Update the stored routing path for this contact.
-        if dec.path_len_byte != contacts::OUT_PATH_UNKNOWN && !dec.path.is_empty() {
-            let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
-            let copy = dec.path.len().min(contacts::MAX_PATH_SIZE);
-            path_buf[..copy].copy_from_slice(&dec.path[..copy]);
-            if let Err(e) = store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
-                defmt::warn!("Path recv: path update failed: {:?}", e);
-            }
-        }
-
-        // PAYLOAD_TYPE_ACK = 3 → ACK piggybacked on a Path response.
-        if dec.extra_type == 3 && dec.extra.len() >= 4 {
-            let ack_crc = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-            defmt::info!(
-                "Path recv: ACK from {=[u8]:02x} ack_crc={=u32:#010x}",
-                &c.pub_key[..6], ack_crc,
-            );
-            handle_ack_recv(&dec.extra[..4], rssi);
+        if try_dispatch_path(&c, &msg, rssi, &store, identity).await.is_ok() {
             return;
         }
-
-        // PAYLOAD_TYPE_RESPONSE = 1 → either a discovery response (tag-based) or a login response.
-        if dec.extra_type == 1 {
-            // Check for a pending discovery request first (tag = extra[0..4]).
-            let pending_disc = crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.get());
-            if let Some(disc_tag) = pending_disc {
-                if dec.extra.len() >= 4 {
-                    let resp_tag = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-                    if resp_tag == disc_tag {
-                        crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
-
-                        let mut out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
-                        let _ = out_path.extend_from_slice(&dec.path);
-                        let in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
-                        // msg.path is not accessible here; we push empty (in_path not available in path_recv)
-                        // The C++ comment says dec.path = out_path (return route).
-                        // We store what we have: out_path from dec.path, in_path empty.
-
-                        let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-                        pub_key.copy_from_slice(&c.pub_key);
-
-                        defmt::info!(
-                            "Path recv: DISCOVERY response from {=[u8]:02x} tag={=u32:#010x} out_path_len={=u8}",
-                            &c.pub_key[..6], disc_tag, dec.path_len_byte,
-                        );
-
-                        let _ = crate::DISCOVERY_RESULT_CHANNEL.try_send(crate::DiscoveryResult {
-                            pub_key,
-                            out_path_len_byte: dec.path_len_byte,
-                            out_path,
-                            in_path_len_byte: 0xFF,
-                            in_path,
-                        });
-                        return;
-                    }
-                }
-            }
-            handle_path_login_response(&dec.extra, &c.pub_key);
-        }
-
-        return;
     }
 
     defmt::debug!("Path recv: no matching contact for src_hash={=u8:#04x}", msg.src_hash);
+}
+
+/// Verify, decrypt and dispatch a `PayloadType::Path` packet under the given
+/// contact's shared secret.
+///
+/// Returns `Ok(())` if `c` is the right peer (MAC verifies and the wrapped
+/// extra payload was dispatched). Returns `Err(meshcore::Error::MacMismatch)`
+/// if the contact is not the sender — caller should try the next candidate.
+/// Other errors (e.g. malformed plaintext) are also returned so the caller
+/// can decide whether to keep scanning.
+async fn try_dispatch_path(
+    c:        &contacts::Contact,
+    msg:      &meshcore::payload::path_msg::PathMsg,
+    rssi:     i16,
+    store:    &contacts::ContactStore,
+    identity: &DeviceIdentity,
+) -> Result<(), meshcore::Error> {
+    use meshcore::payload::path_msg;
+
+    let dec = path_msg::verify_and_decrypt(&identity.sec_key, &c.pub_key, msg)?;
+
+    defmt::info!(
+        "Path recv: decrypted from {=[u8]:02x} path_len={=u8} extra_type={=u8} extra_len={=usize}",
+        &c.pub_key[..6], dec.path_len_byte, dec.extra_type, dec.extra.len(),
+    );
+
+    // Update the stored routing path for this contact.
+    if dec.path_len_byte != contacts::OUT_PATH_UNKNOWN && !dec.path.is_empty() {
+        let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
+        let copy = dec.path.len().min(contacts::MAX_PATH_SIZE);
+        path_buf[..copy].copy_from_slice(&dec.path[..copy]);
+        if let Err(e) = store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
+            defmt::warn!("Path recv: path update failed: {:?}", e);
+        }
+    }
+
+    // PAYLOAD_TYPE_ACK = 3 → ACK piggybacked on a Path response.
+    if dec.extra_type == 3 && dec.extra.len() >= 4 {
+        let ack_crc = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+        defmt::info!(
+            "Path recv: ACK from {=[u8]:02x} ack_crc={=u32:#010x}",
+            &c.pub_key[..6], ack_crc,
+        );
+        handle_ack_recv(&dec.extra[..4], rssi);
+        return Ok(());
+    }
+
+    // PAYLOAD_TYPE_RESPONSE = 1 → admin-status / discovery / login response.
+    if dec.extra_type == 1 {
+        // Pending admin status request (tag = extra[0..4]). Path-decrypted
+        // extras preserve trailing zero bytes, so we can parse stats directly.
+        let pending_admin_status = crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.get());
+        if let (Some(admin_tag), true) = (pending_admin_status, dec.extra.len() >= 4) {
+            let resp_tag = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+            if resp_tag == admin_tag {
+                crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
+
+                let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+                pub_key.copy_from_slice(&c.pub_key);
+
+                // Copy the raw stats blob (truncate or zero-pad to exactly 56B).
+                let mut stats = [0u8; 56];
+                let n = (dec.extra.len() - 4).min(56);
+                stats[..n].copy_from_slice(&dec.extra[4..4 + n]);
+
+                let result = parse_repeater_stats(&stats, pub_key, admin_tag);
+
+                defmt::info!(
+                    "Path recv: ADMIN_STATUS from {=[u8]:02x} tag={=u32:#010x} up={=u32}s batt={=u16}mV queue={=u16} rssi={=i16} snrX4={=i16} recv={=u32} sent={=u32}",
+                    &c.pub_key[..6],
+                    result.tag,
+                    result.total_up_time_secs,
+                    result.batt_milli_volts,
+                    result.curr_tx_queue_len,
+                    result.last_rssi,
+                    result.last_snr_x4,
+                    result.n_packets_recv,
+                    result.n_packets_sent,
+                );
+
+                let _ = crate::ADMIN_STATUS_RESULT_CHANNEL.try_send(result);
+                let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult {
+                    pub_key,
+                    stats,
+                });
+                return Ok(());
+            }
+        }
+
+        // Pending discovery request (tag = extra[0..4]).
+        let pending_disc = crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.get());
+        if let Some(disc_tag) = pending_disc {
+            if dec.extra.len() >= 4 {
+                let resp_tag = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+                if resp_tag == disc_tag {
+                    crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
+
+                    let mut out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+                    let _ = out_path.extend_from_slice(&dec.path);
+                    let in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+
+                    let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+                    pub_key.copy_from_slice(&c.pub_key);
+
+                    defmt::info!(
+                        "Path recv: DISCOVERY response from {=[u8]:02x} tag={=u32:#010x} out_path_len={=u8}",
+                        &c.pub_key[..6], disc_tag, dec.path_len_byte,
+                    );
+
+                    let _ = crate::DISCOVERY_RESULT_CHANNEL.try_send(crate::DiscoveryResult {
+                        pub_key,
+                        out_path_len_byte: dec.path_len_byte,
+                        out_path,
+                        in_path_len_byte: 0xFF,
+                        in_path,
+                    });
+                    return Ok(());
+                }
+            }
+        }
+
+        // Default: treat as a login response.
+        handle_path_login_response(&dec.extra, &c.pub_key);
+    }
+
+    Ok(())
 }
 
 /// Extract and push a login result from path-packet extra bytes.
