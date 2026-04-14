@@ -72,11 +72,33 @@ pub const FLAG_FAVORITE: u8 = 0x01;
 pub const OUT_PATH_UNKNOWN: u8 = 0xFF;
 
 // ---------------------------------------------------------------------------
+// On-flash record schema versioning
+// ---------------------------------------------------------------------------
+//
+// STORE-LOCAL versioning for the on-flash [`Contact`] record layout. This
+// number has nothing to do with MeshCore protocol versions, advert versions,
+// or any other value that travels over the wire — it tracks how this
+// firmware serialises contacts to flash, and nothing else.
+//
+// Layout: byte 0 of every record is the record version, followed by the
+// serialised body. When this firmware starts and finds a slot whose first
+// byte is not [`CURRENT_RECORD_VERSION`], it assumes the whole on-flash
+// contact store was written by an older firmware with a different layout
+// and wipes the contact-related namespaces (contacts / ci / hi) before
+// continuing. Alpha-phase policy: no gradual migration, just start fresh.
+//
+// Bump [`CURRENT_RECORD_VERSION`] whenever the serialised body changes.
+
+/// Current on-flash record version written by this firmware build.
+pub(crate) const CURRENT_RECORD_VERSION: u8 = 1;
+
+// ---------------------------------------------------------------------------
 // Serialised sizes — defined explicitly, not derived from struct layout,
 // to avoid any compiler-inserted padding changing the on-flash format.
 // ---------------------------------------------------------------------------
 
-const CONTACT_SIZE: usize = 148; // 32+1+1+1+1+64+32+4+4+4+4
+/// Serialised record size: 1-byte version header + the 148-byte body.
+const CONTACT_SIZE: usize = 149; // 1 (version) + 32+1+1+1+1+64+32+4+4+4+4
 const META_SIZE: usize = 8;
 
 // ---------------------------------------------------------------------------
@@ -250,9 +272,16 @@ impl Contact {
 
     // --- Serialisation ----------------------------------------------------------
 
+    /// Serialise to the on-flash record layout.
+    ///
+    /// Byte 0 is the [`CURRENT_RECORD_VERSION`] store-local version marker.
+    /// Bytes 1..149 are the record body.
     fn to_bytes(&self) -> [u8; CONTACT_SIZE] {
         let mut b = [0u8; CONTACT_SIZE];
-        let mut p = 0usize;
+        // [0] store-local record version
+        b[0] = CURRENT_RECORD_VERSION;
+        // [1..149] body — offsets shifted by +1 relative to the v0 layout.
+        let mut p = 1usize;
         b[p..p + 32].copy_from_slice(&self.pub_key);
         p += 32;
         b[p] = self.node_type;
@@ -279,22 +308,32 @@ impl Contact {
         b
     }
 
-    fn from_bytes(b: &[u8; CONTACT_SIZE]) -> Self {
-        // Offsets: pub_key(0-31) type(32) flags(33) path_len(34) pad(35)
-        //          out_path(36-99) name(100-131) ts(132-135)
-        //          lat(136-139) lon(140-143) lastmod(144-147)
-        let pub_key: [u8; 32] = b[0..32].try_into().unwrap();
-        let node_type = b[32];
-        let flags = b[33];
-        let out_path_len = b[34];
-        let _pad = b[35];
-        let out_path: [u8; MAX_PATH_SIZE] = b[36..100].try_into().unwrap();
-        let name: [u8; 32] = b[100..132].try_into().unwrap();
-        let last_advert_ts = u32::from_le_bytes(b[132..136].try_into().unwrap());
-        let gps_lat = i32::from_le_bytes(b[136..140].try_into().unwrap());
-        let gps_lon = i32::from_le_bytes(b[140..144].try_into().unwrap());
-        let lastmod = u32::from_le_bytes(b[144..148].try_into().unwrap());
-        Self {
+    /// Parse the on-flash record layout.
+    ///
+    /// Returns `None` if byte 0 is not [`CURRENT_RECORD_VERSION`] — the
+    /// caller should treat the slot as legacy or corrupt and trigger a
+    /// wipe via [`ContactStore::init`].
+    fn from_bytes(b: &[u8; CONTACT_SIZE]) -> Option<Self> {
+        if b[0] != CURRENT_RECORD_VERSION {
+            return None;
+        }
+        // Body offsets, all shifted +1 vs. the v0 layout:
+        //   version(0)
+        //   pub_key(1-32) type(33) flags(34) path_len(35) pad(36)
+        //   out_path(37-100) name(101-132) ts(133-136)
+        //   lat(137-140) lon(141-144) lastmod(145-148)
+        let pub_key: [u8; 32] = b[1..33].try_into().unwrap();
+        let node_type = b[33];
+        let flags = b[34];
+        let out_path_len = b[35];
+        let _pad = b[36];
+        let out_path: [u8; MAX_PATH_SIZE] = b[37..101].try_into().unwrap();
+        let name: [u8; 32] = b[101..133].try_into().unwrap();
+        let last_advert_ts = u32::from_le_bytes(b[133..137].try_into().unwrap());
+        let gps_lat = i32::from_le_bytes(b[137..141].try_into().unwrap());
+        let gps_lon = i32::from_le_bytes(b[141..145].try_into().unwrap());
+        let lastmod = u32::from_le_bytes(b[145..149].try_into().unwrap());
+        Some(Self {
             pub_key,
             node_type,
             flags,
@@ -306,7 +345,7 @@ impl Contact {
             gps_lat,
             gps_lon,
             lastmod,
-        }
+        })
     }
 }
 
@@ -396,9 +435,46 @@ fn index_key(pub_key: &[u8]) -> heapless::String<12> {
     s
 }
 
+/// Key format for the `hi` (hash-byte) namespace: 2-char lowercase hex of the
+/// first byte of a contact's pub_key. Matches [`index_key`]'s encoding.
+fn hi_key(src_hash: u8) -> heapless::String<2> {
+    let mut s = heapless::String::new();
+    let hi = src_hash >> 4;
+    let lo = src_hash & 0xF;
+    let _ = s.push(if hi < 10 {
+        (b'0' + hi) as char
+    } else {
+        (b'a' + hi - 10) as char
+    });
+    let _ = s.push(if lo < 10 {
+        (b'0' + lo) as char
+    } else {
+        (b'a' + lo - 10) as char
+    });
+    s
+}
+
 // ---------------------------------------------------------------------------
 // ContactStore
 // ---------------------------------------------------------------------------
+
+/// Maximum number of slot indices that a single `hi` hash-bucket can hold.
+///
+/// Hard limit: when a bucket is full, [`ContactStore::add_or_update`] rejects
+/// new contacts whose `pub_key[0]` hashes into that bucket, logging a
+/// `defmt::warn!` line. Deletes of existing contacts in a full bucket free
+/// space normally.
+///
+/// Sizing rationale (birthday paradox): with uniformly-distributed Ed25519
+/// public keys and `MAX_CONTACTS = 300`, λ ≈ 1.17 → `P(bucket ≥ 16) ≈ 0`.
+/// At `MAX_CONTACTS = 1024`, λ = 4 → `P(bucket ≥ 16) ≈ 1e-6`. Beyond
+/// `MAX_CONTACTS ≈ 2000` the rejection probability starts mattering and
+/// this limit may need to grow.
+///
+/// **Limitation**: increasing the bucket cap grows the on-flash value size
+/// (`1 + 2 × MAX_SLOTS_PER_BUCKET` bytes) and the RAM read buffer in
+/// [`ContactStore::hash_index_lookup`]. Keep it small.
+pub const MAX_SLOTS_PER_BUCKET: usize = 16;
 
 /// Namespaced handle to the on-flash contact store.
 ///
@@ -408,9 +484,24 @@ fn index_key(pub_key: &[u8]) -> heapless::String<12> {
 pub struct ContactStore {
     kv: kv::KvNamespace,
     /// Secondary index: pub_key[0..6] hex → slot index (2 bytes LE u16).
-    /// Using 6 bytes lets find_by_prefix() (companion sends 6-byte prefix) share
-    /// the same index as find_by_key() and add_or_update().
+    /// Used by `find_by_key` / `find_by_prefix` — O(1) lookup keyed on the
+    /// 6-byte prefix the companion protocol uses to address contacts.
     ci: kv::KvNamespace,
+    /// Tertiary index: `pub_key[0]` hex byte → list of slot indices that
+    /// share that first byte.
+    ///
+    /// Answers the "all contacts with `pub_key[0] == src_hash`" query that
+    /// the MeshCore receive handlers need: every datagram on the wire carries
+    /// only a 1-byte `src_hash` (the first byte of the sender's pub_key), so
+    /// an incoming packet needs to enumerate all contacts matching that byte
+    /// to find the decrypting shared secret. Without this index the receive
+    /// path would linear-scan every slot (~50 ms per flash read × N slots).
+    ///
+    /// Key format: 2-char lowercase hex of the byte (e.g. `"00"`, `"a5"`).
+    /// Value format: `[count:1][slot_le:2]×count`, capped at
+    /// [`MAX_SLOTS_PER_BUCKET`]. Deletes of the last slot in a bucket remove
+    /// the KV key entirely.
+    hi: kv::KvNamespace,
 }
 
 impl ContactStore {
@@ -419,6 +510,7 @@ impl ContactStore {
         Self {
             kv: kv::namespace("contacts"),
             ci: kv::namespace("ci"),
+            hi: kv::namespace("hi"),
         }
     }
 
@@ -440,7 +532,7 @@ impl ContactStore {
         if self.kv.get(slot_key(slot).as_str(), &mut cbuf).await.ok()? != CONTACT_SIZE {
             return None;
         }
-        let c = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
+        let c = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())?;
         if !c.is_deleted() && c.pub_key[..6] == *prefix {
             Some((slot, c))
         } else {
@@ -477,17 +569,237 @@ impl ContactStore {
     }
 
     // -----------------------------------------------------------------------
+    // Hash-byte index (hi): first-byte-of-pub_key → list of slot indices
+    // -----------------------------------------------------------------------
+
+    /// Read a hash bucket into `out`. Returns the number of slot indices
+    /// copied (0 if the bucket does not exist).
+    ///
+    /// O(1): a single `kv.get` on a tiny (≤ 33 byte) value.
+    pub async fn hash_index_lookup(
+        &self,
+        src_hash: u8,
+        out: &mut [u16; MAX_SLOTS_PER_BUCKET],
+    ) -> usize {
+        let k = hi_key(src_hash);
+        let mut buf = [0u8; 1 + 2 * MAX_SLOTS_PER_BUCKET];
+        let n = match self.hi.get(k.as_str(), &mut buf).await {
+            Ok(n) => n,
+            Err(_) => return 0,
+        };
+        if n < 1 {
+            return 0;
+        }
+        let stored_count = buf[0] as usize;
+        let avail_count = (n - 1) / 2;
+        let count = stored_count.min(avail_count).min(MAX_SLOTS_PER_BUCKET);
+        for i in 0..count {
+            let off = 1 + i * 2;
+            out[i] = u16::from_le_bytes([buf[off], buf[off + 1]]);
+        }
+        count
+    }
+
+    /// `true` if the bucket for `src_hash` has at least one free entry.
+    async fn hash_index_has_room(&self, src_hash: u8) -> bool {
+        let k = hi_key(src_hash);
+        let mut buf = [0u8; 1 + 2 * MAX_SLOTS_PER_BUCKET];
+        match self.hi.get(k.as_str(), &mut buf).await {
+            Ok(n) if n >= 1 => {
+                let count = (buf[0] as usize).min((n - 1) / 2);
+                count < MAX_SLOTS_PER_BUCKET
+            }
+            _ => true, // bucket doesn't exist yet — plenty of room
+        }
+    }
+
+    /// Insert `slot` into the bucket for `src_hash`. Idempotent: if `slot`
+    /// is already present the bucket is left unchanged.
+    ///
+    /// Returns `Err(KvError::StoreFull)` if the bucket is at
+    /// [`MAX_SLOTS_PER_BUCKET`] and `slot` is not already present. The caller
+    /// should reject the mutation and log a warning.
+    async fn hash_index_insert(&self, src_hash: u8, slot: u16) -> Result<(), kv::KvError> {
+        let k = hi_key(src_hash);
+        let mut buf = [0u8; 1 + 2 * MAX_SLOTS_PER_BUCKET];
+        let n = match self.hi.get(k.as_str(), &mut buf).await {
+            Ok(n) => n,
+            Err(kv::KvError::NotFound) => 0,
+            Err(e) => return Err(e),
+        };
+        let mut count = if n >= 1 {
+            (buf[0] as usize).min((n - 1) / 2)
+        } else {
+            0
+        };
+
+        // Idempotent: no-op if slot already present.
+        for i in 0..count {
+            let off = 1 + i * 2;
+            let s = u16::from_le_bytes([buf[off], buf[off + 1]]);
+            if s == slot {
+                return Ok(());
+            }
+        }
+
+        if count >= MAX_SLOTS_PER_BUCKET {
+            return Err(kv::KvError::StoreFull);
+        }
+
+        let off = 1 + count * 2;
+        let le = slot.to_le_bytes();
+        buf[off] = le[0];
+        buf[off + 1] = le[1];
+        count += 1;
+        buf[0] = count as u8;
+
+        self.hi.set(k.as_str(), &buf[..1 + count * 2], true).await
+    }
+
+    /// Remove `slot` from the bucket for `src_hash`. No-op if absent.
+    ///
+    /// Deletes the KV key entirely when the last slot leaves the bucket, so
+    /// empty buckets don't linger in flash.
+    async fn hash_index_remove(&self, src_hash: u8, slot: u16) -> Result<(), kv::KvError> {
+        let k = hi_key(src_hash);
+        let mut buf = [0u8; 1 + 2 * MAX_SLOTS_PER_BUCKET];
+        let n = match self.hi.get(k.as_str(), &mut buf).await {
+            Ok(n) => n,
+            Err(kv::KvError::NotFound) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if n < 1 {
+            return Ok(());
+        }
+        let mut count = (buf[0] as usize).min((n - 1) / 2);
+
+        // Find and drop the matching entry (shift tail left).
+        let mut found_at: Option<usize> = None;
+        for i in 0..count {
+            let off = 1 + i * 2;
+            let s = u16::from_le_bytes([buf[off], buf[off + 1]]);
+            if s == slot {
+                found_at = Some(i);
+                break;
+            }
+        }
+        let Some(pos) = found_at else { return Ok(()) };
+
+        for j in pos..(count - 1) {
+            let dst = 1 + j * 2;
+            let src = 1 + (j + 1) * 2;
+            buf[dst] = buf[src];
+            buf[dst + 1] = buf[src + 1];
+        }
+        count -= 1;
+
+        if count == 0 {
+            self.hi.delete(k.as_str()).await
+        } else {
+            buf[0] = count as u8;
+            self.hi.set(k.as_str(), &buf[..1 + count * 2], true).await
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Initialisation & migration
     // -----------------------------------------------------------------------
 
+    /// Look at the contact slots on flash and decide whether the store is in
+    /// a layout this firmware can read.
+    ///
+    /// Returns `true` as soon as we find any slot whose size or version byte
+    /// doesn't match the current record format — the caller should treat the
+    /// store as legacy/corrupt and wipe it. Returns `false` when all inspected
+    /// slots look current (or when the store is empty).
+    ///
+    /// Stops at the first definitive answer, so the normal case is a single
+    /// flash read.
+    async fn detect_legacy_records(&self) -> bool {
+        let mut buf = [0u8; CONTACT_SIZE];
+        for idx in 0..MAX_CONTACTS {
+            match self.kv.get(slot_key(idx).as_str(), &mut buf).await {
+                Ok(n) if n == CONTACT_SIZE && buf[0] == CURRENT_RECORD_VERSION => {
+                    // Found a record in the current layout — store is current.
+                    return false;
+                }
+                Ok(n) if n > 0 => {
+                    // Non-empty payload with the wrong size or wrong version
+                    // byte → legacy / corrupt.
+                    defmt::warn!(
+                        "contacts: slot {=usize} has n={=usize}B v={=u8:#04x}, expected {=usize}B v={=u8:#04x}",
+                        idx,
+                        n,
+                        buf.get(0).copied().unwrap_or(0),
+                        CONTACT_SIZE,
+                        CURRENT_RECORD_VERSION,
+                    );
+                    return true;
+                }
+                _ => continue, // slot not written — keep looking
+            }
+        }
+        // Every slot was NotFound → fresh store, nothing to wipe.
+        false
+    }
+
+    /// Wipe the contact-related KV namespaces (`contacts`, `hi`) after a
+    /// legacy-format store is detected.
+    ///
+    /// Deletes every slot key and every hash-bucket key, plus the `meta`
+    /// sentinel, so the subsequent `init` flow writes a fresh capacity
+    /// record and an empty hash index. The `ci` namespace is left alone;
+    /// stale entries there self-heal on the next `add_or_update` because
+    /// the update path verifies the slot contents before reusing the index.
+    ///
+    /// Slow (~several seconds of flash churn) — only runs once per
+    /// format bump. The caller is responsible for turning on visual
+    /// feedback (e.g. the green LED) before calling this.
+    async fn wipe_contact_store(&self) {
+        defmt::warn!("contacts: wiping store");
+
+        for idx in 0..MAX_CONTACTS {
+            let _ = self.kv.delete(slot_key(idx).as_str()).await;
+            embassy_futures::yield_now().await;
+        }
+        let _ = self.kv.delete("meta").await;
+
+        for b in 0u8..=255u8 {
+            let _ = self.hi.delete(hi_key(b).as_str()).await;
+            embassy_futures::yield_now().await;
+        }
+
+        defmt::info!("contacts: store wiped");
+    }
+
     /// Initialise the contact store.
     ///
-    /// Reads stored metadata and performs a one-time migration when
-    /// [`MAX_CONTACTS`] differs from the value stored on flash.
+    /// 1. If the on-flash records are in a layout this firmware does not
+    ///    understand (legacy `CONTACT_SIZE` or version byte mismatch),
+    ///    wipe the contact-related namespaces.
+    /// 2. Read stored metadata; if [`MAX_CONTACTS`] differs from the value
+    ///    on flash, perform the capacity migration.
     ///
     /// Call once from the main task after [`kv::init`] succeeds, before
     /// spawning any task that reads or writes contacts.
     pub async fn init(&self) {
+        // --- 1. Detect and wipe legacy records. ---
+        if self.detect_legacy_records().await {
+            defmt::warn!(
+                "contacts: record format mismatch — wiping store (blink LED, alpha-phase policy)"
+            );
+            crate::fw::led::set_led(
+                &crate::fw::led::LED_GREEN,
+                crate::fw::led::LedState::Duty50,
+            );
+            self.wipe_contact_store().await;
+            crate::fw::led::set_led(
+                &crate::fw::led::LED_GREEN,
+                crate::fw::led::LedState::Off,
+            );
+        }
+
+        // --- 2. Read/write meta. ---
         let mut buf = [0u8; META_SIZE];
         match self.kv.get("meta", &mut buf).await {
             Ok(n) if n == META_SIZE => {
@@ -566,9 +878,10 @@ impl ContactStore {
                 let key = slot_key(idx);
                 if let Ok(n) = self.kv.get(key.as_str(), &mut cbuf).await {
                     if n == CONTACT_SIZE {
-                        let c = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
-                        if !c.is_deleted() {
-                            count += 1;
+                        if let Some(c) = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap()) {
+                            if !c.is_deleted() {
+                                count += 1;
+                            }
                         }
                     }
                 }
@@ -613,7 +926,7 @@ impl ContactStore {
         let mut buf = [0u8; CONTACT_SIZE];
         match self.kv.get(key.as_str(), &mut buf).await {
             Ok(n) if n == CONTACT_SIZE => {
-                let c = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap());
+                let c = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap())?;
                 if c.is_deleted() { None } else { Some(c) }
             }
             _ => None,
@@ -638,7 +951,9 @@ impl ContactStore {
         if self.kv.get(key.as_str(), &mut buf).await.ok() != Some(CONTACT_SIZE) {
             return Ok(());
         }
-        let mut c = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap());
+        let Some(mut c) = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap()) else {
+            return Ok(());
+        };
         if c.out_path_len == out_path_len && c.out_path == *out_path {
             return Ok(()); // nothing changed
         }
@@ -682,17 +997,20 @@ impl ContactStore {
             let mut cbuf = [0u8; CONTACT_SIZE];
             if let Ok(n) = self.kv.get(slot_key(slot).as_str(), &mut cbuf).await {
                 if n == CONTACT_SIZE {
-                    let existing = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap());
-                    if !existing.is_deleted() && existing.pub_key == contact.pub_key {
-                        let mut updated = contact.clone();
-                        updated.flags |= existing.flags & FLAG_FAVORITE;
-                        if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
+                    if let Some(existing) =
+                        Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
+                    {
+                        if !existing.is_deleted() && existing.pub_key == contact.pub_key {
+                            let mut updated = contact.clone();
+                            updated.flags |= existing.flags & FLAG_FAVORITE;
+                            if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
+                                return Ok(AddResult::Updated);
+                            }
+                            self.kv
+                                .set(slot_key(slot).as_str(), &updated.to_bytes(), true)
+                                .await?;
                             return Ok(AddResult::Updated);
                         }
-                        self.kv
-                            .set(slot_key(slot).as_str(), &updated.to_bytes(), true)
-                            .await?;
-                        return Ok(AddResult::Updated);
                     }
                 }
             }
@@ -712,19 +1030,44 @@ impl ContactStore {
         };
         let capacity = (meta.capacity as usize).min(MAX_CONTACTS).max(1);
         let target = meta.head as usize % capacity;
+        let contact_hash = contact.pub_key[0];
 
-        // Check if we are overwriting a live contact (eviction) and remove its
-        // index entry first so the index never points at a stale slot.
-        let mut evicted = false;
+        // Read the incumbent (if any) so we can unlink its index entries
+        // before overwriting the slot.
         let mut slot_buf = [0u8; CONTACT_SIZE];
-        if let Ok(n) = self.kv.get(slot_key(target).as_str(), &mut slot_buf).await {
-            if n == CONTACT_SIZE {
-                let incumbent = Contact::from_bytes(slot_buf[..CONTACT_SIZE].try_into().unwrap());
-                if !incumbent.is_deleted() {
-                    self.index_delete(&incumbent.pub_key).await;
-                    evicted = true;
+        let incumbent: Option<Contact> = match self.kv.get(slot_key(target).as_str(), &mut slot_buf).await {
+            Ok(n) if n == CONTACT_SIZE => {
+                match Contact::from_bytes(slot_buf[..CONTACT_SIZE].try_into().unwrap()) {
+                    Some(c) if !c.is_deleted() => Some(c),
+                    _ => None,
                 }
             }
+            _ => None,
+        };
+        let evicted = incumbent.is_some();
+
+        // Pre-check the hash bucket BEFORE any writes so a rejection leaves
+        // the store untouched. If the eviction target shares the same first
+        // byte with the new contact the bucket loses and gains one entry;
+        // room is unchanged in that case.
+        let bucket_room_required = incumbent
+            .as_ref()
+            .map_or(true, |inc| inc.pub_key[0] != contact_hash);
+        if bucket_room_required && !self.hash_index_has_room(contact_hash).await {
+            defmt::warn!(
+                "contacts: hash bucket {=u8:#04x} full ({=usize} slots) — rejecting new contact. Bump MAX_SLOTS_PER_BUCKET if this happens often.",
+                contact_hash,
+                MAX_SLOTS_PER_BUCKET,
+            );
+            return Err(kv::KvError::StoreFull);
+        }
+
+        // Unlink the incumbent from both secondary indices BEFORE overwriting
+        // the slot, in the order hi-index then ci-index, so a crash leaves no
+        // dangling lookups that would return this slot with mismatched data.
+        if let Some(inc) = incumbent.as_ref() {
+            let _ = self.hash_index_remove(inc.pub_key[0], target as u16).await;
+            self.index_delete(&inc.pub_key).await;
         }
 
         if !evicted {
@@ -736,6 +1079,11 @@ impl ContactStore {
             .set(slot_key(target).as_str(), &contact.to_bytes(), true)
             .await?;
         self.index_write(&contact.pub_key, target).await?;
+        // The pre-check guarantees there is room, so `hash_index_insert`
+        // should not return `StoreFull` here. Any other error leaves a stale
+        // ci entry without hi — the receive path still finds the contact via
+        // the legacy scan fallback, so the store remains functionally correct.
+        let _ = self.hash_index_insert(contact_hash, target as u16).await;
         self.kv.set("meta", &meta.to_bytes(), true).await?;
         Ok(if evicted {
             AddResult::Evicted
@@ -761,7 +1109,12 @@ impl ContactStore {
             _ => return Ok(false),
         };
 
-        // Zero the index entry first (while pub_key is still in scope).
+        // Remove all dependent index entries BEFORE zeroing the slot, in the
+        // order hi-bucket → ci-prefix → slot. The goal is that if a crash
+        // interrupts the delete we never leave a lookup path (either ci or
+        // hi) that points at a slot whose pub_key doesn't match it — which
+        // would cause dangling entries to "bounce around" during receive.
+        let _ = self.hash_index_remove(pub_key[0], idx as u16).await;
         self.index_delete(pub_key).await;
 
         // Zero the slot.

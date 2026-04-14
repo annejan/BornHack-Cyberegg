@@ -93,6 +93,23 @@ async fn main(spawner: Spawner) {
         defmt::warn!("FAT12 format check failed: {:?}", e);
     }
 
+    // ── LEDs ─────────────────────────────────────────────────────────────
+    // Hoisted above the mesh stack so the led_task is already running when
+    // ContactStore::init wipes a legacy store; the wipe signals via the
+    // existing fw::led::set_led / LED_GREEN atomics.
+    let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
+    let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
+    let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
+    led_red.set_low();
+    led_green.set_low();
+    led_blue.set_low();
+    Timer::after_millis(200).await;
+    led_red.set_high();
+    led_green.set_high();
+    led_blue.set_high();
+    Timer::after_millis(200).await;
+    spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
+
     // ── Mesh stack (KV, contacts, identity, BLE) ─────────────────────────
     // Must come before temperature/EPD because it consumes p.RNG, p.RTC0,
     // p.TIMER0, p.TEMP, and PPI channels.
@@ -174,19 +191,9 @@ async fn main(spawner: Spawner) {
     .unwrap();
     defmt::info!("EPD initialized");
 
-    // ── LEDs ─────────────────────────────────────────────────────────────
-    let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
-    let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
-    let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
-    led_red.set_low();
-    led_green.set_low();
-    led_blue.set_low();
-    Timer::after_millis(200).await;
-    led_red.set_high();
-    led_green.set_high();
-    led_blue.set_high();
-    Timer::after_millis(200).await;
-    spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
+    // LEDs are initialised earlier (above the mesh stack) so the led_task is
+    // already running when the contact store needs to blink the green LED
+    // during a legacy-format wipe.
 
     // ── Buttons, NFC, buzzer, battery, clock ─────────────────────────────
     let mut button_rcvr = BTN_WATCH.receiver().unwrap();

@@ -98,6 +98,21 @@ pub static PM_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Fired whenever a new message is pushed to `msg_queue`.
 pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Fired when an auto-add advert is refused because the contact store is
+/// full and the `AUTO_ADD_OVERWRITE_OLDEST` bit in `autoadd_config` is not
+/// set. The BLE task consumes this to emit `PUSH_CODE_CONTACTS_FULL` (0x90).
+pub static CONTACTS_FULL_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// In-RAM cache of the persisted `path_hash_mode` setting (CMD_SET_PATH_HASH_MODE, 0x3D).
+///
+/// Value semantics match the reference: 0 ⇒ 1-byte per-hop hashes,
+/// 1 ⇒ 2-byte, 2 ⇒ 3-byte. Values ≥ 3 are reserved and rejected by the
+/// setter. Read on the hot TX path to compose `path_len_byte` for every
+/// freshly-originated flood packet; loaded from flash once at boot and
+/// refreshed whenever `CMD_SET_PATH_HASH_MODE` is received.
+pub static PATH_HASH_MODE: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0);
+
 /// Fired by the menu to request the BLE task to wipe and re-seed the channel store.
 pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
@@ -246,6 +261,27 @@ pub static TX_ADMIN_STATUS_CHANNEL: embassy_sync::channel::Channel<
     CriticalSectionRawMutex, TxAdminStatusReq, 2,
 > = embassy_sync::channel::Channel::new();
 
+/// Maximum `req_data` payload for a `CMD_SEND_BINARY_REQ`. The C++ reference
+/// uses up to ~12 bytes (get-neighbours with random blob is 11). 24 leaves
+/// slack without pressure on txt_msg plaintext budget (1 AES block ≤ 11 bytes
+/// of params after `[ts:4][flags:1]`).
+pub const MAX_BINARY_REQ_PARAMS: usize = 24;
+
+/// Generic `PAYLOAD_TYPE_REQ` with an opaque `[req_type:1][params...]` body.
+/// Used by the companion protocol's `SEND_BINARY_REQ` (0x32) pipe for things
+/// like `REQ_TYPE_GET_NEIGHBOURS`, `REQ_TYPE_GET_ACCESS_LIST`, etc.
+pub struct TxBinaryReq {
+    pub pub_key:  [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag:      u32,
+    /// First byte = `REQ_TYPE_*` discriminant (from the C++ `BaseChatMesh.h`
+    /// constants). Remaining bytes are request-type-specific parameters.
+    pub req_data: heapless::Vec<u8, MAX_BINARY_REQ_PARAMS>,
+}
+
+pub static TX_BINARY_REQ_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex, TxBinaryReq, 2,
+> = embassy_sync::channel::Channel::new();
+
 pub struct TxTelemReq {
     pub pub_key: [u8; 32],
     pub tag: u32,
@@ -325,6 +361,24 @@ pub struct AdminStatusResult {
 
 pub static ADMIN_STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
     CriticalSectionRawMutex, AdminStatusResult, 2,
+> = embassy_sync::channel::Channel::new();
+
+/// Maximum `BinaryResult` body size. The longest reply is `GET_NEIGHBOURS`
+/// which for 10 neighbours × 9 bytes + 4 header = 94 bytes, and
+/// `GET_ACCESS_LIST` which is roughly bounded by the same.
+pub const MAX_BINARY_RESP_BODY: usize = 176;
+
+/// Result of a `TxBinaryReq`, echoed to the companion app via
+/// `PUSH_CODE_BINARY_RESPONSE` (0x8C). `body` is the raw response bytes from
+/// the repeater's `handleRequest()` starting after the echoed tag.
+pub struct BinaryResult {
+    pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag:     u32,
+    pub body:    heapless::Vec<u8, MAX_BINARY_RESP_BODY>,
+}
+
+pub static BINARY_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex, BinaryResult, 2,
 > = embassy_sync::channel::Channel::new();
 
 pub struct TraceResult {
@@ -410,6 +464,13 @@ pub static PENDING_TELEM_TAG: Mutex<
 /// this value as the first 4 bytes of its `PAYLOAD_TYPE_RESPONSE` plaintext,
 /// and we match it here to route the parsed `RepeaterStats` to the result channel.
 pub static PENDING_ADMIN_STATUS_TAG: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<u32>>,
+> = Mutex::new(core::cell::Cell::new(None));
+
+/// Tag of the in-flight generic `CMD_SEND_BINARY_REQ` request. Tag-based
+/// routing delivers the echoed-timestamp response to `BINARY_RESULT_CHANNEL`.
+pub static PENDING_BINARY_REQ_TAG: Mutex<
     CriticalSectionRawMutex,
     core::cell::Cell<Option<u32>>,
 > = Mutex::new(core::cell::Cell::new(None));

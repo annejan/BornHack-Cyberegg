@@ -260,6 +260,8 @@ enum PushEvent {
     TelemResult(crate::TelemResult),
     DiscoveryResult(crate::DiscoveryResult),
     ControlData(crate::ControlDataPkt),
+    BinaryResult(crate::BinaryResult),
+    ContactsFull,
 }
 
 /// Wait for any push event from radio/system channels.
@@ -292,8 +294,14 @@ async fn wait_push_event() -> PushEvent {
                     crate::TELEM_RESULT_CHANNEL.receive(),
                 ),
                 select(
-                    crate::DISCOVERY_RESULT_CHANNEL.receive(),
-                    crate::CONTROL_DATA_PKT_CHANNEL.receive(),
+                    select(
+                        crate::DISCOVERY_RESULT_CHANNEL.receive(),
+                        crate::CONTROL_DATA_PKT_CHANNEL.receive(),
+                    ),
+                    select(
+                        crate::BINARY_RESULT_CHANNEL.receive(),
+                        crate::CONTACTS_FULL_SIGNAL.wait(),
+                    ),
                 ),
             ),
         ),
@@ -312,11 +320,17 @@ async fn wait_push_event() -> PushEvent {
         Either::Second(Either::Second(Either::First(Either::Second(tm)))) => {
             PushEvent::TelemResult(tm)
         }
-        Either::Second(Either::Second(Either::Second(Either::First(dc)))) => {
+        Either::Second(Either::Second(Either::Second(Either::First(Either::First(dc))))) => {
             PushEvent::DiscoveryResult(dc)
         }
-        Either::Second(Either::Second(Either::Second(Either::Second(ct)))) => {
+        Either::Second(Either::Second(Either::Second(Either::First(Either::Second(ct))))) => {
             PushEvent::ControlData(ct)
+        }
+        Either::Second(Either::Second(Either::Second(Either::Second(Either::First(br))))) => {
+            PushEvent::BinaryResult(br)
+        }
+        Either::Second(Either::Second(Either::Second(Either::Second(Either::Second(()))))) => {
+            PushEvent::ContactsFull
         }
     }
 }
@@ -814,6 +828,7 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_radio: Option<settings::RadioParams> = None;
                             let mut pending_position: Option<settings::Position> = None;
                             let mut pending_other: Option<settings::OtherParams> = None;
+                            let mut pending_factory_reset = false;
                             let mut pending_reboot: bool = false;
                             let mut pending_contact: Option<contacts::Contact> = None;
                             // Self-telemetry LPP buffer: voltage (4B) + temperature (4B).
@@ -1327,6 +1342,88 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
+                                Ok(companion::cmd::Command::SetPathHashMode { mode }) => {
+                                    // Reference rejects mode >= 3 with ERR_CODE_ILLEGAL_ARG.
+                                    if mode >= 3 {
+                                        defmt::warn!(
+                                            "companion: SET_PATH_HASH_MODE illegal mode {=u8}",
+                                            mode,
+                                        );
+                                        companion::Response::Error(
+                                            companion::ErrorCode::InvalidParameter,
+                                        )
+                                    } else {
+                                        defmt::info!(
+                                            "companion: SET_PATH_HASH_MODE mode={=u8} ({=u8}-byte hashes)",
+                                            mode,
+                                            mode + 1,
+                                        );
+                                        match settings::set_path_hash_mode(mode).await {
+                                            Ok(()) => {
+                                                // Refresh the RAM cache so the next flood
+                                                // TX picks up the new setting immediately.
+                                                crate::PATH_HASH_MODE
+                                                    .store(mode, core::sync::atomic::Ordering::Relaxed);
+                                                companion::Response::Ok
+                                            }
+                                            Err(e) => {
+                                                defmt::warn!(
+                                                    "companion: SET_PATH_HASH_MODE persist failed: {:?}",
+                                                    e
+                                                );
+                                                companion::Response::Error(
+                                                    companion::ErrorCode::Generic,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SetAutoaddConfig {
+                                    config,
+                                    max_hops,
+                                }) => {
+                                    // Clamp max_hops to 64, matching the reference
+                                    // `companion_radio` CMD_SET_AUTOADD_CONFIG handler.
+                                    let clamped = max_hops.min(64);
+                                    defmt::info!(
+                                        "companion: SET_AUTOADD_CONFIG config={=u8:#04x} max_hops={=u8}",
+                                        config, clamped,
+                                    );
+                                    match settings::set_autoadd_config(config, clamped).await {
+                                        Ok(()) => companion::Response::Ok,
+                                        Err(e) => {
+                                            defmt::warn!(
+                                                "companion: SET_AUTOADD_CONFIG persist failed: {:?}",
+                                                e
+                                            );
+                                            companion::Response::Error(
+                                                companion::ErrorCode::Generic,
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::GetAutoaddConfig) => {
+                                    let (config, max_hops) = settings::get_autoadd_config().await;
+                                    defmt::info!(
+                                        "companion: GET_AUTOADD_CONFIG config={=u8:#04x} max_hops={=u8}",
+                                        config, max_hops,
+                                    );
+                                    companion::Response::AutoaddConfig { config, max_hops }
+                                }
+
+                                Ok(companion::cmd::Command::FactoryReset) => {
+                                    defmt::warn!(
+                                        "companion: FACTORY_RESET requested — wiping store and rebooting"
+                                    );
+                                    // The wipe + sys_reset call takes a moment and never
+                                    // returns. Defer it until AFTER the OK frame has been
+                                    // queued so the phone sees the ack before disconnect.
+                                    pending_factory_reset = true;
+                                    companion::Response::Ok
+                                }
+
                                 Ok(companion::cmd::Command::SetOtherParams {
                                     manual_add_contacts,
                                     telemetry,
@@ -1416,6 +1513,41 @@ async fn nus_peripheral_loop<C>(
                                         &_s[.._sl]
                                     );
                                     sent_resp
+                                }
+
+                                Ok(companion::cmd::Command::SendBinaryReq { pub_key, req_data }) => {
+                                    let tag = crate::unix_now().unwrap_or(0);
+                                    let mut rd: heapless::Vec<u8, { crate::MAX_BINARY_REQ_PARAMS }> =
+                                        heapless::Vec::new();
+                                    let copy = req_data.len().min(crate::MAX_BINARY_REQ_PARAMS);
+                                    let _ = rd.extend_from_slice(&req_data[..copy]);
+                                    let contact = contacts::ContactStore::new()
+                                        .find_by_key(pub_key)
+                                        .await;
+                                    let is_flood = contact
+                                        .as_ref()
+                                        .map(|c| c.out_path_len == contacts::OUT_PATH_UNKNOWN)
+                                        .unwrap_or(true);
+                                    let est_timeout_ms =
+                                        if is_flood { 30_000u32 } else { 15_000u32 };
+                                    defmt::info!(
+                                        "companion: SEND_BINARY_REQ key={=[u8]:02x} tag={=u32:#010x} req_type={=u8:#04x} ({=usize}B)",
+                                        &pub_key[..6], tag,
+                                        rd.first().copied().unwrap_or(0),
+                                        rd.len(),
+                                    );
+                                    let _ = crate::TX_BINARY_REQ_CHANNEL.try_send(
+                                        crate::TxBinaryReq {
+                                            pub_key: *pub_key,
+                                            tag,
+                                            req_data: rd,
+                                        },
+                                    );
+                                    companion::Response::SentWithTag {
+                                        is_flood,
+                                        tag,
+                                        est_timeout_ms,
+                                    }
                                 }
 
                                 Ok(companion::cmd::Command::SendStatusRequest { pub_key }) => {
@@ -1739,6 +1871,25 @@ async fn nus_peripheral_loop<C>(
                                 embassy_time::Timer::after_millis(200).await;
                                 cortex_m::peripheral::SCB::sys_reset();
                             }
+                            if pending_factory_reset {
+                                // Proactively drop the BLE link BEFORE the wipe so the
+                                // phone can't reconnect mid-format and end up talking
+                                // to a half-erased store (matches the reference
+                                // `companion_radio` behaviour which disables the
+                                // serial interface for the same reason).
+                                //
+                                // The PACKET_OK response was already queued before
+                                // this flush runs; we give it 200 ms to drain first,
+                                // then force the disconnect, wait another short
+                                // moment for the link layer to tear down, and finally
+                                // call `wipe_and_reset` — which formats the KV store
+                                // and calls `cortex_m::SCB::sys_reset()`. Never
+                                // returns; the device comes up fresh on next boot.
+                                embassy_time::Timer::after_millis(200).await;
+                                gatt_conn.raw().disconnect();
+                                embassy_time::Timer::after_millis(100).await;
+                                super::kv::wipe_and_reset().await;
+                            }
 
                             // Persist an ADD_UPDATE_CONTACT payload to flash and push
                             // ContactStart/Contact/ContactEnd back into the outbox.
@@ -1904,6 +2055,26 @@ async fn nus_peripheral_loop<C>(
                                 stats: &status.stats,
                             },
                         );
+                    }
+
+                    PushEvent::BinaryResult(result) => {
+                        defmt::info!(
+                            "BLE: binary response tag={=u32:#010x} body={=usize}B, pushing 0x8C",
+                            result.tag,
+                            result.body.len(),
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::BinaryResponse {
+                                tag:  result.tag,
+                                body: &result.body,
+                            },
+                        );
+                    }
+
+                    PushEvent::ContactsFull => {
+                        defmt::info!("BLE: contacts store full, pushing 0x90");
+                        outbox_push(outbox, &companion::Response::ContactsFull);
                     }
 
                     PushEvent::AckEvent(ack) => {

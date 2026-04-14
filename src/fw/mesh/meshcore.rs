@@ -139,6 +139,16 @@ pub async fn run_meshcore_listener<'a>(
     let mut loaded_channels = load_channels().await;
     defmt::info!("MeshCore: loaded {} channel(s) from KV", loaded_channels.len());
 
+    // Load the persisted path hash mode into the RAM cache so every flood TX
+    // below picks up the user's preference without paying a flash read.
+    let path_mode = settings::get_path_hash_mode().await.min(2);
+    crate::PATH_HASH_MODE.store(path_mode, core::sync::atomic::Ordering::Relaxed);
+    defmt::info!(
+        "MeshCore: path_hash_mode={=u8} ({=u8}-byte per-hop hashes)",
+        path_mode,
+        path_mode + 1,
+    );
+
     let mut raw = [0u8; 255];
 
     loop {
@@ -176,6 +186,9 @@ pub async fn run_meshcore_listener<'a>(
         }
         while let Ok(req) = crate::TX_ADMIN_STATUS_CHANNEL.try_receive() {
             send_admin_status_request(&mut lora, req, identity).await;
+        }
+        while let Ok(req) = crate::TX_BINARY_REQ_CHANNEL.try_receive() {
+            send_binary_request(&mut lora, req, identity).await;
         }
         while let Ok(req) = crate::TX_DISCOVERY_CHANNEL.try_receive() {
             send_discovery_request(&mut lora, req, identity).await;
@@ -251,6 +264,11 @@ pub async fn run_meshcore_listener<'a>(
                 }
 
                 let frame = &raw[..len];
+
+                defmt::info!(
+                    "RX [{=usize}B {=i16}dBm]: {=[u8]:02x}",
+                    len, rssi, frame,
+                );
 
                 match meshcore::packet::deserialize(frame) {
                     Err(_) => {
@@ -545,22 +563,114 @@ async fn log_advert(
         name: ble_name.clone(),
     });
 
+    // Auto-add policy — matches the reference `companion_radio`:
+    //
+    //   if (manual_add_contacts & 1) == 0 {
+    //       auto-add ALL advert types;
+    //   } else if autoadd_config & (bit for this type) {
+    //       auto-add THIS type (subject to max_hops);
+    //   } else {
+    //       manual-add only — just push PUSH_CODE_NEW_ADVERT and return.
+    //   }
+    //
+    // `manual_add_contacts` comes from `settings::OtherParams` (CMD 0x26).
+    // `autoadd_config` / `autoadd_max_hops` come from settings via CMD 0x3A.
+    //
+    // Defaults when neither setting has been persisted yet: manual-add-only
+    // everywhere. This keeps the `MAX_SLOTS_PER_BUCKET` hash index from
+    // filling up in dense neighbourhoods on a fresh device; the user opts
+    // into auto-add explicitly via the companion app.
+    //
+    // The `update_path` call below runs regardless of auto-add policy —
+    // it's a no-op for pub_keys that aren't in the store, so unknown senders
+    // cost nothing and already-added contacts get their routing path refreshed.
+    const AUTO_ADD_OVERWRITE_OLDEST: u8 = 1 << 0; // 0x01 — evict on full
+    const AUTO_ADD_CHAT:     u8 = 1 << 1; // ADV_TYPE_CHAT     (1)
+    const AUTO_ADD_REPEATER: u8 = 1 << 2; // ADV_TYPE_REPEATER (2)
+    const AUTO_ADD_ROOM:     u8 = 1 << 3; // ADV_TYPE_ROOM     (3)
+    const AUTO_ADD_SENSOR:   u8 = 1 << 4; // ADV_TYPE_SENSOR   (4)
+
     let store = contacts::ContactStore::new();
 
-    // Persist contact to flash so GET_CONTACTS sync works.
-    let contact = contacts::Contact::from_advert(
-        a.pub_key,
-        name_str.as_bytes(),
-        a.role.to_u8(),
-        a.timestamp,
-        lat,
-        lon,
-    );
-    if let Err(e) = store.add_or_update(&contact).await {
-        defmt::warn!("contacts: add_or_update failed: {:?}", e);
+    let manual_add_only = settings::get_other_params()
+        .await
+        .map(|p| (p.manual_add_contacts & 1) != 0)
+        .unwrap_or(true); // default: manual add only
+
+    let (autoadd_config, autoadd_max_hops) = settings::get_autoadd_config().await;
+
+    // Decide whether this advert type is permitted to auto-add.
+    let type_allowed = if !manual_add_only {
+        true // manual mode off → reference auto-adds all types
+    } else {
+        let type_bit = match a.role.to_u8() {
+            1 => AUTO_ADD_CHAT,
+            2 => AUTO_ADD_REPEATER,
+            3 => AUTO_ADD_ROOM,
+            4 => AUTO_ADD_SENSOR,
+            _ => 0, // unknown type — never auto-add
+        };
+        type_bit != 0 && (autoadd_config & type_bit) != 0
+    };
+
+    // Hop-count limit: only applied when a limit is set (0 = no limit).
+    // Reference semantics (see BaseChatMesh.cpp `onAdvertRecv`):
+    //   "0 = no limit, 1 = direct (0 hops), N = up to N-1 hops"
+    // i.e. reject when `hops >= max_hops`. Direct packets have
+    // `path_len_byte == OUT_PATH_UNKNOWN` and count as 0 hops.
+    let hops = if path_len_byte == contacts::OUT_PATH_UNKNOWN {
+        0
+    } else {
+        (path_len_byte & 0x3F) as usize
+    };
+    let hops_allowed = autoadd_max_hops == 0 || hops < autoadd_max_hops as usize;
+
+    if type_allowed && hops_allowed {
+        // Honour the `AUTO_ADD_OVERWRITE_OLDEST` bit: if the store is already
+        // full and the bit is *not* set, refuse the add rather than evicting
+        // an existing contact. `add_or_update` would otherwise overwrite the
+        // oldest non-favourite slot unconditionally (ring-buffer behaviour).
+        //
+        // The existence check only matters when adding a brand-new contact;
+        // if `add_or_update` would have taken the update path for an existing
+        // entry the full-store condition doesn't apply. We detect "would
+        // update" cheaply via `find_by_key` before the full-store check.
+        let overwrite_ok = (autoadd_config & AUTO_ADD_OVERWRITE_OLDEST) != 0;
+        let already_known = store.find_by_key(&a.pub_key).await.is_some();
+        let store_full = !already_known
+            && !overwrite_ok
+            && store.count().await as usize >= contacts::MAX_CONTACTS;
+
+        if store_full {
+            defmt::info!(
+                "contacts: store full, AUTO_ADD_OVERWRITE_OLDEST not set — skipping auto-add of {=[u8]:02x}",
+                &a.pub_key[..6],
+            );
+            crate::CONTACTS_FULL_SIGNAL.signal(());
+        } else {
+            let contact = contacts::Contact::from_advert(
+                a.pub_key,
+                name_str.as_bytes(),
+                a.role.to_u8(),
+                a.timestamp,
+                lat,
+                lon,
+            );
+            match store.add_or_update(&contact).await {
+                Ok(_) => {}
+                Err(super::kv::KvError::StoreFull) => {
+                    // Hash bucket full (`MAX_SLOTS_PER_BUCKET` rejected the insert).
+                    // Matches the spirit of `PUSH_CODE_CONTACTS_FULL` even though
+                    // the trigger is different from the reference's slot-count cap.
+                    crate::CONTACTS_FULL_SIGNAL.signal(());
+                }
+                Err(e) => {
+                    defmt::warn!("contacts: add_or_update failed: {:?}", defmt::Debug2Format(&e));
+                }
+            }
+        }
     }
 
-    // Update routing path for this contact if it arrived via flood.
     if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
@@ -604,131 +714,172 @@ async fn log_txt_msg(
         return;
     }
 
-    // Scan ContactStore for a contact whose hash matches src_hash and can decrypt.
+    // Fast path: try the most recently hinted target contact (set by any
+    // outbound request function) via the O(1) prefix index, skipping the
+    // 300-slot linear scan. This is the common case for CLI replies right
+    // after we've sent a command to the same peer.
     let store = contacts::ContactStore::new();
-    let count = store.count().await;
-    let mut found: Option<(contacts::Contact, meshcore::payload::txt_msg::DecryptedTxtMsg, u32)> = None;
-
-    let mut found_count = 0u16;
-    for idx in 0..contacts::MAX_CONTACTS {
-        if found_count >= count { break; }
-        if let Some(c) = store.read_slot(idx).await {
-            found_count += 1;
-            if c.pub_key[0] != msg.src_hash { continue; }
-            if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_ok() {
-                if let Ok((dec, ack_hash)) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) {
-                    found = Some((c, dec, ack_hash));
-                    break;
+    let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
+    if let Some(hint_pk) = hint {
+        if hint_pk[0] == msg.src_hash {
+            if let Some(c) = store.find_by_key(&hint_pk).await {
+                if try_handle_txt_msg(lora, &c, &msg, rssi, path_len_byte, path, identity, &store)
+                    .await
+                    .is_ok()
+                {
+                    return;
                 }
             }
         }
     }
 
-    match found {
-        None => {
-            defmt::warn!("TxtMsg: received but could not decrypt (sender unknown or MAC fail) [{=i16}dBm]", rssi);
+    // Fallback: look up candidate slots via the `hi` hash-byte index. One
+    // flash `get` for the bucket + up to `MAX_SLOTS_PER_BUCKET` slot reads.
+    // For uncached contacts (the hint didn't match), this replaces what was
+    // previously a full-table linear scan.
+    let mut slots = [0u16; contacts::MAX_SLOTS_PER_BUCKET];
+    let n = store.hash_index_lookup(msg.src_hash, &mut slots).await;
+    for &slot in &slots[..n] {
+        let Some(c) = store.read_slot(slot as usize).await else { continue; };
+        if c.pub_key[0] != msg.src_hash { continue; }
+        if hint.map_or(false, |h| h == c.pub_key) { continue; }
+
+        if try_handle_txt_msg(lora, &c, &msg, rssi, path_len_byte, path, identity, &store)
+            .await
+            .is_ok()
+        {
+            return;
         }
-        Some((sender, dec, ack_hash)) => {
-            // Check if this is our own message echoed back by a flood relay.
-            // The shared secret is symmetric, so our own ciphertext decrypts
-            // successfully against the contact we sent it to.  Detect this by
-            // comparing the ack_hash against our pending outgoing ACK.
-            let is_own_echo = crate::PENDING_ACK.lock(|cell| {
-                cell.get().map_or(false, |pending| pending.ack_hash == ack_hash)
+    }
+
+    defmt::warn!(
+        "TxtMsg: received but could not decrypt (sender unknown or MAC fail) [{=i16}dBm]",
+        rssi,
+    );
+}
+
+/// Verify MAC, decrypt and dispatch a `PayloadType::TxtMsg` under the given
+/// contact's shared secret.
+///
+/// Returns `Ok(())` if this contact is the right peer (MAC verified and the
+/// message has been pushed to the queue / ACKed / displayed as appropriate).
+/// Returns `Err(meshcore::Error::MacMismatch)` when the contact is not the
+/// sender — the caller should try the next candidate.
+async fn try_handle_txt_msg(
+    lora:          &mut SimpleLoRa<'_>,
+    sender:        &contacts::Contact,
+    msg:           &meshcore::payload::txt_msg::TxtMsg,
+    rssi:          i16,
+    path_len_byte: u8,
+    path:          &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    identity:      &DeviceIdentity,
+    store:         &contacts::ContactStore,
+) -> Result<(), meshcore::Error> {
+    use meshcore::payload::txt_msg;
+
+    txt_msg::verify_mac(&identity.sec_key, &sender.pub_key, msg)?;
+    let (dec, ack_hash) = txt_msg::decrypt(&identity.sec_key, &sender.pub_key, msg)?;
+
+    // Check if this is our own message echoed back by a flood relay. The
+    // shared secret is symmetric, so our own ciphertext decrypts successfully
+    // against the contact we sent it to. Detect via pending outgoing ACK.
+    let is_own_echo = crate::PENDING_ACK.lock(|cell| {
+        cell.get().map_or(false, |pending| pending.ack_hash == ack_hash)
+    });
+    if is_own_echo {
+        defmt::debug!(
+            "TxtMsg: ack_hash={=u32:#010x} matches PENDING_ACK — ignoring own echo",
+            ack_hash,
+        );
+        return Ok(());
+    }
+
+    let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
+    defmt::info!(
+        "TxtMsg from {=[u8]:02x} [{=i16}dBm ts={=u32} type={=u8}]: {=str}",
+        &sender.pub_key[..6], rssi, dec.timestamp, dec.txt_type(), text,
+    );
+
+    // Update the stored routing path so replies can go direct.
+    if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
+        let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
+        let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
+        path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
+        if let Err(e) = store.update_path(&sender.pub_key, path_len_byte, &path_buf).await {
+            defmt::warn!("TxtMsg: path update failed: {:?}", e);
+        }
+    }
+
+    // Push plain and CLI messages to the message queue so the companion app
+    // gets them via SYNC_NEXT_MESSAGE. Signed (type 2) is not yet handled.
+    let is_plain = dec.txt_type() == txt_msg::TXT_TYPE_PLAIN;
+    let is_cli   = dec.txt_type() == txt_msg::TXT_TYPE_CLI_DATA;
+
+    if is_plain || is_cli {
+        let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+        let _ = text_bytes.extend_from_slice(
+            &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
+        );
+        let mut sender_prefix = [0u8; 6];
+        sender_prefix.copy_from_slice(&sender.pub_key[..6]);
+        msg_queue::push(&msg_queue::ReceivedMsg {
+            kind:          msg_queue::MsgKind::Private,
+            sender_prefix,
+            channel_idx:   0,
+            path_len:      path_len_byte,
+            text_type:     dec.txt_type(),
+            timestamp:     dec.timestamp,
+            rssi,
+            text:          text_bytes,
+        }).await;
+        crate::MESSAGES_WAITING_SIGNAL.signal(());
+    }
+
+    // Only PLAIN messages get an ACK, a display update, and an LED blink.
+    // CLI replies from a repeater are consumed by the companion app only —
+    // the repeater does not ACK our requests and does not expect one back.
+    if is_plain {
+        send_ack(lora, &sender.pub_key, path_len_byte, path, ack_hash).await;
+
+        let display_name = {
+            let name_end = sender.name.iter().position(|&b| b == 0).unwrap_or(32);
+            let name_str = core::str::from_utf8(&sender.name[..name_end]).unwrap_or("");
+            if name_str.is_empty() {
+                let mut hex: heapless::String<32> = heapless::String::new();
+                for &b in &sender.pub_key[..4] {
+                    let _ = hex.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('?'));
+                    let _ = hex.push(char::from_digit((b & 0xF) as u32, 16).unwrap_or('?'));
+                }
+                hex
+            } else {
+                let mut s: heapless::String<32> = heapless::String::new();
+                let _ = s.push_str(name_str);
+                s
+            }
+        };
+        let mut text_str: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }> =
+            heapless::String::new();
+        let _ = text_str.push_str(text);
+        crate::LAST_PM.lock(|cell| {
+            *cell.borrow_mut() = Some(crate::LastPm {
+                sender_name: display_name.clone(),
+                text: text_str.clone(),
+                timestamp: dec.timestamp,
+                rssi,
             });
-            if is_own_echo {
-                defmt::debug!("TxtMsg: ack_hash={=u32:#010x} matches PENDING_ACK — ignoring own echo", ack_hash);
-                return;
-            }
+        });
+        crate::PM_SIGNAL.signal(());
+        crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
 
-            let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
-            defmt::info!(
-                "TxtMsg from {=[u8]:02x} [{=i16}dBm ts={=u32} type={=u8}]: {=str}",
-                &sender.pub_key[..6], rssi, dec.timestamp, dec.txt_type(), text,
+        if !crate::BLE_CONNECTED.load(core::sync::atomic::Ordering::Relaxed) {
+            crate::fw::led::set_led(
+                &crate::fw::led::LED_BLUE,
+                crate::fw::led::LedState::Blink,
             );
-
-            // Update the stored routing path so replies can go direct.
-            if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
-                let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
-                let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
-                path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
-                if let Err(e) = store.update_path(&sender.pub_key, path_len_byte, &path_buf).await {
-                    defmt::warn!("TxtMsg: path update failed: {:?}", e);
-                }
-            }
-
-            // Push plain and CLI messages to the message queue so the companion
-            // app gets them via SYNC_NEXT_MESSAGE. Signed (type 2) is not yet handled.
-            let is_plain = dec.txt_type() == txt_msg::TXT_TYPE_PLAIN;
-            let is_cli   = dec.txt_type() == txt_msg::TXT_TYPE_CLI_DATA;
-
-            if is_plain || is_cli {
-                let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
-                let _ = text_bytes.extend_from_slice(
-                    &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
-                );
-                let mut sender_prefix = [0u8; 6];
-                sender_prefix.copy_from_slice(&sender.pub_key[..6]);
-                msg_queue::push(&msg_queue::ReceivedMsg {
-                    kind:          msg_queue::MsgKind::Private,
-                    sender_prefix,
-                    channel_idx:   0,
-                    path_len:      path_len_byte,
-                    text_type:     dec.txt_type(),
-                    timestamp:     dec.timestamp,
-                    rssi,
-                    text:          text_bytes,
-                }).await;
-                crate::MESSAGES_WAITING_SIGNAL.signal(());
-            }
-
-            // Only PLAIN messages get an ACK, a display update, and an LED blink.
-            // CLI replies from a repeater are consumed by the companion app only —
-            // the repeater does not ACK our requests and does not expect one back.
-            if is_plain {
-                send_ack(lora, &sender.pub_key, path_len_byte, path, ack_hash).await;
-
-                // Update the display.
-                let display_name = {
-                    let name_end = sender.name.iter().position(|&b| b == 0).unwrap_or(32);
-                    let name_str = core::str::from_utf8(&sender.name[..name_end]).unwrap_or("");
-                    if name_str.is_empty() {
-                        let mut hex: heapless::String<32> = heapless::String::new();
-                        for &b in &sender.pub_key[..4] {
-                            let _ = hex.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('?'));
-                            let _ = hex.push(char::from_digit((b & 0xF) as u32, 16).unwrap_or('?'));
-                        }
-                        hex
-                    } else {
-                        let mut s: heapless::String<32> = heapless::String::new();
-                        let _ = s.push_str(name_str);
-                        s
-                    }
-                };
-                let mut text_str: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }> =
-                    heapless::String::new();
-                let _ = text_str.push_str(text);
-                crate::LAST_PM.lock(|cell| {
-                    *cell.borrow_mut() = Some(crate::LastPm {
-                        sender_name: display_name.clone(),
-                        text: text_str.clone(),
-                        timestamp: dec.timestamp,
-                        rssi,
-                    });
-                });
-                crate::PM_SIGNAL.signal(());
-                crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
-
-                // Blue LED blink when BLE is not connected.
-                if !crate::BLE_CONNECTED.load(core::sync::atomic::Ordering::Relaxed) {
-                    crate::fw::led::set_led(
-                        &crate::fw::led::LED_BLUE,
-                        crate::fw::led::LedState::Blink,
-                    );
-                }
-            }
         }
     }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +902,27 @@ fn flood_route(payload_type_u8: u8, payload: &[u8]) -> (meshcore::packet::RouteT
         }
         None => (RouteType::Flood, 0),
     })
+}
+
+/// `path_len_byte` to use for a freshly-originated flood packet (0 hops).
+///
+/// Encodes the currently configured `path_hash_mode` as the upper two bits
+/// (`hash_size_code`), with `hash_count = 0`. Relays see this and append
+/// their hop hashes in the declared byte width. Modes:
+///
+/// - 0 → 1-byte per-hop hashes (legacy, `path_len_byte = 0x00`)
+/// - 1 → 2-byte per-hop hashes (`path_len_byte = 0x40`)
+/// - 2 → 3-byte per-hop hashes (`path_len_byte = 0x80`)
+///
+/// The value comes from the [`crate::PATH_HASH_MODE`] atomic, which is
+/// populated at boot from the persisted setting and refreshed by the BLE
+/// `CMD_SET_PATH_HASH_MODE` handler. Reading an atomic on every TX is free.
+fn flood_path_len_byte() -> u8 {
+    let mode = crate::PATH_HASH_MODE.load(core::sync::atomic::Ordering::Relaxed);
+    // Defensive clamp: mode 3 is reserved, treat as 2 (3-byte hashes) to avoid
+    // emitting a packet with a path_len_byte that the decoder will reject.
+    let code = mode.min(2) & 0x03;
+    code << 6
 }
 
 // ---------------------------------------------------------------------------
@@ -822,7 +994,7 @@ async fn send_grp_txt(
         route,
         version:        0,
         transport_code,
-        path_len_byte:  0,
+        path_len_byte:  flood_path_len_byte(),
         path:           heapless::Vec::new(),
         payload:        msg_payload,
     };
@@ -864,6 +1036,10 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
 
+    // Hint for the RX fast path so the CLI reply (or plain-chat reply) lands
+    // on a single O(1) find_by_key instead of a 300-slot linear scan.
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.recipient_pub_key)));
+
     // Look up the recipient contact for their stored path.
     let contact = contacts::ContactStore::new()
         .find_by_key(&req.recipient_pub_key)
@@ -876,7 +1052,7 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
             let _ = pv.extend_from_slice(&c.out_path[..actual]);
             (RouteType::Direct, c.out_path_len, pv)
         }
-        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
     };
 
     let (encrypted, expected_ack) = match txt_msg::encrypt(
@@ -1011,7 +1187,7 @@ pub async fn send_advert(
         route,
         version:        0,
         transport_code,
-        path_len_byte:  0,
+        path_len_byte:  flood_path_len_byte(),
         path:           heapless::Vec::new(),
         payload:        msg_payload,
     };
@@ -1085,7 +1261,7 @@ pub async fn send_pm(
         route,
         version:        0,
         transport_code,
-        path_len_byte:  0,
+        path_len_byte:  flood_path_len_byte(),
         path:           heapless::Vec::new(),
         payload:        msg_payload,
     };
@@ -1136,7 +1312,7 @@ async fn send_ack(
             let _ = pv.extend_from_slice(&c.out_path[..actual]);
             (RouteType::Direct, c.out_path_len, pv)
         }
-        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
     };
     let (route, transport_code) = match route {
         RouteType::Flood => flood_route(PayloadType::Ack.to_u8(), &payload),
@@ -1293,7 +1469,7 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
             let _ = pv.extend_from_slice(&c.out_path[..actual]);
             (RouteType::Direct, c.out_path_len, pv)
         }
-        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
     };
 
     let (route, transport_code) = match route {
@@ -1366,7 +1542,7 @@ async fn send_status_request(
             let _ = pv.extend_from_slice(&c.out_path[..actual]);
             (RouteType::Direct, c.out_path_len, pv)
         }
-        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
     };
     let (route, transport_code) = match route {
         RouteType::Flood => flood_route(PayloadType::AnonReq.to_u8(), &payload),
@@ -1462,7 +1638,7 @@ async fn send_telem_request(
             let _ = pv.extend_from_slice(&c.out_path[..actual]);
             (RouteType::Direct, c.out_path_len, pv)
         }
-        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
     };
 
     let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
@@ -1613,7 +1789,7 @@ async fn send_admin_status_request(
             let _ = pv.extend_from_slice(&c.out_path[..actual]);
             (RouteType::Direct, c.out_path_len, pv)
         }
-        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
     };
 
     let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
@@ -1642,13 +1818,122 @@ async fn send_admin_status_request(
                 crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
             } else {
                 defmt::info!(
-                    "Admin status req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B)",
-                    &req.pub_key[..6], req.tag, len,
+                    "Admin status req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B) frame={=[u8]:02x}",
+                    &req.pub_key[..6], req.tag, len, &frame[..len],
                 );
             }
         }
         Err(e) => {
             defmt::warn!("send_admin_status_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic binary request transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit a generic `PAYLOAD_TYPE_REQ` with an opaque body —
+/// used by the companion protocol's `SEND_BINARY_REQ` (0x32) pipe for
+/// `REQ_TYPE_GET_NEIGHBOURS`, `REQ_TYPE_GET_ACCESS_LIST`, `REQ_TYPE_GET_OWNER_INFO`,
+/// and any future admin request type.
+///
+/// `req.req_data[0]` is the `REQ_TYPE_*` discriminant; the remaining bytes
+/// are request-type-specific parameters. The plaintext layout produced is:
+/// ```text
+/// [tag:4 LE][req_type:1][params...]
+/// ```
+/// which matches the C++ `BaseChatMesh::sendRequest(req_data, req_data_len)`
+/// path. `req_type` is stuffed into the txt_msg `flags` byte by decomposing
+/// it into `(attempt, txt_type)` such that `(attempt & 3) | (txt_type << 2) == req_type`.
+async fn send_binary_request(
+    lora:     &mut SimpleLoRa<'_>,
+    req:      crate::TxBinaryReq,
+    identity: &DeviceIdentity,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+    use meshcore::payload::txt_msg;
+
+    if req.req_data.is_empty() {
+        defmt::warn!("send_binary_req: empty req_data — dropping");
+        return;
+    }
+
+    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
+
+    let req_type = req.req_data[0];
+    let params   = &req.req_data[1..];
+    let attempt  = req_type & 0x03;
+    let txt_type = req_type >> 2;
+
+    let (encrypted, _ack_hash) = match txt_msg::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &req.pub_key,
+        req.tag,
+        txt_type,
+        attempt,
+        params,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            defmt::warn!("send_binary_req: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; meshcore::MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = txt_msg::serialize(&encrypted, &mut payload_buf, &mut payload_len) {
+        defmt::warn!("send_binary_req: serialize failed: {:?}", defmt::Debug2Format(&e));
+        return;
+    }
+
+    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
+    };
+
+    let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
+    let _ = payload_vec.extend_from_slice(&payload_buf[..payload_len]);
+
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::Req.to_u8(), &payload_vec),
+        r => (r, 0),
+    };
+    let msg = Message {
+        payload_type:   PayloadType::Req,
+        route,
+        version:        0,
+        transport_code,
+        path_len_byte,
+        path:           path_bytes,
+        payload:        payload_vec,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(Some(req.tag)));
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_binary_req: TX failed: {:?}", e);
+                crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
+            } else {
+                defmt::info!(
+                    "Binary req sent to {=[u8]:02x} tag={=u32:#010x} req_type={=u8:#04x} params={=usize}B ({=usize}B) frame={=[u8]:02x}",
+                    &req.pub_key[..6], req.tag, req_type, params.len(), len, &frame[..len],
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_binary_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
         }
     }
 }
@@ -1719,7 +2004,7 @@ async fn send_discovery_request(
         route,
         version:        0,
         transport_code,
-        path_len_byte:  0,
+        path_len_byte:  flood_path_len_byte(),
         path:           heapless::Vec::new(),
         payload:        payload_vec,
     };
@@ -1850,16 +2135,13 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
         }
     }
 
-    // Fallback: scan all stored contacts as the potential sender.
-    let count = store.count().await;
-    let mut found_count = 0u16;
-    for idx in 0..contacts::MAX_CONTACTS {
-        if found_count >= count { break; }
-        let Some(c) = store.read_slot(idx).await else { continue; };
-        found_count += 1;
-
+    // Fallback: look up candidate slots via the `hi` hash-byte index instead
+    // of a 300-slot linear scan.
+    let mut slots = [0u16; contacts::MAX_SLOTS_PER_BUCKET];
+    let n = store.hash_index_lookup(msg.src_hash, &mut slots).await;
+    for &slot in &slots[..n] {
+        let Some(c) = store.read_slot(slot as usize).await else { continue; };
         if c.pub_key[0] != msg.src_hash { continue; }
-        // Skip the hint — already tried above.
         if hint.map_or(false, |h| h == c.pub_key) { continue; }
 
         if try_dispatch_response(&c, &msg, identity).await.is_ok() {
@@ -1991,6 +2273,45 @@ async fn try_dispatch_response(
         }
     }
 
+    // Pending generic binary request (CMD_SEND_BINARY_REQ / PUSH_CODE_BINARY_RESPONSE).
+    // Response body starts at plaintext[4]; in our txt_msg::decrypt view that's
+    // dec.flags (first body byte) followed by dec.text (rest, trailing zeros stripped).
+    // We reassemble the padded body up to the AES block boundary so neighbours/ACL
+    // entries that happen to end in zero bytes aren't truncated.
+    let pending_binary = crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.get());
+    if let Some(binary_tag) = pending_binary {
+        if dec.timestamp == binary_tag {
+            crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
+
+            // msg.data is the raw ciphertext; length is a multiple of AES block size.
+            // Body length = total plaintext - timestamp(4) = msg.data.len() - 4.
+            let body_len = msg.data.len().saturating_sub(4);
+            let mut body: heapless::Vec<u8, { crate::MAX_BINARY_RESP_BODY }> = heapless::Vec::new();
+            if body_len > 0 {
+                let _ = body.push(dec.flags);
+                let tail_need = body_len - 1;
+                let tail_copy = dec.text.len().min(tail_need);
+                let _ = body.extend_from_slice(&dec.text[..tail_copy]);
+                // Zero-pad the rest so the block-aligned length is preserved.
+                while body.len() < body_len.min(crate::MAX_BINARY_RESP_BODY) {
+                    let _ = body.push(0);
+                }
+            }
+
+            defmt::info!(
+                "Response recv: BINARY from {=[u8]:02x} tag={=u32:#010x} body={=usize}B",
+                &c.pub_key[..6], binary_tag, body.len(),
+            );
+
+            let _ = crate::BINARY_RESULT_CHANNEL.try_send(crate::BinaryResult {
+                pub_key,
+                tag: binary_tag,
+                body,
+            });
+            return Ok(());
+        }
+    }
+
     // Pending telemetry request (tag-based match).
     let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
     if let Some(telem_tag) = pending_telem {
@@ -2097,14 +2418,12 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
         }
     }
 
-    // Fallback: scan all contacts looking for a candidate with matching src_hash.
-    let count = store.count().await;
-    let mut found_count = 0u16;
-    for idx in 0..contacts::MAX_CONTACTS {
-        if found_count >= count { break; }
-        let Some(c) = store.read_slot(idx).await else { continue; };
-        found_count += 1;
-
+    // Fallback: look up candidate slots via the `hi` hash-byte index instead
+    // of a 300-slot linear scan.
+    let mut slots = [0u16; contacts::MAX_SLOTS_PER_BUCKET];
+    let n = store.hash_index_lookup(msg.src_hash, &mut slots).await;
+    for &slot in &slots[..n] {
+        let Some(c) = store.read_slot(slot as usize).await else { continue; };
         if c.pub_key[0] != msg.src_hash { continue; }
         if hint.map_or(false, |h| h == c.pub_key) { continue; }
 
@@ -2198,6 +2517,62 @@ async fn try_dispatch_path(
                 let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult {
                     pub_key,
                     stats,
+                });
+                return Ok(());
+            }
+        }
+
+        // Pending generic binary request (CMD_SEND_BINARY_REQ). Path-decrypted
+        // extras preserve trailing zero bytes, so we can forward the body verbatim.
+        let pending_binary = crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.get());
+        if let (Some(binary_tag), true) = (pending_binary, dec.extra.len() >= 4) {
+            let resp_tag = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+            if resp_tag == binary_tag {
+                crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
+
+                let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+                pub_key.copy_from_slice(&c.pub_key);
+
+                let mut body: heapless::Vec<u8, { crate::MAX_BINARY_RESP_BODY }> = heapless::Vec::new();
+                let n = (dec.extra.len() - 4).min(crate::MAX_BINARY_RESP_BODY);
+                let _ = body.extend_from_slice(&dec.extra[4..4 + n]);
+
+                defmt::info!(
+                    "Path recv: BINARY from {=[u8]:02x} tag={=u32:#010x} body={=usize}B",
+                    &c.pub_key[..6], binary_tag, body.len(),
+                );
+
+                let _ = crate::BINARY_RESULT_CHANNEL.try_send(crate::BinaryResult {
+                    pub_key,
+                    tag: binary_tag,
+                    body,
+                });
+                return Ok(());
+            }
+        }
+
+        // Pending telemetry request (tag = extra[0..4]). Body is CayenneLPP.
+        let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
+        if let (Some(telem_tag), true) = (pending_telem, dec.extra.len() >= 4) {
+            let resp_tag = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+            if resp_tag == telem_tag {
+                crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
+
+                let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+                pub_key.copy_from_slice(&c.pub_key);
+
+                let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
+                let n = (dec.extra.len() - 4).min(176);
+                let _ = lpp.extend_from_slice(&dec.extra[4..4 + n]);
+
+                defmt::info!(
+                    "Path recv: TELEM from {=[u8]:02x} tag={=u32:#010x} lpp={=usize}B",
+                    &c.pub_key[..6], telem_tag, lpp.len(),
+                );
+
+                let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult {
+                    pub_key,
+                    lpp,
                 });
                 return Ok(());
             }
