@@ -401,6 +401,20 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.write_register(Register::RxGain, &[value]).ok();
     }
 
+    /// Put the radio into standby mode (STDBY_RC, ~600 µA).
+    pub fn standby(&mut self) {
+        self.lora.wait_on_busy().ok();
+        self.lora.set_standby(sx126x::op::StandbyConfig::StbyRc).ok();
+    }
+
+    /// Resume continuous RX after standby.
+    pub fn resume_rx(&mut self) {
+        self.lora.wait_on_busy().ok();
+        self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
+        self.apply_rx_gain();
+        self.lora.rf_switch_rx();
+    }
+
     /// Wait for the chip to enter RX mode, polling every 50 ms for up to 500 ms.
     /// Returns true if RX mode is confirmed.
     pub async fn ensure_rx(&mut self) -> bool {

@@ -541,11 +541,122 @@ async fn nus_peripheral_loop<C>(
                 Err(e) => defmt::warn!("settings: timezone persist failed: {:?}", e),
             }
         }
+        // Persist LoRa radio params when changed from the menu.
+        if crate::LORA_RADIO_CHANGED_SIGNAL.signaled() {
+            crate::LORA_RADIO_CHANGED_SIGNAL.reset();
+            use core::sync::atomic::Ordering::Relaxed;
+            radio_params.freq_hz = crate::LORA_FREQ_HZ.load(Relaxed);
+            radio_params.bw_hz = crate::LORA_BW_HZ.load(Relaxed);
+            radio_params.sf = crate::LORA_SF.load(Relaxed);
+            radio_params.cr = crate::LORA_CR.load(Relaxed);
+            radio_params.tx_power = crate::LORA_TX_POWER.load(Relaxed);
+            radio_params.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
+            match settings::set_radio_params(radio_params).await {
+                Ok(()) => defmt::info!(
+                    "settings: radio params persisted from menu (takes effect on reboot)"
+                ),
+                Err(e) => defmt::warn!("settings: radio params persist failed: {:?}", e),
+            }
+        }
+        // Persist OtherParams fields when changed from the menu.
+        if crate::OTHER_PARAMS_CHANGED_SIGNAL.signaled() {
+            crate::OTHER_PARAMS_CHANGED_SIGNAL.reset();
+            use core::sync::atomic::Ordering::Relaxed;
+            other_params.advert_loc_policy =
+                crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
+            other_params.multi_acks = crate::MULTI_ACKS.load(Relaxed);
+            let share = crate::TELEMETRY_SHARE.load(Relaxed);
+            let mode: u8 = if share { 2 } else { 0 };
+            other_params.telemetry_mode_base = mode;
+            other_params.telemetry_mode_loc  = mode;
+            other_params.telemetry_mode_env  = mode;
+            match settings::set_other_params(other_params).await {
+                Ok(()) => defmt::info!("settings: other_params persisted from menu"),
+                Err(e) => defmt::warn!("settings: other_params persist failed: {:?}", e),
+            }
+        }
+        // Persist advert scheduling when changed from the menu.
+        if crate::ADVERT_CHANGED_SIGNAL.signaled() {
+            crate::ADVERT_CHANGED_SIGNAL.reset();
+            use core::sync::atomic::Ordering::Relaxed;
+            let cfg = settings::AdvertConfig {
+                enabled:        crate::ADVERT_ENABLED.load(Relaxed),
+                interval_hours: crate::ADVERT_INTERVAL_HOURS.load(Relaxed),
+            };
+            match settings::set_advert_config(cfg).await {
+                Ok(()) => defmt::info!(
+                    "settings: advert_config persisted (enabled={=bool} interval={=u8}h)",
+                    cfg.enabled, cfg.interval_hours
+                ),
+                Err(e) => defmt::warn!("settings: advert_config persist failed: {:?}", e),
+            }
+        }
+        // Persist PATH_HASH_MODE when changed from the menu.
+        if crate::PATH_HASH_CHANGED_SIGNAL.signaled() {
+            crate::PATH_HASH_CHANGED_SIGNAL.reset();
+            let mode = crate::fw::mesh::PATH_HASH_MODE
+                .load(core::sync::atomic::Ordering::Relaxed);
+            match settings::set_path_hash_mode(mode).await {
+                Ok(()) => defmt::info!("settings: path_hash_mode={=u8} persisted", mode),
+                Err(e) => defmt::warn!("settings: path_hash persist failed: {:?}", e),
+            }
+        }
+        // Factory reset: wipe the entire KV store and reboot.
+        if crate::FACTORY_RESET_SIGNAL.signaled() {
+            crate::FACTORY_RESET_SIGNAL.reset();
+            defmt::info!("settings: factory reset requested — wiping KV and rebooting");
+            super::kv::wipe_and_reset().await;
+        }
         // Clear all contacts when requested from the menu.
         if crate::CONTACT_RESET_SIGNAL.signaled() {
             crate::CONTACT_RESET_SIGNAL.reset();
             defmt::info!("settings: clearing all contacts");
             super::contacts::ContactStore::new().clear_all().await;
+        }
+
+        // Persist LoRa-enabled flag when changed from the menu.
+        if crate::LORA_DISABLED_CHANGED.signaled() {
+            crate::LORA_DISABLED_CHANGED.reset();
+            let enabled = !crate::LORA_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
+            match settings::set_lora_enabled(enabled).await {
+                Ok(()) => defmt::info!("settings: lora_enabled={=bool} persisted", enabled),
+                Err(e) => defmt::warn!("settings: lora_enabled persist failed: {:?}", e),
+            }
+        }
+        // Persist BLE-enabled flag when changed from the menu.
+        if crate::BLE_DISABLED_CHANGED.signaled() {
+            crate::BLE_DISABLED_CHANGED.reset();
+            let enabled = !crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
+            match settings::set_ble_enabled(enabled).await {
+                Ok(()) => defmt::info!("settings: ble_enabled={=bool} persisted", enabled),
+                Err(e) => defmt::warn!("settings: ble_enabled persist failed: {:?}", e),
+            }
+        }
+        // Clear all BLE bonds when requested from the menu.
+        if crate::CLEAR_BONDS_SIGNAL.signaled() {
+            crate::CLEAR_BONDS_SIGNAL.reset();
+            let _ = super::bonds::BOND_CMD_CHANNEL
+                .try_send(super::bonds::BondCmd::ClearAll);
+            // bond_task will wipe the store and reboot — just wait.
+            embassy_time::Timer::after_secs(5).await;
+        }
+        // When BLE is disabled, stop advertising and wait until re-enabled.
+        if crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed) {
+            defmt::info!("BLE: disabled — waiting for re-enable");
+            crate::BLE_CONNECTED.store(false, core::sync::atomic::Ordering::Relaxed);
+            loop {
+                crate::BLE_DISABLED_CHANGED.wait().await;
+                crate::BLE_DISABLED_CHANGED.reset();
+                let enabled = !crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
+                match settings::set_ble_enabled(enabled).await {
+                    Ok(()) => defmt::info!("settings: ble_enabled={=bool} persisted", enabled),
+                    Err(e) => defmt::warn!("settings: ble_enabled persist failed: {:?}", e),
+                }
+                if enabled {
+                    defmt::info!("BLE: re-enabled — resuming advertising");
+                    break;
+                }
+            }
         }
 
         defmt::debug!("BLE: advertising…");
@@ -1042,6 +1153,7 @@ async fn nus_peripheral_loop<C>(
                                         super::meshcore::AdvertMode::ZeroHop
                                     };
                                     crate::SEND_ADVERT_SIGNAL.signal(advert_mode);
+                                    crate::TX_WAKEUP.signal(());
                                     defmt::info!(
                                         "companion: SEND_SELF_ADVERT mode={=u8} → signalled",
                                         mode
@@ -1204,6 +1316,7 @@ async fn nus_peripheral_loop<C>(
                                                 },
                                             ) {
                                                 Ok(()) => {
+                                                    crate::TX_WAKEUP.signal(());
                                                     // Compute expected_ack = SHA-256([ts:4][flags:1][text] || sender_pk)[0..4]
                                                     let flags = (attempt & 3) | (txt_type << 2);
                                                     let text_len = text.len().min(meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE);
@@ -1263,6 +1376,7 @@ async fn nus_peripheral_loop<C>(
                                         text: v,
                                     }) {
                                         Ok(()) => {
+                                            crate::TX_WAKEUP.signal(());
                                             defmt::info!(
                                                 "companion: SEND_CHANNEL_MSG ch={=u8} → queued for TX",
                                                 channel
@@ -1530,6 +1644,7 @@ async fn nus_peripheral_loop<C>(
                                         flags,
                                         path: path_vec,
                                     });
+                                    crate::TX_WAKEUP.signal(());
                                     let sent_resp = companion::Response::SentWithTag {
                                         is_flood: false,
                                         tag,
@@ -1573,6 +1688,7 @@ async fn nus_peripheral_loop<C>(
                                             req_data: rd,
                                         },
                                     );
+                                    crate::TX_WAKEUP.signal(());
                                     companion::Response::SentWithTag {
                                         is_flood,
                                         tag,
@@ -1594,6 +1710,7 @@ async fn nus_peripheral_loop<C>(
                                             pub_key: *pub_key,
                                             tag,
                                         });
+                                    crate::TX_WAKEUP.signal(());
                                     companion::Response::Ok
                                 }
 
@@ -1616,6 +1733,7 @@ async fn nus_peripheral_loop<C>(
                                         pub_key: *pub_key,
                                         password: pw_vec,
                                     });
+                                    crate::TX_WAKEUP.signal(());
                                     companion::Response::SentWithTag {
                                         is_flood: false,
                                         tag,
@@ -1713,6 +1831,7 @@ async fn nus_peripheral_loop<C>(
                                     );
                                     let _ = crate::TX_TELEM_REQ_CHANNEL
                                         .try_send(crate::TxTelemReq { pub_key: key, tag });
+                                    crate::TX_WAKEUP.signal(());
                                     companion::Response::SentWithTag {
                                         is_flood,
                                         tag,
@@ -1768,6 +1887,7 @@ async fn nus_peripheral_loop<C>(
                                     );
                                     let _ = crate::TX_DISCOVERY_CHANNEL
                                         .try_send(crate::TxDiscoveryReq { pub_key: key, tag });
+                                    crate::TX_WAKEUP.signal(());
                                     // Discovery always floods; use a generous timeout.
                                     companion::Response::SentWithTag {
                                         is_flood: true,
@@ -1812,6 +1932,7 @@ async fn nus_peripheral_loop<C>(
                                     let _ = v.extend_from_slice(payload);
                                     let _ = crate::TX_CONTROL_DATA_CHANNEL
                                         .try_send(crate::TxControlData { payload: v });
+                                    crate::TX_WAKEUP.signal(());
                                     companion::Response::Ok
                                 }
 
@@ -1868,6 +1989,14 @@ async fn nus_peripheral_loop<C>(
                             }
                             if let Some(new_radio) = pending_radio {
                                 radio_params = new_radio;
+                                use core::sync::atomic::Ordering::Relaxed;
+                                crate::LORA_FREQ_HZ.store(radio_params.freq_hz, Relaxed);
+                                crate::LORA_BW_HZ.store(radio_params.bw_hz, Relaxed);
+                                crate::LORA_SF.store(radio_params.sf, Relaxed);
+                                crate::LORA_CR.store(radio_params.cr, Relaxed);
+                                crate::LORA_TX_POWER.store(radio_params.tx_power, Relaxed);
+                                crate::LORA_CLIENT_REPEAT
+                                    .store(radio_params.client_repeat, Relaxed);
                                 match settings::set_radio_params(radio_params).await {
                                     Ok(()) => defmt::info!(
                                         "companion: radio params persisted (takes effect on reboot)"
@@ -1889,6 +2018,15 @@ async fn nus_peripheral_loop<C>(
                             }
                             if let Some(new_other) = pending_other {
                                 other_params = new_other;
+                                use core::sync::atomic::Ordering::Relaxed;
+                                crate::ADVERT_LOC_POLICY
+                                    .store(other_params.advert_loc_policy != 0, Relaxed);
+                                let ma = if other_params.multi_acks == 0 {
+                                    1
+                                } else {
+                                    other_params.multi_acks.min(2)
+                                };
+                                crate::MULTI_ACKS.store(ma, Relaxed);
                                 match settings::set_other_params(other_params).await {
                                     Ok(()) => defmt::debug!("companion: other params persisted"),
                                     Err(e) => defmt::warn!(

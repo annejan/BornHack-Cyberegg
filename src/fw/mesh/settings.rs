@@ -214,6 +214,79 @@ pub async fn set_position(p: Position) -> Result<(), kv::KvError> {
 }
 
 // ---------------------------------------------------------------------------
+// LoRa enabled  (menu only — not part of the companion protocol)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted LoRa enabled flag.  Returns `true` (enabled) if not stored.
+pub async fn get_lora_enabled() -> bool {
+    let mut b = [0u8; 1];
+    match ns().get("lora_en", &mut b).await {
+        Ok(1) => b[0] != 0,
+        _ => true,
+    }
+}
+
+/// Persist the LoRa enabled flag to flash.
+pub async fn set_lora_enabled(enabled: bool) -> Result<(), kv::KvError> {
+    ns().set("lora_en", &[enabled as u8], true).await
+}
+
+// ---------------------------------------------------------------------------
+// BLE enabled  (menu only — not part of the companion protocol)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted BLE enabled flag.  Returns `true` (enabled) if not stored.
+pub async fn get_ble_enabled() -> bool {
+    let mut b = [0u8; 1];
+    match ns().get("ble_en", &mut b).await {
+        Ok(1) => b[0] != 0,
+        _ => true,
+    }
+}
+
+/// Persist the BLE enabled flag to flash.
+pub async fn set_ble_enabled(enabled: bool) -> Result<(), kv::KvError> {
+    ns().set("ble_en", &[enabled as u8], true).await
+}
+
+// ---------------------------------------------------------------------------
+// Advert scheduling  (menu only — not part of the companion protocol)
+// ---------------------------------------------------------------------------
+
+/// Periodic self-advert scheduling. Not a MeshCore companion command — this
+/// lives in flash so the setting survives reboots, but it is only written
+/// from the on-device menu.
+#[derive(Clone, Copy, Debug, defmt::Format)]
+pub struct AdvertConfig {
+    /// When false, the advert ticker task never fires.
+    pub enabled: bool,
+    /// Interval in whole hours between periodic flood adverts.
+    /// Menu only exposes the values 2, 4, 8, 16, 32, 64, 96.
+    pub interval_hours: u8,
+}
+
+/// Default: adverts enabled, 4-hour interval.
+pub const DEFAULT_ADVERT: AdvertConfig = AdvertConfig {
+    enabled:        true,
+    interval_hours: 4,
+};
+
+pub async fn get_advert_config_or_default() -> AdvertConfig {
+    let mut b = [0u8; 2];
+    match ns().get("advert", &mut b).await {
+        Ok(2) => AdvertConfig {
+            enabled:        b[0] != 0,
+            interval_hours: b[1],
+        },
+        _ => DEFAULT_ADVERT,
+    }
+}
+
+pub async fn set_advert_config(cfg: AdvertConfig) -> Result<(), kv::KvError> {
+    ns().set("advert", &[cfg.enabled as u8, cfg.interval_hours], true).await
+}
+
+// ---------------------------------------------------------------------------
 // Other parameters  (CMD_SET_OTHER_PARAMS 0x26)
 // ---------------------------------------------------------------------------
 

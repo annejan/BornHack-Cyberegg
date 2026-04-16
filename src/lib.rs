@@ -18,7 +18,9 @@ use core::cell::RefCell;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
 use core::result::{Result, Result::Ok};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32, Ordering};
+#[cfg(feature = "mesh")]
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
 use embedded_graphics::{
     mono_font::{
         MonoTextStyle,
@@ -28,8 +30,6 @@ use embedded_graphics::{
     primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
-#[cfg(feature = "mesh")]
-use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
 #[cfg(feature = "embassy-base")]
 #[cfg(feature = "simulator")]
 fn get_device_id() -> [u8; 4] {
@@ -85,10 +85,7 @@ pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
 // Conditional imports based on feature
 #[cfg(feature = "embassy-base")]
-use embassy_sync::blocking_mutex::{
-    Mutex,
-    raw::CriticalSectionRawMutex,
-};
+use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 #[cfg(feature = "embassy-base")]
 use embassy_sync::signal::Signal;
 
@@ -98,13 +95,85 @@ use std::sync::Mutex;
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
-
 /// UTC offset in whole hours (-12..=+14). Default: 0 (UTC).
 pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(0);
 
 /// Fired when `TIMEZONE_OFFSET` changes so the BLE task can persist it.
 #[cfg(feature = "embassy-base")]
 pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Current LoRa radio parameters exposed as atomics so the menu can read them
+/// synchronously. Populated on boot from flash and kept in sync with
+/// `settings::get_radio_params_or_default()`.
+pub static LORA_FREQ_HZ: AtomicU32 = AtomicU32::new(869_618_000);
+pub static LORA_BW_HZ: AtomicU32 = AtomicU32::new(62_500);
+pub static LORA_SF: AtomicU8 = AtomicU8::new(8);
+pub static LORA_CR: AtomicU8 = AtomicU8::new(5);
+/// LoRa TX power in dBm (−9..=22, matches the companion validation range).
+pub static LORA_TX_POWER: AtomicI8 = AtomicI8::new(14);
+/// Client-repeat mode — re-transmit received flood packets back onto the mesh.
+/// Menu-togglable; runtime relay behavior is wired up via the BLE task.
+pub static LORA_CLIENT_REPEAT: AtomicBool = AtomicBool::new(false);
+
+/// `OtherParams.advert_loc_policy` — share this node's position in adverts.
+pub static ADVERT_LOC_POLICY: AtomicBool = AtomicBool::new(false);
+/// `OtherParams.multi_acks` — number of aggregated ACKs (1 or 2).
+pub static MULTI_ACKS: AtomicU8 = AtomicU8::new(1);
+/// Master telemetry-share toggle. Mirrors `OtherParams.telemetry_mode_*`:
+/// false ⇒ all three modes forced to 0 (deny mesh telemetry requests).
+/// true  ⇒ all three modes forced to 2 (allow all).
+/// BLE/companion telemetry reads are a separate path and are not affected.
+pub static TELEMETRY_SHARE: AtomicBool = AtomicBool::new(false);
+
+/// Periodic self-advert scheduling — driven by the `advert_ticker_task` in
+/// `bin/embassy.rs`.
+pub static ADVERT_ENABLED: AtomicBool = AtomicBool::new(true);
+pub static ADVERT_INTERVAL_HOURS: AtomicU8 = AtomicU8::new(4);
+
+/// Fired by the menu when advert scheduling changes (toggle or interval).
+/// The BLE task persists the new config; the advert ticker task wakes up and
+/// re-reads the interval for its next sleep.
+#[cfg(feature = "embassy-base")]
+pub static ADVERT_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired when the menu changes the LoRa radio params so the BLE task can
+/// persist them to flash (takes effect on reboot).
+#[cfg(feature = "embassy-base")]
+pub static LORA_RADIO_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired when the menu changes `OtherParams` fields (advert_loc / multi_acks)
+/// so the BLE task can persist them.
+#[cfg(feature = "embassy-base")]
+pub static OTHER_PARAMS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired when the menu changes `PATH_HASH_MODE`.
+#[cfg(feature = "embassy-base")]
+pub static PATH_HASH_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the menu's Factory Reset action — wipes the entire KV store and
+/// resets the device.
+#[cfg(feature = "embassy-base")]
+pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// When true, the LoRa radio is put into standby and the meshcore task
+/// pauses all RX/TX until re-enabled.
+pub static LORA_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// Fired when `LORA_DISABLED` changes so the meshcore task wakes up.
+#[cfg(feature = "embassy-base")]
+pub static LORA_DISABLED_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// When true, the BLE task stops advertising and waits until re-enabled.
+pub static BLE_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// Fired when `BLE_DISABLED` changes, waking the BLE task out of its
+/// disabled-wait loop or persisting the new state.
+#[cfg(feature = "embassy-base")]
+pub static BLE_DISABLED_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the menu to clear all stored BLE bond/pairing data and reboot.
+#[cfg(feature = "embassy-base")]
+pub static CLEAR_BONDS_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // Re-export mesh types and statics so existing `crate::SomeType` paths keep working.
 #[cfg(feature = "mesh")]
@@ -185,9 +254,7 @@ pub fn update_node_name(name: &[u8]) {
     }
 }
 
-
 // (mesh statics moved to fw/mesh/mod.rs)
-
 
 // Macro for embassy - immutable access
 /// Access the shared `DisplayState` immutably.
@@ -212,7 +279,8 @@ macro_rules! with_display_state_mut {
     ($f:expr) => {
         DISPLAY_STATE.lock(|cell| {
             let mut state = cell.borrow_mut();
-            let f: &dyn Fn(&mut $crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
+            let f: &dyn Fn(&mut $crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ =
+                &$f;
             f(&mut state)
         })
     };
@@ -247,11 +315,11 @@ static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 // The game screen is always at index 0 but disabled when the game feature is off.
 // Navigation automatically skips disabled screens.
 pub use menu::ScreenId;
-pub const SCREEN_GAME:       u8 = ScreenId::Game       as u8;
-pub const SCREEN_MAIN:       u8 = ScreenId::Main       as u8;
-pub const SCREEN_PM:         u8 = ScreenId::Pm         as u8;
-pub const SCREEN_CHANNEL:    u8 = ScreenId::Channel    as u8;
-pub const SCREEN_ADVERT:     u8 = ScreenId::Advert     as u8;
+pub const SCREEN_GAME: u8 = ScreenId::Game as u8;
+pub const SCREEN_MAIN: u8 = ScreenId::Main as u8;
+pub const SCREEN_PM: u8 = ScreenId::Pm as u8;
+pub const SCREEN_CHANNEL: u8 = ScreenId::Channel as u8;
+pub const SCREEN_ADVERT: u8 = ScreenId::Advert as u8;
 pub const SCREEN_BADGERCORN: u8 = ScreenId::Badgercorn as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
@@ -358,6 +426,21 @@ where
         return menu::draw_about(display, about_page);
     }
 
+    // LoRa radio preset picker: full-screen custom rendering.
+    let (lora, lora_page) = with_display_state!(|state| {
+        let s = state.current_screen();
+        (s.is_lora_radio(), s.lora_page())
+    });
+    if lora {
+        return menu::draw_lora_radio(display, lora_page);
+    }
+
+    // Confirmation dialog: full-screen "Are you sure?" overlay.
+    let confirm_prompt = with_display_state!(|state| state.current_screen().confirm_prompt());
+    if let Some(prompt) = confirm_prompt {
+        return menu::draw_confirm(display, prompt);
+    }
+
     let circle_post = CIRCLE_POS.load(Ordering::Relaxed);
     CIRCLE_POS.store(circle_post.wrapping_add(1) % 4, Ordering::Relaxed);
 
@@ -409,7 +492,11 @@ where
 
     let (items, pos, stepper_active) = with_display_state!(|state| {
         let screen = state.current_screen();
-        (screen.current_items(), screen.current_pos(), screen.is_stepper_active())
+        (
+            screen.current_items(),
+            screen.current_pos(),
+            screen.is_stepper_active(),
+        )
     });
 
     {
@@ -488,8 +575,7 @@ where
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     // Header bar: "Direct Message" + battery
-    Text::with_text_style("Direct Message", Point::new(4, 14), style_bold, bottom)
-        .draw(display)?;
+    Text::with_text_style("Direct Message", Point::new(4, 14), style_bold, bottom).draw(display)?;
     let bat_text = bat_text(bat_prc);
     Text::with_text_style(
         &bat_text,
@@ -511,7 +597,7 @@ where
                 Text::with_text_style(
                     "No private messages",
                     display.bounding_box().center(),
-                    style_msg,
+                    style_bold,
                     TextStyleBuilder::new()
                         .baseline(Baseline::Middle)
                         .alignment(Alignment::Center)
@@ -521,8 +607,13 @@ where
             }
             Some(ref msg) => {
                 // Sender name (bold)
-                Text::with_text_style(msg.sender_name.as_str(), Point::new(4, 30), style_bold, bottom)
-                    .draw(display)?;
+                Text::with_text_style(
+                    msg.sender_name.as_str(),
+                    Point::new(4, 30),
+                    style_bold,
+                    bottom,
+                )
+                .draw(display)?;
 
                 // Divider
                 Rectangle::new(Point::new(0, 32), Size::new(152, 1))
@@ -553,8 +644,7 @@ where
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     // Header bar: "Channel" + battery
-    Text::with_text_style("Channel", Point::new(4, 14), style_bold, bottom)
-        .draw(display)?;
+    Text::with_text_style("Channel", Point::new(4, 14), style_bold, bottom).draw(display)?;
     let bat_text = bat_text(bat_prc);
     Text::with_text_style(
         &bat_text,
@@ -576,7 +666,7 @@ where
                 Text::with_text_style(
                     "No channel messages",
                     display.bounding_box().center(),
-                    style_msg,
+                    style_bold,
                     TextStyleBuilder::new()
                         .baseline(Baseline::Middle)
                         .alignment(Alignment::Center)
@@ -639,7 +729,7 @@ where
                 Text::with_text_style(
                     "No adverts",
                     display.bounding_box().center(),
-                    style_msg,
+                    style_bold,
                     TextStyleBuilder::new()
                         .baseline(Baseline::Middle)
                         .alignment(Alignment::Center)

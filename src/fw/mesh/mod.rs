@@ -143,6 +143,15 @@ pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal:
 pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, meshcore::AdvertMode> =
     Signal::new();
 
+/// Wakes the meshcore task out of `lora.receive_packet()` whenever a new TX
+/// request is enqueued on any `TX_*_CHANNEL` (or `SEND_ADVERT_SIGNAL` is set).
+///
+/// Without this, `receive_packet`'s ~15 s timeout becomes the worst-case TX
+/// latency for any channel that isn't directly part of the meshcore task's
+/// `select` race. The top-of-loop drain handles routing per channel — this
+/// signal only exists to break the receive call so the loop iterates.
+pub static TX_WAKEUP: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// 16-byte transport key for region-scoped flood packets.
 pub static FLOOD_SCOPE_KEY: Mutex<
     CriticalSectionRawMutex,

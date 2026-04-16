@@ -1,11 +1,8 @@
 use core::cell::RefCell;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embedded_graphics::{
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_7X13, FONT_7X13_BOLD},
-    },
+    mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -79,6 +76,13 @@ pub enum MenuItemKind {
         inc: fn(),
         dec: fn(),
     },
+    /// Destructive action that first shows a full-screen "Are you sure?"
+    /// confirmation dialog. `prompt` is the action name shown in the dialog;
+    /// `action` runs only if the user presses Fire/Execute to confirm.
+    Confirm {
+        prompt: &'static str,
+        action: fn(),
+    },
 }
 
 pub struct MenuItem {
@@ -99,6 +103,13 @@ pub struct ScreenState {
     stepper_active: bool,
     /// Current page when the About screen is active.
     about_page: u8,
+    /// Current preset index when the LoRa radio screen is active.
+    /// Equals `LORA_PRESETS.len()` when the device is on a Custom preset.
+    lora_page: u8,
+    /// Pending "Are you sure?" confirmation. When `Some`, the screen renders
+    /// the confirmation dialog instead of the regular menu and Fire/Cancel
+    /// are routed to yes/no.
+    confirm: Option<(&'static str, fn())>,
 }
 
 impl ScreenState {
@@ -110,6 +121,26 @@ impl ScreenState {
             sub_pos: 0,
             stepper_active: false,
             about_page: 0,
+            lora_page: 0,
+            confirm: None,
+        }
+    }
+
+    /// Returns the confirmation dialog prompt when a confirm is pending.
+    pub fn confirm_prompt(&self) -> Option<&'static str> {
+        self.confirm.map(|(p, _)| p)
+    }
+
+    /// Current LoRa radio preset index.
+    pub fn lora_page(&self) -> u8 {
+        self.lora_page
+    }
+
+    /// Returns true when the LoRa radio preset screen is active.
+    pub fn is_lora_radio(&self) -> bool {
+        match self.sub_items {
+            Some(items) => core::ptr::eq(items, &LORA_RADIO_ITEMS as &[MenuItem]),
+            None => false,
         }
     }
 
@@ -217,6 +248,9 @@ impl ScreenState {
             MenuItemKind::Submenu(items) => {
                 self.sub_items = Some(items);
                 self.sub_pos = 0;
+                if core::ptr::eq(items, &LORA_RADIO_ITEMS as &[MenuItem]) {
+                    self.lora_page = current_lora_preset_index();
+                }
             }
             MenuItemKind::Back => {
                 self.sub_items = None;
@@ -224,6 +258,9 @@ impl ScreenState {
             MenuItemKind::Separator => {}
             MenuItemKind::Stepper { .. } => {
                 self.stepper_active = true;
+            }
+            MenuItemKind::Confirm { prompt, action } => {
+                self.confirm = Some((prompt, action));
             }
         }
     }
@@ -368,6 +405,46 @@ impl<const M: usize> DisplayState<M> {
     /// Called when the game layer did not consume the event.
     pub fn dispatch_button(&mut self, btn: ButtonId) {
         let screen = &self.screens[self.active_screen as usize];
+        // Confirmation dialog takes priority over any other screen mode.
+        if screen.confirm.is_some() {
+            let s = &mut self.screens[self.active_screen as usize];
+            match btn {
+                ButtonId::Execute | ButtonId::Fire => {
+                    if let Some((_, action)) = s.confirm.take() {
+                        action();
+                    }
+                }
+                ButtonId::Cancel => {
+                    s.confirm = None;
+                }
+                _ => {}
+            }
+            return;
+        }
+        if screen.is_lora_radio() {
+            let s = &mut self.screens[self.active_screen as usize];
+            let n = LORA_PRESETS.len() as u8;
+            match btn {
+                ButtonId::Left | ButtonId::Up => {
+                    let mut p = if s.lora_page >= n { 0 } else { s.lora_page };
+                    p = if p == 0 { n - 1 } else { p - 1 };
+                    s.lora_page = p;
+                }
+                ButtonId::Right | ButtonId::Down => {
+                    let p = if s.lora_page >= n { 0 } else { s.lora_page + 1 };
+                    s.lora_page = if p >= n { 0 } else { p };
+                }
+                ButtonId::Execute | ButtonId::Fire => {
+                    if (s.lora_page as usize) < LORA_PRESETS.len() {
+                        apply_lora_preset(s.lora_page as usize);
+                    }
+                }
+                ButtonId::Cancel => {
+                    s.sub_items = None;
+                }
+            }
+            return;
+        }
         if screen.is_about() {
             match btn {
                 ButtonId::Left => {
@@ -435,6 +512,295 @@ fn action_reset_channels() {
 fn action_reset_contacts() {
     #[cfg(feature = "mesh")]
     crate::CONTACT_RESET_SIGNAL.signal(());
+}
+
+fn action_factory_reset() {
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::FACTORY_RESET_SIGNAL.signal(());
+}
+
+// ── TX power ────────────────────────────────────────────────────────────────
+
+/// Pre-rendered labels for every valid TX power value (−9..=22 dBm).
+/// Indexed by `(dbm + 9) as usize`.
+static TX_POWER_LABELS: [&str; 32] = [
+    "TX: -9 dBm", "TX: -8 dBm", "TX: -7 dBm", "TX: -6 dBm",
+    "TX: -5 dBm", "TX: -4 dBm", "TX: -3 dBm", "TX: -2 dBm",
+    "TX: -1 dBm", "TX: 0 dBm",  "TX: 1 dBm",  "TX: 2 dBm",
+    "TX: 3 dBm",  "TX: 4 dBm",  "TX: 5 dBm",  "TX: 6 dBm",
+    "TX: 7 dBm",  "TX: 8 dBm",  "TX: 9 dBm",  "TX: 10 dBm",
+    "TX: 11 dBm", "TX: 12 dBm", "TX: 13 dBm", "TX: 14 dBm",
+    "TX: 15 dBm", "TX: 16 dBm", "TX: 17 dBm", "TX: 18 dBm",
+    "TX: 19 dBm", "TX: 20 dBm", "TX: 21 dBm", "TX: 22 dBm",
+];
+
+fn label_tx_power() -> &'static str {
+    let v = crate::LORA_TX_POWER.load(Ordering::Relaxed).clamp(-9, 22);
+    TX_POWER_LABELS[(v + 9) as usize]
+}
+
+fn action_tx_power_inc() {
+    let v = crate::LORA_TX_POWER.load(Ordering::Relaxed);
+    if v < 22 {
+        crate::LORA_TX_POWER.store(v + 1, Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+    }
+}
+
+fn action_tx_power_dec() {
+    let v = crate::LORA_TX_POWER.load(Ordering::Relaxed);
+    if v > -9 {
+        crate::LORA_TX_POWER.store(v - 1, Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+    }
+}
+
+// ── Client-repeat toggle ────────────────────────────────────────────────────
+
+fn label_client_repeat() -> &'static str {
+    if crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed) {
+        "Repeat: ON"
+    } else {
+        "Repeat: OFF"
+    }
+}
+
+fn action_client_repeat() {
+    let cur = crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed);
+    crate::LORA_CLIENT_REPEAT.store(!cur, Ordering::Relaxed);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+}
+
+// ── Share location (advert_loc_policy) ─────────────────────────────────────
+
+fn label_advert_loc() -> &'static str {
+    if crate::ADVERT_LOC_POLICY.load(Ordering::Relaxed) {
+        "Share Loc: ON"
+    } else {
+        "Share Loc: OFF"
+    }
+}
+
+fn action_advert_loc() {
+    let cur = crate::ADVERT_LOC_POLICY.load(Ordering::Relaxed);
+    crate::ADVERT_LOC_POLICY.store(!cur, Ordering::Relaxed);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
+}
+
+// ── Multi-ACK stepper ──────────────────────────────────────────────────────
+
+fn label_multi_acks() -> &'static str {
+    match crate::MULTI_ACKS.load(Ordering::Relaxed) {
+        2 => "Multi-ACK: 2",
+        _ => "Multi-ACK: 1",
+    }
+}
+
+fn action_multi_acks_inc() {
+    let v = crate::MULTI_ACKS.load(Ordering::Relaxed);
+    if v < 2 {
+        crate::MULTI_ACKS.store(v + 1, Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
+    }
+}
+
+fn action_multi_acks_dec() {
+    let v = crate::MULTI_ACKS.load(Ordering::Relaxed);
+    if v > 1 {
+        crate::MULTI_ACKS.store(v - 1, Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
+    }
+}
+
+// ── Path hash length stepper ───────────────────────────────────────────────
+
+#[cfg(feature = "mesh")]
+fn label_path_hash() -> &'static str {
+    match crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed) {
+        0 => "Path Hash: 1B",
+        1 => "Path Hash: 2B",
+        _ => "Path Hash: 3B",
+    }
+}
+
+#[cfg(not(feature = "mesh"))]
+fn label_path_hash() -> &'static str {
+    "Path Hash: 1B"
+}
+
+fn action_path_hash_inc() {
+    #[cfg(feature = "mesh")]
+    {
+        let v = crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed);
+        if v < 2 {
+            crate::fw::mesh::PATH_HASH_MODE.store(v + 1, Ordering::Relaxed);
+            #[cfg(feature = "embassy-base")]
+            crate::PATH_HASH_CHANGED_SIGNAL.signal(());
+        }
+    }
+}
+
+fn action_path_hash_dec() {
+    #[cfg(feature = "mesh")]
+    {
+        let v = crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed);
+        if v > 0 {
+            crate::fw::mesh::PATH_HASH_MODE.store(v - 1, Ordering::Relaxed);
+            #[cfg(feature = "embassy-base")]
+            crate::PATH_HASH_CHANGED_SIGNAL.signal(());
+        }
+    }
+}
+
+// ── Advert scheduling ──────────────────────────────────────────────────────
+
+fn label_advert_enabled() -> &'static str {
+    if crate::ADVERT_ENABLED.load(Ordering::Relaxed) {
+        "Adverts: ON"
+    } else {
+        "Adverts: OFF"
+    }
+}
+
+fn action_advert_toggle() {
+    let cur = crate::ADVERT_ENABLED.load(Ordering::Relaxed);
+    crate::ADVERT_ENABLED.store(!cur, Ordering::Relaxed);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::ADVERT_CHANGED_SIGNAL.signal(());
+}
+
+/// Interval presets (hours): 2, 4, 8, 16, 32, 64, 96.
+static ADVERT_INTERVAL_STEPS: [u8; 7] = [2, 4, 8, 16, 32, 64, 96];
+static ADVERT_INTERVAL_LABELS: [&str; 7] = [
+    "Interval: 2h", "Interval: 4h", "Interval: 8h", "Interval: 16h",
+    "Interval: 32h", "Interval: 64h", "Interval: 96h",
+];
+
+fn advert_interval_idx() -> usize {
+    let v = crate::ADVERT_INTERVAL_HOURS.load(Ordering::Relaxed);
+    ADVERT_INTERVAL_STEPS
+        .iter()
+        .position(|&s| s == v)
+        .unwrap_or(0)
+}
+
+fn label_advert_interval() -> &'static str {
+    ADVERT_INTERVAL_LABELS[advert_interval_idx()]
+}
+
+fn action_advert_interval_inc() {
+    let i = advert_interval_idx();
+    if i + 1 < ADVERT_INTERVAL_STEPS.len() {
+        crate::ADVERT_INTERVAL_HOURS.store(ADVERT_INTERVAL_STEPS[i + 1], Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::ADVERT_CHANGED_SIGNAL.signal(());
+    }
+}
+
+fn action_advert_interval_dec() {
+    let i = advert_interval_idx();
+    if i > 0 {
+        crate::ADVERT_INTERVAL_HOURS.store(ADVERT_INTERVAL_STEPS[i - 1], Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::ADVERT_CHANGED_SIGNAL.signal(());
+    }
+}
+
+// ── Telemetry share ────────────────────────────────────────────────────────
+
+fn label_telemetry_share() -> &'static str {
+    if crate::TELEMETRY_SHARE.load(Ordering::Relaxed) {
+        "Telemetry: ON"
+    } else {
+        "Telemetry: OFF"
+    }
+}
+
+fn action_telemetry_toggle() {
+    let cur = crate::TELEMETRY_SHARE.load(Ordering::Relaxed);
+    crate::TELEMETRY_SHARE.store(!cur, Ordering::Relaxed);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
+}
+
+// ── BLE submenu helpers ────────────────────────────────────────────────────
+
+/// Static buffer holding the formatted BLE device name ("Cyber Ægg XXYY").
+/// Initialised lazily on first render.
+struct SyncBuf<const N: usize>(core::cell::UnsafeCell<[u8; N]>);
+unsafe impl<const N: usize> Sync for SyncBuf<N> {}
+impl<const N: usize> SyncBuf<N> {
+    const fn new(val: [u8; N]) -> Self { Self(core::cell::UnsafeCell::new(val)) }
+}
+
+static BLE_NAME_BUF: SyncBuf<15> = SyncBuf::new([
+    b'C', b'y', b'b', b'e', b'r', b' ', 0xC3, 0x86, b'g', b'g', b' ',
+    b'?', b'?', b'?', b'?',
+]);
+static BLE_NAME_INIT: AtomicBool = AtomicBool::new(false);
+
+fn label_ble_name() -> &'static str {
+    if !BLE_NAME_INIT.load(Ordering::Relaxed) {
+        #[cfg(feature = "embassy-base")]
+        {
+            let id = crate::fw::device_id::get_bytes();
+            let buf = unsafe { &mut *BLE_NAME_BUF.0.get() };
+            buf[11] = id[0];
+            buf[12] = id[1];
+            buf[13] = id[2];
+            buf[14] = id[3];
+        }
+        #[cfg(feature = "simulator")]
+        {
+            let buf = unsafe { &mut *BLE_NAME_BUF.0.get() };
+            buf[11..15].copy_from_slice(b"A3F7");
+        }
+        BLE_NAME_INIT.store(true, Ordering::Relaxed);
+    }
+    unsafe { core::str::from_utf8_unchecked(&*BLE_NAME_BUF.0.get()) }
+}
+
+fn label_ble_enabled() -> &'static str {
+    if crate::BLE_DISABLED.load(Ordering::Relaxed) {
+        "BLE: OFF"
+    } else {
+        "BLE: ON"
+    }
+}
+
+fn action_ble_toggle() {
+    let cur = crate::BLE_DISABLED.load(Ordering::Relaxed);
+    crate::BLE_DISABLED.store(!cur, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::BLE_DISABLED_CHANGED.signal(());
+}
+
+fn action_clear_bonds() {
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::CLEAR_BONDS_SIGNAL.signal(());
+}
+
+// ── LoRa enable/disable ────────────────────────────────────────────────────
+
+fn label_lora_enabled() -> &'static str {
+    if crate::LORA_DISABLED.load(Ordering::Relaxed) {
+        "LoRa: OFF"
+    } else {
+        "LoRa: ON"
+    }
+}
+
+fn action_lora_toggle() {
+    let cur = crate::LORA_DISABLED.load(Ordering::Relaxed);
+    crate::LORA_DISABLED.store(!cur, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::LORA_DISABLED_CHANGED.signal(());
 }
 
 static TZ_LABELS: [&str; 27] = [
@@ -511,14 +877,143 @@ static MELODY_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static SETTINGS_ITEMS: [MenuItem; 6] = [
+static BLE_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
     },
     MenuItem {
+        label: label_ble_name,
+        kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: label_ble_enabled,
+        kind: MenuItemKind::Action(action_ble_toggle),
+    },
+    MenuItem {
+        label: || "Clear pairings",
+        kind: MenuItemKind::Confirm {
+            prompt: "Clear pairings",
+            action: action_clear_bonds,
+        },
+    },
+];
+
+static ADVERTS_ITEMS: [MenuItem; 4] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: label_advert_enabled,
+        kind: MenuItemKind::Action(action_advert_toggle),
+    },
+    MenuItem {
+        label: label_advert_interval,
+        kind: MenuItemKind::Stepper {
+            inc: action_advert_interval_inc,
+            dec: action_advert_interval_dec,
+        },
+    },
+    MenuItem {
+        label: label_advert_loc,
+        kind: MenuItemKind::Action(action_advert_loc),
+    },
+];
+
+static LORA_MENU_ITEMS: [MenuItem; 5] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: label_lora_enabled,
+        kind: MenuItemKind::Action(action_lora_toggle),
+    },
+    MenuItem {
         label: label_boost_rx,
         kind: MenuItemKind::Action(action_boost_rx),
+    },
+    MenuItem {
+        label: || "Radio Presets",
+        kind: MenuItemKind::Submenu(&LORA_RADIO_ITEMS),
+    },
+    MenuItem {
+        label: label_tx_power,
+        kind: MenuItemKind::Stepper {
+            inc: action_tx_power_inc,
+            dec: action_tx_power_dec,
+        },
+    },
+];
+
+static MESHCORE_MENU_ITEMS: [MenuItem; 9] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: label_client_repeat,
+        kind: MenuItemKind::Action(action_client_repeat),
+    },
+    MenuItem {
+        label: || "Adverts",
+        kind: MenuItemKind::Submenu(&ADVERTS_ITEMS),
+    },
+    MenuItem {
+        label: label_telemetry_share,
+        kind: MenuItemKind::Action(action_telemetry_toggle),
+    },
+    MenuItem {
+        label: label_multi_acks,
+        kind: MenuItemKind::Stepper {
+            inc: action_multi_acks_inc,
+            dec: action_multi_acks_dec,
+        },
+    },
+    MenuItem {
+        label: label_path_hash,
+        kind: MenuItemKind::Stepper {
+            inc: action_path_hash_inc,
+            dec: action_path_hash_dec,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "Reset channels",
+        kind: MenuItemKind::Confirm {
+            prompt: "Reset channels",
+            action: action_reset_channels,
+        },
+    },
+    MenuItem {
+        label: || "Reset contacts",
+        kind: MenuItemKind::Confirm {
+            prompt: "Reset contacts",
+            action: action_reset_contacts,
+        },
+    },
+];
+
+static SETTINGS_ITEMS: [MenuItem; 7] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "Bluetooth",
+        kind: MenuItemKind::Submenu(&BLE_ITEMS),
+    },
+    MenuItem {
+        label: || "LoRa",
+        kind: MenuItemKind::Submenu(&LORA_MENU_ITEMS),
+    },
+    MenuItem {
+        label: || "MeshCore",
+        kind: MenuItemKind::Submenu(&MESHCORE_MENU_ITEMS),
     },
     MenuItem {
         label: label_timezone,
@@ -532,12 +1027,11 @@ static SETTINGS_ITEMS: [MenuItem; 6] = [
         kind: MenuItemKind::Separator,
     },
     MenuItem {
-        label: || "Reset channels",
-        kind: MenuItemKind::Action(action_reset_channels),
-    },
-    MenuItem {
-        label: || "Reset contacts",
-        kind: MenuItemKind::Action(action_reset_contacts),
+        label: || "Factory reset",
+        kind: MenuItemKind::Confirm {
+            prompt: "Factory reset",
+            action: action_factory_reset,
+        },
     },
 ];
 
@@ -582,6 +1076,70 @@ static ABOUT_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "< Back",
     kind: MenuItemKind::Back,
 }];
+
+/// Sentinel item list for the LoRa radio preset picker. The list is a single
+/// `Back` entry — the submenu is rendered and dispatched entirely via the
+/// custom `draw_lora_radio` path (see `DisplayState::dispatch_button`).
+static LORA_RADIO_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "< Back",
+    kind: MenuItemKind::Back,
+}];
+
+/// Community-suggested LoRa radio presets (matches the MeshCore app's
+/// `suggested_radio_settings` list).
+pub struct LoRaPreset {
+    pub title: &'static str,
+    pub freq_hz: u32,
+    pub bw_hz: u32,
+    pub sf: u8,
+    pub cr: u8,
+}
+
+pub static LORA_PRESETS: &[LoRaPreset] = &[
+    LoRaPreset { title: "Australia",            freq_hz: 915_800_000, bw_hz: 250_000, sf: 10, cr: 5 },
+    LoRaPreset { title: "Australia (Narrow)",   freq_hz: 916_575_000, bw_hz:  62_500, sf:  7, cr: 8 },
+    LoRaPreset { title: "Australia: SA, WA",    freq_hz: 923_125_000, bw_hz:  62_500, sf:  8, cr: 8 },
+    LoRaPreset { title: "Australia: QLD",       freq_hz: 923_125_000, bw_hz:  62_500, sf:  8, cr: 5 },
+    LoRaPreset { title: "EU/UK (Narrow)",       freq_hz: 869_618_000, bw_hz:  62_500, sf:  8, cr: 8 },
+    LoRaPreset { title: "EU/UK (Deprecated)",   freq_hz: 869_525_000, bw_hz: 250_000, sf: 11, cr: 5 },
+    LoRaPreset { title: "Czech (Narrow)",       freq_hz: 869_432_000, bw_hz:  62_500, sf:  7, cr: 5 },
+    LoRaPreset { title: "EU 433 (Long)",        freq_hz: 433_650_000, bw_hz: 250_000, sf: 11, cr: 5 },
+    LoRaPreset { title: "New Zealand",          freq_hz: 917_375_000, bw_hz: 250_000, sf: 11, cr: 5 },
+    LoRaPreset { title: "NZ (Narrow)",          freq_hz: 917_375_000, bw_hz:  62_500, sf:  7, cr: 5 },
+    LoRaPreset { title: "Portugal 433",         freq_hz: 433_375_000, bw_hz:  62_500, sf:  9, cr: 6 },
+    LoRaPreset { title: "Portugal 868",         freq_hz: 869_618_000, bw_hz:  62_500, sf:  7, cr: 6 },
+    LoRaPreset { title: "Switzerland",          freq_hz: 869_618_000, bw_hz:  62_500, sf:  8, cr: 8 },
+    LoRaPreset { title: "USA/Canada",           freq_hz: 910_525_000, bw_hz:  62_500, sf:  7, cr: 5 },
+    LoRaPreset { title: "Vietnam (Narrow)",     freq_hz: 920_250_000, bw_hz:  62_500, sf:  8, cr: 5 },
+    LoRaPreset { title: "Vietnam (Deprecated)", freq_hz: 920_250_000, bw_hz: 250_000, sf: 11, cr: 5 },
+];
+
+/// Returns the index of the preset that matches the current LoRa atomics, or
+/// `LORA_PRESETS.len()` to indicate "Custom" (no matching preset).
+fn current_lora_preset_index() -> u8 {
+    use core::sync::atomic::Ordering::Relaxed;
+    let freq = crate::LORA_FREQ_HZ.load(Relaxed);
+    let bw = crate::LORA_BW_HZ.load(Relaxed);
+    let sf = crate::LORA_SF.load(Relaxed);
+    let cr = crate::LORA_CR.load(Relaxed);
+    for (i, p) in LORA_PRESETS.iter().enumerate() {
+        if p.freq_hz == freq && p.bw_hz == bw && p.sf == sf && p.cr == cr {
+            return i as u8;
+        }
+    }
+    LORA_PRESETS.len() as u8
+}
+
+fn apply_lora_preset(idx: usize) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let p = &LORA_PRESETS[idx];
+    crate::LORA_FREQ_HZ.store(p.freq_hz, Relaxed);
+    crate::LORA_BW_HZ.store(p.bw_hz, Relaxed);
+    crate::LORA_SF.store(p.sf, Relaxed);
+    crate::LORA_CR.store(p.cr, Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+}
 
 static MAIN_ITEMS: [MenuItem; 6] = [
     MenuItem {
@@ -866,6 +1424,183 @@ where
         format_args!("< {}/{} >", page + 1, ABOUT_PAGES),
     );
     Text::with_text_style(&indicator, Point::new(x, 136), font, center).draw(display)?;
+
+    Ok(())
+}
+
+/// Draw the LoRa radio preset picker.
+///
+/// `page` is the preset index into [`LORA_PRESETS`]. If it equals
+/// `LORA_PRESETS.len()` the device is on a Custom (non-preset) setting and the
+/// current atomics are displayed instead — Custom is not selectable via the
+/// Left/Right navigation.
+pub fn draw_lora_radio<D>(display: &mut D, page: u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use crate::RED;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let center = TextStyleBuilder::new()
+        .baseline(Baseline::Top)
+        .alignment(Alignment::Center)
+        .build();
+    let left = TextStyleBuilder::new()
+        .baseline(Baseline::Top)
+        .alignment(Alignment::Left)
+        .build();
+
+    let x = 76;
+
+    // Borders
+    Rectangle::new(Point::new(0, 0), Size::new(152, 152))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
+        .draw(display)?;
+    Rectangle::new(Point::new(2, 2), Size::new(148, 148))
+        .into_styled(PrimitiveStyle::with_stroke(RED, 1))
+        .draw(display)?;
+
+    // Title
+    let mut y = 8;
+    Text::with_text_style("LoRa Radio", Point::new(x, y), font_bold, center).draw(display)?;
+    y += 16;
+
+    // Separator
+    Rectangle::new(Point::new(10, y), Size::new(132, 1))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    y += 6;
+
+    // Preset title row — highlighted black background, white text.
+    let is_custom = (page as usize) >= LORA_PRESETS.len();
+    let (title, freq, bw, sf, cr) = if is_custom {
+        (
+            "Custom",
+            crate::LORA_FREQ_HZ.load(Relaxed),
+            crate::LORA_BW_HZ.load(Relaxed),
+            crate::LORA_SF.load(Relaxed),
+            crate::LORA_CR.load(Relaxed),
+        )
+    } else {
+        let p = &LORA_PRESETS[page as usize];
+        (p.title, p.freq_hz, p.bw_hz, p.sf, p.cr)
+    };
+
+    // The displayed preset is "active" when its values match the current
+    // atomics — i.e. the user pressed Fire on this preset. Custom is always
+    // active (it reflects the live values by definition).
+    let is_active = is_custom
+        || (crate::LORA_FREQ_HZ.load(Relaxed) == freq
+            && crate::LORA_BW_HZ.load(Relaxed) == bw
+            && crate::LORA_SF.load(Relaxed) == sf
+            && crate::LORA_CR.load(Relaxed) == cr);
+
+    Rectangle::new(Point::new(6, y - 2), Size::new(140, 18))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    let font_white = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+    let mut title_line: heapless::String<40> = heapless::String::new();
+    let _ = title_line.push_str(if is_active { "* " } else { "  " });
+    let _ = title_line.push_str(title);
+    Text::with_text_style(&title_line, Point::new(x, y), font_white, center).draw(display)?;
+    y += 22;
+
+    // Settings lines
+    let lh = 14;
+    let mut line: heapless::String<32> = heapless::String::new();
+    let mhz_int = freq / 1_000_000;
+    let mhz_frac = (freq % 1_000_000) / 1_000; // kHz component, 0..999
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("Freq: {}.{:03} MHz", mhz_int, mhz_frac),
+    );
+    Text::with_text_style(&line, Point::new(10, y), font_bold, left).draw(display)?;
+    y += lh;
+
+    line.clear();
+    if bw >= 1000 {
+        let khz_int = bw / 1000;
+        let khz_frac = (bw % 1000) / 100;
+        if khz_frac == 0 {
+            let _ = core::fmt::Write::write_fmt(&mut line, format_args!("BW:   {} kHz", khz_int));
+        } else {
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!("BW:   {}.{} kHz", khz_int, khz_frac),
+            );
+        }
+    } else {
+        let _ = core::fmt::Write::write_fmt(&mut line, format_args!("BW:   {} Hz", bw));
+    }
+    Text::with_text_style(&line, Point::new(10, y), font_bold, left).draw(display)?;
+    y += lh;
+
+    line.clear();
+    let _ = core::fmt::Write::write_fmt(&mut line, format_args!("SF:   {}", sf));
+    Text::with_text_style(&line, Point::new(10, y), font_bold, left).draw(display)?;
+    y += lh;
+
+    line.clear();
+    let _ = core::fmt::Write::write_fmt(&mut line, format_args!("CR:   4/{}", cr));
+    Text::with_text_style(&line, Point::new(10, y), font_bold, left).draw(display)?;
+
+    // Footer: navigation indicator + hint
+    let total = LORA_PRESETS.len() as u8;
+    let mut indicator: heapless::String<24> = heapless::String::new();
+    if is_custom {
+        let _ = core::fmt::Write::write_fmt(&mut indicator, format_args!("< Custom >"));
+    } else {
+        let _ = core::fmt::Write::write_fmt(
+            &mut indicator,
+            format_args!("< {}/{} >", page + 1, total),
+        );
+    }
+    Text::with_text_style(&indicator, Point::new(x, 120), font_bold, center).draw(display)?;
+    Text::with_text_style("Fire: apply", Point::new(x, 134), font_bold, center).draw(display)?;
+
+    Ok(())
+}
+
+/// Draw a full-screen "Are you sure?" confirmation dialog.
+pub fn draw_confirm<D>(display: &mut D, prompt: &str) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use crate::RED;
+
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let center = TextStyleBuilder::new()
+        .baseline(Baseline::Top)
+        .alignment(Alignment::Center)
+        .build();
+    let x = 76;
+
+    // Full-screen border — red inner frame to signal a destructive action.
+    Rectangle::new(Point::new(0, 0), Size::new(152, 152))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
+        .draw(display)?;
+    Rectangle::new(Point::new(2, 2), Size::new(148, 148))
+        .into_styled(PrimitiveStyle::with_stroke(RED, 2))
+        .draw(display)?;
+
+    Text::with_text_style("Are you sure?", Point::new(x, 24), font, center).draw(display)?;
+
+    // Separator
+    Rectangle::new(Point::new(10, 46), Size::new(132, 1))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+
+    // Action name — highlighted row, white text on black.
+    Rectangle::new(Point::new(6, 56), Size::new(140, 20))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    let font_white = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+    Text::with_text_style(prompt, Point::new(x, 60), font_white, center).draw(display)?;
+
+    // Hints
+    Text::with_text_style("Fire  = Yes", Point::new(x, 96), font, center).draw(display)?;
+    Text::with_text_style("Cancel = No", Point::new(x, 114), font, center).draw(display)?;
 
     Ok(())
 }

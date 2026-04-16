@@ -152,6 +152,21 @@ pub async fn run_meshcore_listener<'a>(
     let mut raw = [0u8; 255];
 
     loop {
+        // When LoRa is disabled, put the radio into standby and wait.
+        if crate::LORA_DISABLED.load(core::sync::atomic::Ordering::Relaxed) {
+            defmt::info!("MeshCore: LoRa disabled — entering standby");
+            lora.standby();
+            loop {
+                crate::LORA_DISABLED_CHANGED.wait().await;
+                crate::LORA_DISABLED_CHANGED.reset();
+                if !crate::LORA_DISABLED.load(core::sync::atomic::Ordering::Relaxed) {
+                    defmt::info!("MeshCore: LoRa re-enabled — resuming RX");
+                    lora.resume_rx();
+                    break;
+                }
+            }
+        }
+
         // Reload channel table if the BLE task updated a channel.
         if crate::CHANNELS_CHANGED_SIGNAL.signaled() {
             crate::CHANNELS_CHANGED_SIGNAL.reset();
@@ -202,31 +217,23 @@ pub async fn run_meshcore_listener<'a>(
             send_advert(&mut lora, identity, &name_buf[..name_len], 0, mode).await;
         }
 
-        // Race: receive the next LoRa packet OR a new TX request arrives.
-        // This keeps TX latency to the radio air-time only, instead of up to
-        // the full 15-second receive_packet timeout.
-        use embassy_futures::select::{Either, Either3, select, select3};
+        // Race: receive the next LoRa packet OR a TX request arrives on any
+        // channel. `TX_WAKEUP` is fired by every `TX_*_CHANNEL.try_send` site
+        // (and `SEND_ADVERT_SIGNAL`); waking on it lets the top-of-loop drain
+        // pick up the new request immediately instead of waiting for the
+        // ~15-second receive_packet timeout.
+        use embassy_futures::select::{Either, select};
         let rx_result = match select(
-            select3(
-                lora.receive_packet(&mut raw),
-                crate::TX_MSG_CHANNEL.receive(),
-                crate::TX_PM_CHANNEL.receive(),
-            ),
-            crate::TX_CONTROL_DATA_CHANNEL.receive(),
+            lora.receive_packet(&mut raw),
+            crate::TX_WAKEUP.wait(),
         ).await {
-            Either::Second(ctl_req) => {
-                send_control_data(&mut lora, ctl_req).await;
+            Either::Second(()) => {
+                // Reset so the next signal call wakes us again. The drain at
+                // the top of the loop handles routing per channel.
+                crate::TX_WAKEUP.reset();
                 continue;
             }
-            Either::First(Either3::Second(tx_req)) => {
-                send_grp_txt(&mut lora, &loaded_channels, tx_req).await;
-                continue;
-            }
-            Either::First(Either3::Third(pm_req)) => {
-                send_txt_msg(&mut lora, pm_req, identity).await;
-                continue;
-            }
-            Either::First(Either3::First(result)) => result,
+            Either::First(result) => result,
         };
 
         match rx_result {
@@ -671,7 +678,7 @@ async fn log_advert(
         }
     }
 
-    if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
+    if path_len_byte != contacts::OUT_PATH_UNKNOWN {
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
         path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
@@ -805,7 +812,7 @@ async fn try_handle_txt_msg(
     );
 
     // Update the stored routing path so replies can go direct.
-    if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
+    if path_len_byte != contacts::OUT_PATH_UNKNOWN {
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
         path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
@@ -2244,23 +2251,24 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
         return;
     }
 
-    // Fast path: try the most recently hinted target contact (set by any
-    // outbound request function) via the O(1) prefix index, skipping the
-    // 300-slot linear scan. Falls through to the scan on mismatch.
+    // Fast path: decrypt directly using the most recently hinted target's
+    // pub_key — no Contact lookup required. This mirrors the reference
+    // client's "pending request target" slot so login / status / telemetry
+    // responses decrypt even when the target isn't (yet) in the contact
+    // store, e.g. first login after a wipe or before the first advert.
     let store = contacts::ContactStore::new();
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
     if let Some(hint_pk) = hint {
         if hint_pk[0] == msg.src_hash {
-            if let Some(c) = store.find_by_key(&hint_pk).await {
-                if try_dispatch_response(&c, &msg, identity).await.is_ok() {
-                    return;
-                }
+            if try_dispatch_response_by_pk(&hint_pk, &msg, identity).await.is_ok() {
+                return;
             }
         }
     }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index instead
-    // of a 300-slot linear scan.
+    // of a 300-slot linear scan. Covers unsolicited responses from peers we
+    // didn't just request anything from.
     let mut slots = [0u16; contacts::MAX_SLOTS_PER_BUCKET];
     let n = store.hash_index_lookup(msg.src_hash, &mut slots).await;
     for &slot in &slots[..n] {
@@ -2276,23 +2284,42 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
     defmt::debug!("Response recv: could not decrypt with any known contact");
 }
 
-/// Verify MAC, decrypt and dispatch a `PayloadType::Response` packet under
-/// the given contact's shared secret.
+/// Verify MAC, decrypt and dispatch a `PayloadType::Response` packet.
 ///
-/// Returns `Ok(())` if this contact is the right peer for the packet (the
-/// MAC verifies and the body has been dispatched to whichever pending-request
-/// branch matched, or treated as a login response). Returns
-/// `Err(meshcore::Error::MacMismatch)` if the contact is not the sender —
-/// the caller should try the next candidate.
+/// Thin wrapper around [`try_dispatch_response_by_pk`] that accepts a stored
+/// [`contacts::Contact`] — kept so the store-fallback scan in
+/// [`handle_response_recv`] can stay unchanged.
 async fn try_dispatch_response(
     c:        &contacts::Contact,
     msg:      &meshcore::payload::txt_msg::TxtMsg,
     identity: &DeviceIdentity,
 ) -> Result<(), meshcore::Error> {
+    try_dispatch_response_by_pk(&c.pub_key, msg, identity).await
+}
+
+/// Verify MAC, decrypt and dispatch a `PayloadType::Response` packet using
+/// only the sender's 32-byte pub_key — no stored Contact required.
+///
+/// Mirrors the reference client's "pending request target" fast path: when we
+/// just sent an ANON_REQ / login / status / telemetry request we already know
+/// the target's full pub_key, and the shared secret is derived purely from
+/// X25519(our_sk, sender_pk). Gating decryption on a persisted Contact would
+/// drop login responses whenever the repeater isn't yet in the contact store
+/// (e.g. first login after a wipe, or before the first advert arrives).
+///
+/// Returns `Ok(())` if the MAC verifies and the body is dispatched to one of
+/// the pending-request branches or treated as a login response. Returns
+/// `Err(meshcore::Error::MacMismatch)` if this isn't the right peer so the
+/// fallback scan can try the next candidate.
+async fn try_dispatch_response_by_pk(
+    sender_pk: &[u8; meshcore::PUB_KEY_SIZE],
+    msg:       &meshcore::payload::txt_msg::TxtMsg,
+    identity:  &DeviceIdentity,
+) -> Result<(), meshcore::Error> {
     use meshcore::payload::txt_msg;
 
-    txt_msg::verify_mac(&identity.sec_key, &c.pub_key, msg)?;
-    let (dec, _ack_hash) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, msg)?;
+    txt_msg::verify_mac(&identity.sec_key, sender_pk, msg)?;
+    let (dec, _ack_hash) = txt_msg::decrypt(&identity.sec_key, sender_pk, msg)?;
 
     // Decrypted plaintext layout (same as C++ onContactResponse `data` arg):
     //   [0..4]  = tag / timestamp (u32 LE)      → dec.timestamp
@@ -2312,7 +2339,7 @@ async fn try_dispatch_response(
     // In the Response payload, dec.flags = resp_type byte, dec.text = body after flags.
     let resp_type = dec.flags;
     let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-    pub_key.copy_from_slice(&c.pub_key);
+    pub_key.copy_from_slice(sender_pk);
 
     // Pending anonymous status ping (legacy ANON_REQ-with-empty-password path).
     let pending_status = crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.get());
@@ -2338,7 +2365,7 @@ async fn try_dispatch_response(
 
             defmt::info!(
                 "Response recv: STATUS from {=[u8]:02x} resp_type={=u8} uptime={=u32}s batt={=u16}mV",
-                &c.pub_key[..6], resp_type, uptime_secs, battery_mv,
+                &sender_pk[..6], resp_type, uptime_secs, battery_mv,
             );
 
             // Build a synthetic RepeaterStats blob with only the two fields the
@@ -2375,7 +2402,7 @@ async fn try_dispatch_response(
 
             defmt::info!(
                 "Response recv: ADMIN_STATUS from {=[u8]:02x} tag={=u32:#010x} up={=u32}s batt={=u16}mV queue={=u16} rssi={=i16} snrX4={=i16} recv={=u32} sent={=u32}",
-                &c.pub_key[..6],
+                &sender_pk[..6],
                 result.tag,
                 result.total_up_time_secs,
                 result.batt_milli_volts,
@@ -2424,7 +2451,7 @@ async fn try_dispatch_response(
 
             defmt::info!(
                 "Response recv: BINARY from {=[u8]:02x} tag={=u32:#010x} body={=usize}B",
-                &c.pub_key[..6], binary_tag, body.len(),
+                &sender_pk[..6], binary_tag, body.len(),
             );
 
             let _ = crate::BINARY_RESULT_CHANNEL.try_send(crate::BinaryResult {
@@ -2449,7 +2476,7 @@ async fn try_dispatch_response(
 
             defmt::info!(
                 "Response recv: TELEM from {=[u8]:02x} lpp={=usize}B",
-                &c.pub_key[..6], lpp.len(),
+                &sender_pk[..6], lpp.len(),
             );
 
             let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult {
@@ -2468,7 +2495,7 @@ async fn try_dispatch_response(
     defmt::info!(
         "Response recv: login {} from {=[u8]:02x} resp_type={=u8}",
         if success { "OK" } else { "FAIL" },
-        &c.pub_key[..6],
+        &sender_pk[..6],
         resp_type,
     );
 
@@ -2528,22 +2555,26 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
         msg.dest_hash, msg.src_hash, rssi,
     );
 
-    // Fast path: try the most recently hinted target contact via the O(1)
-    // prefix index, skipping the 300-slot linear scan. Falls through on miss.
+    // Fast path: decrypt directly using the most recently hinted target's
+    // pub_key — no Contact lookup required. Lets Path-wrapped login /
+    // admin-status / discovery responses decrypt even when the target isn't
+    // (yet) in the contact store.
     let store = contacts::ContactStore::new();
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
     if let Some(hint_pk) = hint {
         if hint_pk[0] == msg.src_hash {
-            if let Some(c) = store.find_by_key(&hint_pk).await {
-                if try_dispatch_path(&c, &msg, rssi, &store, identity).await.is_ok() {
-                    return;
-                }
+            if try_dispatch_path_by_pk(&hint_pk, &msg, rssi, &store, identity)
+                .await
+                .is_ok()
+            {
+                return;
             }
         }
     }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index instead
-    // of a 300-slot linear scan.
+    // of a 300-slot linear scan. Covers unsolicited Path returns from peers
+    // we didn't just request anything from.
     let mut slots = [0u16; contacts::MAX_SLOTS_PER_BUCKET];
     let n = store.hash_index_lookup(msg.src_hash, &mut slots).await;
     for &slot in &slots[..n] {
@@ -2559,14 +2590,11 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
     defmt::debug!("Path recv: no matching contact for src_hash={=u8:#04x}", msg.src_hash);
 }
 
-/// Verify, decrypt and dispatch a `PayloadType::Path` packet under the given
-/// contact's shared secret.
+/// Verify, decrypt and dispatch a `PayloadType::Path` packet.
 ///
-/// Returns `Ok(())` if `c` is the right peer (MAC verifies and the wrapped
-/// extra payload was dispatched). Returns `Err(meshcore::Error::MacMismatch)`
-/// if the contact is not the sender — caller should try the next candidate.
-/// Other errors (e.g. malformed plaintext) are also returned so the caller
-/// can decide whether to keep scanning.
+/// Thin wrapper around [`try_dispatch_path_by_pk`] that accepts a stored
+/// [`contacts::Contact`] — kept so the store-fallback scan in
+/// [`handle_path_recv`] can stay unchanged.
 async fn try_dispatch_path(
     c:        &contacts::Contact,
     msg:      &meshcore::payload::path_msg::PathMsg,
@@ -2574,27 +2602,48 @@ async fn try_dispatch_path(
     store:    &contacts::ContactStore,
     identity: &DeviceIdentity,
 ) -> Result<(), meshcore::Error> {
+    try_dispatch_path_by_pk(&c.pub_key, msg, rssi, store, identity).await
+}
+
+/// Verify, decrypt and dispatch a `PayloadType::Path` packet using only the
+/// sender's 32-byte pub_key — no stored Contact required.
+///
+/// Mirrors the reference client's "pending request target" fast path so that
+/// login / admin-status / discovery / telemetry Path responses decrypt even
+/// when the target isn't (yet) in the contact store. The embedded path update
+/// is still attempted via [`ContactStore::update_path`], which is a no-op
+/// when the contact doesn't exist — so zero-hop-known peers still get their
+/// path cached here, and unknown peers silently skip the update.
+async fn try_dispatch_path_by_pk(
+    sender_pk: &[u8; meshcore::PUB_KEY_SIZE],
+    msg:       &meshcore::payload::path_msg::PathMsg,
+    rssi:      i16,
+    store:     &contacts::ContactStore,
+    identity:  &DeviceIdentity,
+) -> Result<(), meshcore::Error> {
     use meshcore::payload::path_msg;
 
-    let dec = path_msg::verify_and_decrypt(&identity.sec_key, &c.pub_key, msg)?;
+    let dec = path_msg::verify_and_decrypt(&identity.sec_key, sender_pk, msg)?;
 
     defmt::info!(
         "Path recv: decrypted from {=[u8]:02x} path_len={=u8} extra_type={=u8} extra_len={=usize}",
-        &c.pub_key[..6], dec.path_len_byte, dec.extra_type, dec.extra.len(),
+        &sender_pk[..6], dec.path_len_byte, dec.extra_type, dec.extra.len(),
     );
 
     // Update the stored routing path for this contact. Accept zero-hop paths
     // (direct neighbour, `dec.path_len_byte == 0`) as well — the previous
     // `!dec.path.is_empty()` gate incorrectly skipped those, leaving the
     // contact's out_path at `OUT_PATH_UNKNOWN` forever and forcing every
-    // subsequent TX to flood.
+    // subsequent TX to flood. When the peer isn't in the contact store
+    // `update_path` is a no-op (returns `Ok(false)`), which is the desired
+    // behaviour for the pub-key-only fast path.
     if dec.path_len_byte != contacts::OUT_PATH_UNKNOWN {
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy = dec.path.len().min(contacts::MAX_PATH_SIZE);
         path_buf[..copy].copy_from_slice(&dec.path[..copy]);
-        match store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
+        match store.update_path(sender_pk, dec.path_len_byte, &path_buf).await {
             Ok(true) => {
-                let _ = crate::PATH_UPDATED_CHANNEL.try_send(c.pub_key);
+                let _ = crate::PATH_UPDATED_CHANNEL.try_send(*sender_pk);
             }
             Ok(false) => {}
             Err(e) => defmt::warn!("Path recv: path update failed: {:?}", e),
@@ -2606,7 +2655,7 @@ async fn try_dispatch_path(
         let ack_crc = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
         defmt::info!(
             "Path recv: ACK from {=[u8]:02x} ack_crc={=u32:#010x}",
-            &c.pub_key[..6], ack_crc,
+            &sender_pk[..6], ack_crc,
         );
         handle_ack_recv(&dec.extra[..4], rssi);
         return Ok(());
@@ -2623,7 +2672,7 @@ async fn try_dispatch_path(
                 crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
 
                 let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-                pub_key.copy_from_slice(&c.pub_key);
+                pub_key.copy_from_slice(sender_pk);
 
                 // Copy the raw stats blob (truncate or zero-pad to exactly 56B).
                 let mut stats = [0u8; 56];
@@ -2634,7 +2683,7 @@ async fn try_dispatch_path(
 
                 defmt::info!(
                     "Path recv: ADMIN_STATUS from {=[u8]:02x} tag={=u32:#010x} up={=u32}s batt={=u16}mV queue={=u16} rssi={=i16} snrX4={=i16} recv={=u32} sent={=u32}",
-                    &c.pub_key[..6],
+                    &sender_pk[..6],
                     result.tag,
                     result.total_up_time_secs,
                     result.batt_milli_volts,
@@ -2663,7 +2712,7 @@ async fn try_dispatch_path(
                 crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
 
                 let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-                pub_key.copy_from_slice(&c.pub_key);
+                pub_key.copy_from_slice(sender_pk);
 
                 let mut body: heapless::Vec<u8, { crate::MAX_BINARY_RESP_BODY }> = heapless::Vec::new();
                 let n = (dec.extra.len() - 4).min(crate::MAX_BINARY_RESP_BODY);
@@ -2671,7 +2720,7 @@ async fn try_dispatch_path(
 
                 defmt::info!(
                     "Path recv: BINARY from {=[u8]:02x} tag={=u32:#010x} body={=usize}B",
-                    &c.pub_key[..6], binary_tag, body.len(),
+                    &sender_pk[..6], binary_tag, body.len(),
                 );
 
                 let _ = crate::BINARY_RESULT_CHANNEL.try_send(crate::BinaryResult {
@@ -2691,7 +2740,7 @@ async fn try_dispatch_path(
                 crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
 
                 let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-                pub_key.copy_from_slice(&c.pub_key);
+                pub_key.copy_from_slice(sender_pk);
 
                 let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
                 let n = (dec.extra.len() - 4).min(176);
@@ -2699,7 +2748,7 @@ async fn try_dispatch_path(
 
                 defmt::info!(
                     "Path recv: TELEM from {=[u8]:02x} tag={=u32:#010x} lpp={=usize}B",
-                    &c.pub_key[..6], telem_tag, lpp.len(),
+                    &sender_pk[..6], telem_tag, lpp.len(),
                 );
 
                 let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult {
@@ -2723,11 +2772,11 @@ async fn try_dispatch_path(
                     let in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
 
                     let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-                    pub_key.copy_from_slice(&c.pub_key);
+                    pub_key.copy_from_slice(sender_pk);
 
                     defmt::info!(
                         "Path recv: DISCOVERY response from {=[u8]:02x} tag={=u32:#010x} out_path_len={=u8}",
-                        &c.pub_key[..6], disc_tag, dec.path_len_byte,
+                        &sender_pk[..6], disc_tag, dec.path_len_byte,
                     );
 
                     let _ = crate::DISCOVERY_RESULT_CHANNEL.try_send(crate::DiscoveryResult {
@@ -2743,7 +2792,7 @@ async fn try_dispatch_path(
         }
 
         // Default: treat as a login response.
-        handle_path_login_response(&dec.extra, &c.pub_key);
+        handle_path_login_response(&dec.extra, sender_pk);
     }
 
     Ok(())

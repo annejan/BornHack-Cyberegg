@@ -134,6 +134,42 @@ async fn main(spawner: Spawner) {
             settings::get_boost_rx().await,
             core::sync::atomic::Ordering::Relaxed,
         );
+        {
+            let rp = settings::get_radio_params_or_default().await;
+            use core::sync::atomic::Ordering::Relaxed;
+            hello_graphics::LORA_FREQ_HZ.store(rp.freq_hz, Relaxed);
+            hello_graphics::LORA_BW_HZ.store(rp.bw_hz, Relaxed);
+            hello_graphics::LORA_SF.store(rp.sf, Relaxed);
+            hello_graphics::LORA_CR.store(rp.cr, Relaxed);
+            hello_graphics::LORA_TX_POWER.store(rp.tx_power, Relaxed);
+            hello_graphics::LORA_CLIENT_REPEAT.store(rp.client_repeat, Relaxed);
+        }
+        {
+            use core::sync::atomic::Ordering::Relaxed;
+            if let Some(op) = settings::get_other_params().await {
+                hello_graphics::ADVERT_LOC_POLICY
+                    .store(op.advert_loc_policy != 0, Relaxed);
+                // Clamp persisted value into the menu-exposed range (1 or 2).
+                let ma = if op.multi_acks == 0 { 1 } else { op.multi_acks.min(2) };
+                hello_graphics::MULTI_ACKS.store(ma, Relaxed);
+                // Derived master-telemetry flag — "on" iff any mode is non-zero.
+                let share = op.telemetry_mode_base != 0
+                    || op.telemetry_mode_loc != 0
+                    || op.telemetry_mode_env != 0;
+                hello_graphics::TELEMETRY_SHARE.store(share, Relaxed);
+            }
+            hello_graphics::fw::mesh::PATH_HASH_MODE
+                .store(settings::get_path_hash_mode().await.min(2), Relaxed);
+
+            let adv = settings::get_advert_config_or_default().await;
+            hello_graphics::ADVERT_ENABLED.store(adv.enabled, Relaxed);
+            hello_graphics::ADVERT_INTERVAL_HOURS.store(adv.interval_hours, Relaxed);
+
+            hello_graphics::LORA_DISABLED
+                .store(!settings::get_lora_enabled().await, Relaxed);
+            hello_graphics::BLE_DISABLED
+                .store(!settings::get_ble_enabled().await, Relaxed);
+        }
 
         let identity = settings::load_or_create_identity().await;
         let ble_prng_seed = hello_graphics::fw::mesh::device_identity::trng_seed();
@@ -237,6 +273,8 @@ async fn main(spawner: Spawner) {
     };
     spawner.must_spawn(battery_task(battery_monitor));
     spawner.must_spawn(minute_tick_task());
+    #[cfg(feature = "mesh")]
+    spawner.must_spawn(advert_ticker_task());
 
     // ── USB mass storage ──────────────────────────────────────────────────
     // Runs alongside all other tasks.  VBUS detection is automatic —
@@ -470,6 +508,52 @@ async fn wait_display_event(
 // ---------------------------------------------------------------------------
 // Background tasks
 // ---------------------------------------------------------------------------
+
+/// Periodic self-advert task.
+///
+/// Wakes every `ADVERT_INTERVAL_HOURS` hours and fires `SEND_ADVERT_SIGNAL`
+/// when `ADVERT_ENABLED` is true. When scheduling changes via the menu, the
+/// task wakes early on `ADVERT_CHANGED_SIGNAL` and re-reads the interval.
+/// When disabled it waits on the change signal and never sends.
+#[cfg(feature = "mesh")]
+#[embassy_executor::task]
+async fn advert_ticker_task() {
+    use core::sync::atomic::Ordering::Relaxed;
+    use embassy_futures::select::{Either, select};
+
+    // Brief delay on boot so the radio and mesh stack are up before our first TX.
+    Timer::after(embassy_time::Duration::from_secs(30)).await;
+
+    loop {
+        if !hello_graphics::ADVERT_ENABLED.load(Relaxed) {
+            hello_graphics::ADVERT_CHANGED_SIGNAL.wait().await;
+            hello_graphics::ADVERT_CHANGED_SIGNAL.reset();
+            continue;
+        }
+
+        // Send an advert now, then sleep until the next tick (or wake early
+        // if the menu changes the schedule).
+        hello_graphics::fw::mesh::SEND_ADVERT_SIGNAL
+            .signal(hello_graphics::fw::mesh::meshcore::AdvertMode::Flood);
+
+        let hours = hello_graphics::ADVERT_INTERVAL_HOURS
+            .load(Relaxed)
+            .clamp(2, 96) as u64;
+        let sleep = embassy_time::Duration::from_secs(hours * 3600);
+
+        match select(
+            Timer::after(sleep),
+            hello_graphics::ADVERT_CHANGED_SIGNAL.wait(),
+        )
+        .await
+        {
+            Either::First(_) => {}
+            Either::Second(_) => {
+                hello_graphics::ADVERT_CHANGED_SIGNAL.reset();
+            }
+        }
+    }
+}
 
 #[embassy_executor::task]
 async fn minute_tick_task() {

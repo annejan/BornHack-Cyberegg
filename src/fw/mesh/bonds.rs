@@ -151,6 +151,7 @@ impl BondStore {
 pub enum BondCmd {
     Save(BondInformation),
     Remove([u8; 6]),
+    ClearAll,
 }
 
 pub static BOND_CMD_CHANNEL: Channel<CriticalSectionRawMutex, BondCmd, 4> = Channel::new();
@@ -188,6 +189,11 @@ pub async fn bond_task() {
             BondCmd::Remove(addr) => {
                 defmt::info!("BondStore: removing bond");
                 store.remove(&addr).await;
+            }
+            BondCmd::ClearAll => {
+                defmt::info!("BondStore: clearing all bonds — rebooting");
+                store.store_all(&Vec::new()).await;
+                cortex_m::peripheral::SCB::sys_reset();
             }
         }
     }

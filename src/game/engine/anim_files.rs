@@ -31,16 +31,22 @@ struct AnimEntry {
 
 impl AnimEntry {
     const fn single(f0: [u8; 11]) -> Self {
-        Self { filenames: [f0, NI, NI, NI, NI], count: 1 }
+        Self {
+            filenames: [f0, NI, NI, NI, NI],
+            count: 1,
+        }
     }
 
     const fn new(count: u8, f: [[u8; 11]; MAX_FRAMES as usize]) -> Self {
-        Self { filenames: f, count }
+        Self {
+            filenames: f,
+            count,
+        }
     }
 
-    const fn placeholder(count: u8) -> Self {
-        Self { filenames: [NI; MAX_FRAMES as usize], count }
-    }
+    // const fn placeholder(count: u8) -> Self {
+    //     Self { filenames: [NI; MAX_FRAMES as usize], count }
+    // }
 }
 
 // ---------------------------------------------------------------------------
@@ -78,41 +84,44 @@ const LEAVING: AnimEntry = AnimEntry::single(*b"11000000PCX");
 const GONE: AnimEntry = AnimEntry::single(*b"12000000PCX");
 const HIBERNATING: AnimEntry = AnimEntry::single(*b"13000000PCX");
 
-const HATCHING: AnimEntry = AnimEntry::new(4, [
-    *b"14000000PCX",
-    *b"14000001PCX",
-    *b"14000002PCX",
-    *b"14000003PCX",
-    NI,
-]);
+const HATCHING: AnimEntry = AnimEntry::new(
+    4,
+    [
+        *b"14000000PCX",
+        *b"14000001PCX",
+        *b"14000002PCX",
+        *b"14000003PCX",
+        NI,
+    ],
+);
 
 /// Get the entry for a given animation state.
 fn entry_for(anim: DisplayAnim) -> &'static AnimEntry {
     match anim {
-        DisplayAnim::Idle                => &IDLE_NEUTRAL,
-        DisplayAnim::Happy               => &HAPPY,
+        DisplayAnim::Idle => &IDLE_NEUTRAL,
+        DisplayAnim::Happy => &HAPPY,
 
-        DisplayAnim::CriticalSick        => &CRITICAL_SICK,
-        DisplayAnim::CriticalTired       => &CRITICAL_TIRED,
-        DisplayAnim::CriticalHungry      => &CRITICAL_HUNGRY,
-        DisplayAnim::CriticalDrained     => &CRITICAL_DRAINED,
+        DisplayAnim::CriticalSick => &CRITICAL_SICK,
+        DisplayAnim::CriticalTired => &CRITICAL_TIRED,
+        DisplayAnim::CriticalHungry => &CRITICAL_HUNGRY,
+        DisplayAnim::CriticalDrained => &CRITICAL_DRAINED,
 
-        DisplayAnim::WarningSick         => &WARNING_SICK,
-        DisplayAnim::WarningTired        => &WARNING_TIRED,
-        DisplayAnim::WarningHungry       => &WARNING_HUNGRY,
-        DisplayAnim::WarningDrained      => &WARNING_DRAINED,
-        DisplayAnim::WarningMiserable    => &WARNING_MISERABLE,
+        DisplayAnim::WarningSick => &WARNING_SICK,
+        DisplayAnim::WarningTired => &WARNING_TIRED,
+        DisplayAnim::WarningHungry => &WARNING_HUNGRY,
+        DisplayAnim::WarningDrained => &WARNING_DRAINED,
+        DisplayAnim::WarningMiserable => &WARNING_MISERABLE,
 
-        DisplayAnim::Feeding             => &FEEDING,
-        DisplayAnim::Healing             => &HEALING,
-        DisplayAnim::Relaxing            => &RELAXING,
-        DisplayAnim::Playing             => &PLAYING,
-        DisplayAnim::Sleeping            => &SLEEPING,
+        DisplayAnim::Feeding => &FEEDING,
+        DisplayAnim::Healing => &HEALING,
+        DisplayAnim::Relaxing => &RELAXING,
+        DisplayAnim::Playing => &PLAYING,
+        DisplayAnim::Sleeping => &SLEEPING,
 
-        DisplayAnim::Leaving { .. }      => &LEAVING,
-        DisplayAnim::Gone                => &GONE,
-        DisplayAnim::Hibernating         => &HIBERNATING,
-        DisplayAnim::Hatching { .. }     => &HATCHING,
+        DisplayAnim::Leaving { .. } => &LEAVING,
+        DisplayAnim::Gone => &GONE,
+        DisplayAnim::Hibernating => &HIBERNATING,
+        DisplayAnim::Hatching { .. } => &HATCHING,
     }
 }
 
@@ -127,7 +136,11 @@ fn entry_for(anim: DisplayAnim) -> &'static AnimEntry {
 /// Use [`frame_count`] to query how many frames an animation has.
 pub fn anim_filename(anim: DisplayAnim, frame_index: u8) -> &'static [u8; 11] {
     let e = entry_for(anim);
-    let idx = if e.count > 0 { frame_index % e.count } else { 0 };
+    let idx = if e.count > 0 {
+        frame_index % e.count
+    } else {
+        0
+    };
     &e.filenames[idx as usize]
 }
 
