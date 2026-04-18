@@ -165,6 +165,8 @@ async fn main(spawner: Spawner) {
             hello_graphics::ADVERT_ENABLED.store(adv.enabled, Relaxed);
             hello_graphics::ADVERT_INTERVAL_HOURS.store(adv.interval_hours, Relaxed);
 
+            hello_graphics::IGNORE_BLINK
+                .store(settings::get_ignore_blink().await, Relaxed);
             hello_graphics::LORA_DISABLED
                 .store(!settings::get_lora_enabled().await, Relaxed);
             hello_graphics::BLE_DISABLED
@@ -377,6 +379,10 @@ async fn display_loop(
 
         let sprite_advance = match select(
             async {
+                // Re-read temperature and reload OTP LUT if drift > 2°C.
+                // Must happen while display is in deep sleep (SPI3 idle).
+                hello_graphics::fw::epd::maybe_reload_lut(display).await;
+
                 let _ = display.reset().await;
                 let _ = display.update_bw(UpdateMode::Mode1).await;
                 let _ = display.deep_sleep().await;
@@ -399,7 +405,17 @@ async fn display_loop(
         if sprite_advance {
             let count = hello_graphics::game::sprite_loader::frame_count();
             if count > 0 {
-                sprite_frame = (sprite_frame + 1) % count;
+                let next = sprite_frame + 1;
+                // During hatching, clamp to the last frame instead of wrapping.
+                let is_hatching = matches!(
+                    hello_graphics::game::lifecycle::display_anim(),
+                    hello_graphics::game::engine::DisplayAnim::Hatching { .. }
+                );
+                sprite_frame = if is_hatching {
+                    next.min(count - 1)
+                } else {
+                    next % count
+                };
             }
         }
         #[cfg(not(feature = "game"))]

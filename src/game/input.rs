@@ -28,10 +28,10 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Execute);
     }
 
-    // ── Hatching: all input blocked ──────────────────────────────────
+    // ── Hatching: block game input but allow screen navigation ─────
     let anim = lifecycle::display_anim();
     if matches!(anim, DisplayAnim::Hatching { .. }) {
-        return true; // consume everything, do nothing
+        return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Execute | ButtonId::Fire | ButtonId::Cancel);
     }
 
     // ── Gone: Execute starts a new generation ────────────────────────

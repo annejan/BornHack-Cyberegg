@@ -64,59 +64,111 @@ where
 // ── Icon drawing functions ────────────────────────────────────────────────────
 
 fn icon_fork<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where D: DrawTarget<Color = TriColor> {
+where
+    D: DrawTarget<Color = TriColor>,
+{
     let fill = PrimitiveStyle::with_fill(color);
-    Rectangle::new(Point::new(cx - 1, cy - 8), Size::new(2, 16)).into_styled(fill).draw(display)?;
-    Rectangle::new(Point::new(cx - 4, cy - 8), Size::new(2, 8)).into_styled(fill).draw(display)?;
-    Rectangle::new(Point::new(cx + 2, cy - 8), Size::new(2, 8)).into_styled(fill).draw(display)?;
+    Rectangle::new(Point::new(cx - 1, cy - 8), Size::new(2, 16))
+        .into_styled(fill)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 4, cy - 8), Size::new(2, 8))
+        .into_styled(fill)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx + 2, cy - 8), Size::new(2, 8))
+        .into_styled(fill)
+        .draw(display)?;
     Ok(())
 }
 
 fn icon_bulb<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where D: DrawTarget<Color = TriColor> {
+where
+    D: DrawTarget<Color = TriColor>,
+{
     let stroke = PrimitiveStyle::with_stroke(color, 1);
     let fill = PrimitiveStyle::with_fill(color);
-    Circle::new(Point::new(cx - 5, cy - 7), 10).into_styled(stroke).draw(display)?;
-    Rectangle::new(Point::new(cx - 2, cy + 3), Size::new(4, 4)).into_styled(fill).draw(display)?;
+    Circle::new(Point::new(cx - 5, cy - 7), 10)
+        .into_styled(stroke)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 2, cy + 3), Size::new(4, 4))
+        .into_styled(fill)
+        .draw(display)?;
     Ok(())
 }
 
 fn icon_bat<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where D: DrawTarget<Color = TriColor> {
+where
+    D: DrawTarget<Color = TriColor>,
+{
     let fill = PrimitiveStyle::with_fill(color);
-    Rectangle::new(Point::new(cx - 1, cy - 8), Size::new(2, 16)).into_styled(fill).draw(display)?;
-    Rectangle::new(Point::new(cx - 6, cy + 2), Size::new(12, 3)).into_styled(fill).draw(display)?;
-    Circle::new(Point::new(cx - 3, cy - 5), 6).into_styled(PrimitiveStyle::with_stroke(color, 1)).draw(display)?;
+    Rectangle::new(Point::new(cx - 1, cy - 8), Size::new(2, 16))
+        .into_styled(fill)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 6, cy + 2), Size::new(12, 3))
+        .into_styled(fill)
+        .draw(display)?;
+    Circle::new(Point::new(cx - 3, cy - 5), 6)
+        .into_styled(PrimitiveStyle::with_stroke(color, 1))
+        .draw(display)?;
     Ok(())
 }
 
-fn icon_syringe<D>(display: &mut D, cx: i32, cy: i32, _active: bool, color: TriColor) -> Result<(), D::Error>
-where D: DrawTarget<Color = TriColor> {
+fn icon_syringe<D>(
+    display: &mut D,
+    cx: i32,
+    cy: i32,
+    _active: bool,
+    color: TriColor,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
     let fill = PrimitiveStyle::with_fill(color);
     let stroke = PrimitiveStyle::with_stroke(color, 1);
-    Rectangle::new(Point::new(cx - 2, cy - 8), Size::new(4, 12)).into_styled(stroke).draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy - 10), Size::new(2, 3)).into_styled(fill).draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy + 4), Size::new(2, 4)).into_styled(fill).draw(display)?;
+    Rectangle::new(Point::new(cx - 2, cy - 8), Size::new(4, 12))
+        .into_styled(stroke)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 1, cy - 10), Size::new(2, 3))
+        .into_styled(fill)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 1, cy + 4), Size::new(2, 4))
+        .into_styled(fill)
+        .draw(display)?;
     Ok(())
 }
 
 fn icon_meter<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where D: DrawTarget<Color = TriColor> {
+where
+    D: DrawTarget<Color = TriColor>,
+{
     let stroke = PrimitiveStyle::with_stroke(color, 1);
     let fill = PrimitiveStyle::with_fill(color);
-    Circle::new(Point::new(cx - 7, cy - 7), 14).into_styled(stroke).draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy - 5), Size::new(2, 6)).into_styled(fill).draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy - 5), Size::new(5, 2)).into_styled(fill).draw(display)?;
+    Circle::new(Point::new(cx - 7, cy - 7), 14)
+        .into_styled(stroke)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 1, cy - 5), Size::new(2, 6))
+        .into_styled(fill)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx - 1, cy - 5), Size::new(5, 2))
+        .into_styled(fill)
+        .draw(display)?;
     Ok(())
 }
 
 fn icon_duck<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where D: DrawTarget<Color = TriColor> {
+where
+    D: DrawTarget<Color = TriColor>,
+{
     let stroke = PrimitiveStyle::with_stroke(color, 1);
     let fill = PrimitiveStyle::with_fill(color);
-    Circle::new(Point::new(cx - 3, cy - 7), 8).into_styled(stroke).draw(display)?;
-    Circle::new(Point::new(cx - 6, cy), 12).into_styled(stroke).draw(display)?;
-    Rectangle::new(Point::new(cx + 2, cy - 4), Size::new(4, 2)).into_styled(fill).draw(display)?;
+    Circle::new(Point::new(cx - 3, cy - 7), 8)
+        .into_styled(stroke)
+        .draw(display)?;
+    Circle::new(Point::new(cx - 6, cy), 12)
+        .into_styled(stroke)
+        .draw(display)?;
+    Rectangle::new(Point::new(cx + 2, cy - 4), Size::new(4, 2))
+        .into_styled(fill)
+        .draw(display)?;
     Ok(())
 }
 
@@ -133,7 +185,7 @@ pub fn draw_screen_game<D>(display: &mut D, nav: GameNav) -> Result<(), D::Error
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13};
+    use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD};
     use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
     use engine::to_display::DisplayAnim;
 
@@ -141,20 +193,13 @@ where
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
-    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
 
-    // Battery percentage — top-right, same position as menu screen.
+    // Battery icon — top-right.
     #[cfg(feature = "embassy-base")]
     {
         let pct = crate::fw::battery::read_pct();
-        let bat = crate::bat_text(&pct);
-        Text::with_text_style(
-            &bat,
-            Point::new(110, 16),
-            font,
-            TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
-        )
-        .draw(display)?;
+        crate::draw_battery_icon(display, 128, 2, pct)?;
     }
 
     // ── Not started ──────────────────────────────────────────────────────
@@ -190,8 +235,7 @@ where
             Text::with_text_style("Your pet has left", Point::new(76, 50), font, centered)
                 .draw(display)?;
         }
-        Text::with_text_style("Press Execute", Point::new(76, 90), font, centered)
-            .draw(display)?;
+        Text::with_text_style("Press Execute", Point::new(76, 90), font, centered).draw(display)?;
         Text::with_text_style("for a new egg", Point::new(76, 106), font, centered)
             .draw(display)?;
         return Ok(());
@@ -203,7 +247,9 @@ where
     for (i, &cx) in ICON_CX.iter().enumerate() {
         let selected = nav.row == Row::Top && nav.col == i as u8;
         let fg = if selected { WHITE } else { BLACK };
-        if selected { draw_selection_bg(display, cx, TOP_CY)?; }
+        if selected {
+            draw_selection_bg(display, cx, TOP_CY)?;
+        }
         match i {
             0 => icon_meter(display, cx, TOP_CY, fg)?,
             1 => icon_bulb(display, cx, TOP_CY, fg)?,
@@ -220,8 +266,10 @@ where
         Text::with_text_style(
             "No sprites on flash",
             Point::new(76, (SEP_TOP + SEP_BOT) / 2),
-            font, centered,
-        ).draw(display)?;
+            font,
+            centered,
+        )
+        .draw(display)?;
     }
 
     Rectangle::new(Point::new(0, SEP_BOT), Size::new(152, 1))
@@ -232,7 +280,9 @@ where
     for (i, &cx) in ICON_CX.iter().enumerate() {
         let selected = nav.row == Row::Bottom && nav.col == i as u8;
         let fg = if selected { WHITE } else { BLACK };
-        if selected { draw_selection_bg(display, cx, BOT_CY)?; }
+        if selected {
+            draw_selection_bg(display, cx, BOT_CY)?;
+        }
         match i {
             0 => icon_fork(display, cx, BOT_CY, fg)?,
             1 => icon_syringe(display, cx, BOT_CY, true, fg)?,
@@ -323,7 +373,8 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             Point::new(150, 36),
             MonoTextStyle::new(&FONT_7X13, Color::Black),
             style,
-        ).draw(display);
+        )
+        .draw(display);
     }
 
     if lifecycle::is_started() {

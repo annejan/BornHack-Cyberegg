@@ -882,6 +882,7 @@ pub const SAVE_SIZE: usize = 64;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
+    #[allow(unused_assignments)]
     pub fn to_bytes(&self) -> [u8; SAVE_SIZE] {
         let mut b = [0u8; SAVE_SIZE];
         let mut i = 0;
@@ -924,6 +925,7 @@ impl GameState {
 
     /// Deserialize a game state from a byte buffer.
     /// Returns `None` if the buffer is too short.
+    #[allow(unused_assignments)]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() < SAVE_SIZE { return None; }
         let mut i = 0;

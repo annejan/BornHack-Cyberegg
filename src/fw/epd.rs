@@ -47,6 +47,78 @@ pub type EpdGfx<'a> = GraphicDisplay<
 >;
 
 static OTP_LUT: StaticCell<[u8; 107]> = StaticCell::new();
+static OTP_LUT_PTR: core::sync::atomic::AtomicPtr<[u8; 107]> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+// Pin numbers cached at init for OTP LUT reload.
+static EPD_PIN_SCK:  core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static EPD_PIN_DATA: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static EPD_PIN_CS:   core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static EPD_PIN_DC:   core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static EPD_PIN_RST:  core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static EPD_PIN_BUSY: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+fn cache_pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
+    let port = match p.port() { Port::Port0 => 0u8, Port::Port1 => 1u8 };
+    port * 32 + p.pin()
+}
+
+/// Temperature (°C × 10) at which the OTP LUT was last loaded.
+static LUT_TEMP_C10: core::sync::atomic::AtomicI16 =
+    core::sync::atomic::AtomicI16::new(i16::MIN);
+
+/// Check if the current temperature has drifted more than 2°C from the last
+/// LUT probe. If so, re-read the OTP LUT from the display controller at the
+/// new temperature, patch it (NoInvert), and update the display's cached LUT.
+///
+/// Must be called while the display is in deep sleep (SPI3 idle).
+/// The `display` reference is needed to update its stored LUT and temperature.
+pub async fn maybe_reload_lut<'a>(display: &mut EpdGfx<'a>) {
+    // Read current temperature via MPSL (safe after init, synchronous).
+    let current_c10 = super::temperature::read_via_mpsl();
+    let last = LUT_TEMP_C10.load(core::sync::atomic::Ordering::Relaxed);
+    if last != i16::MIN {
+        let delta = (current_c10 - last).unsigned_abs();
+        if delta < 20 {
+            return;
+        }
+    }
+
+    let temp_celsius = current_c10 / 10;
+    let temp_raw = (temp_celsius as i32 * 16) as u16;
+    defmt::info!(
+        "EPD: temperature drift ({} → {} °C×10), reloading OTP LUT (raw 0x{:04x})",
+        last, current_c10, temp_raw,
+    );
+
+    // Re-read the OTP LUT at the new temperature using stolen peripherals.
+    // Safe: display is in deep_sleep, SPI3 is idle.
+    use core::sync::atomic::Ordering::Relaxed;
+    let sck  = unsafe { AnyPin::steal(EPD_PIN_SCK.load(Relaxed)) };
+    let data = unsafe { AnyPin::steal(EPD_PIN_DATA.load(Relaxed)) };
+    let cs   = unsafe { AnyPin::steal(EPD_PIN_CS.load(Relaxed)) };
+    let dc   = unsafe { AnyPin::steal(EPD_PIN_DC.load(Relaxed)) };
+    let rst  = unsafe { AnyPin::steal(EPD_PIN_RST.load(Relaxed)) };
+    let busy = unsafe { AnyPin::steal(EPD_PIN_BUSY.load(Relaxed)) };
+
+    let new_lut = probe_lut(
+        &sck.into(), &data.into(), &cs.into(),
+        &dc.into(), &rst.into(), &busy.into(),
+        temp_raw,
+    ).await;
+
+    // Overwrite the static LUT buffer in-place and re-patch.
+    let lut_ptr = OTP_LUT_PTR.load(Relaxed);
+    if !lut_ptr.is_null() {
+        let lut_ref = unsafe { &mut *lut_ptr };
+        lut_ref.copy_from_slice(&new_lut);
+        display.set_otp_lut(lut_ref, ssd1675::display::LutMode::NoInvert);
+        display.set_temperature(temp_raw);
+    }
+
+    LUT_TEMP_C10.store(current_c10, core::sync::atomic::Ordering::Relaxed);
+    defmt::info!("EPD: OTP LUT reloaded for {} °C", temp_celsius);
+}
 
 /// Read back the OTP LUT register (command 0x33) using stolen peripherals.
 ///
@@ -83,7 +155,7 @@ async fn probe_lut(
     let rst_nr = pin_nr(rst);
     let busy_nr = pin_nr(busy);
 
-    // Safety: all stolen peripherals are dropped before this function returns.
+    // GPIO wrappers are mem::forget'd at the end to preserve pin config.
     let mut cs_out = Output::new(
         unsafe { AnyPin::steal(cs_nr) },
         Level::High,
@@ -137,7 +209,9 @@ async fn probe_lut(
         // 0x20: Master Activation — BUSY goes HIGH while the controller loads the OTP zone.
         dc_out.set_low();
         spi_tx.write(&[0x20]).await.ok();
-    } // spi_tx dropped — SPIM3 disabled
+        // Don't drop — Spim::drop disconnects SPI pins.
+        core::mem::forget(spi_tx);
+    }
     cs_out.set_high();
 
     // Wait for BUSY LOW: controller has finished loading the temperature zone into the LUT register.
@@ -166,7 +240,8 @@ async fn probe_lut(
         dc_out.set_low();
         spi_tx.write(&[0x33]).await.ok();
         dc_out.set_high();
-    } // MOSI released as output
+        core::mem::forget(spi_tx);
+    }
     {
         // Data phase: read 107 bytes on MISO (same physical pin, now input).
         let mut spi_rx = Spim::new_rxonly(
@@ -174,16 +249,39 @@ async fn probe_lut(
             Irqs,
             unsafe { AnyPin::steal(sck_nr) },
             unsafe { AnyPin::steal(data_nr) },
-            cfg,
+            cfg.clone(),
         );
         spi_rx.read(&mut lut).await.ok();
+        // Drop the RX Spim — it will disable SPI3, but we restore TX mode below.
+        drop(spi_rx);
     }
     cs_out.set_high();
+
+    // Restore SPI3 to TX-only mode (data pin as MOSI) so the display's
+    // Spim can transmit. The display's Spim doesn't reconfigure pin
+    // selection on each write — it was set once at boot.
+    {
+        let restore = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs,
+            unsafe { AnyPin::steal(sck_nr) },
+            unsafe { AnyPin::steal(data_nr) },
+            cfg,
+        );
+        core::mem::forget(restore);
+    }
 
     defmt::debug!("Display OTP LUT (107 bytes):");
     for (i, chunk) in lut.chunks(10).enumerate() {
         defmt::debug!("  [{=usize:03}] {:02x}", i * 10, chunk);
     }
+
+    // Prevent Drop from disconnecting GPIO pins — the display's real
+    // Output/Input instances still own these pins.
+    core::mem::forget(cs_out);
+    core::mem::forget(dc_out);
+    core::mem::forget(rst_out);
+    core::mem::forget(busy_in);
 
     lut
 }
@@ -219,11 +317,26 @@ pub async fn init_epd<'a>(
         temp_raw
     );
 
+    // Cache pin numbers for OTP LUT reload at runtime.
+    EPD_PIN_SCK.store(cache_pin_nr(&sck_pin), core::sync::atomic::Ordering::Relaxed);
+    EPD_PIN_DATA.store(cache_pin_nr(&mosi_pin), core::sync::atomic::Ordering::Relaxed);
+    EPD_PIN_CS.store(cache_pin_nr(&csn_pin), core::sync::atomic::Ordering::Relaxed);
+    EPD_PIN_DC.store(cache_pin_nr(&dc_pin), core::sync::atomic::Ordering::Relaxed);
+    EPD_PIN_RST.store(cache_pin_nr(&resetn_pin), core::sync::atomic::Ordering::Relaxed);
+    EPD_PIN_BUSY.store(cache_pin_nr(&busy_pin), core::sync::atomic::Ordering::Relaxed);
+
+    // Store the temperature at which LUTs were loaded (°C × 10).
+    LUT_TEMP_C10.store(
+        temperature.unwrap_or(20) as i16 * 10,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+
     // Read OTP LUT via stolen peripherals before consuming the real tokens.
     // Move raw bytes into static storage immediately — keeps the 107-byte buffer off the stack.
     let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(
         probe_lut(&sck_pin, &mosi_pin, &csn_pin, &dc_pin, &resetn_pin, &busy_pin, temp_raw).await,
     );
+    OTP_LUT_PTR.store(otp_lut as *mut _, core::sync::atomic::Ordering::Relaxed);
 
     // Build the SPI bus.
     let mut cfg = Config::default();

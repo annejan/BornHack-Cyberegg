@@ -397,6 +397,51 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, chann
         }
     };
 
+    // Easter egg: #blinkme channel — blink LED on 'r', 'g', 'b'.
+    // Works even when the channel isn't subscribed.
+    {
+        use meshcore::channel::key_from_hashtag;
+        let blink_key = key_from_hashtag("#blinkme");
+        let blink_hash = meshcore::channel::hash_from_key(&blink_key);
+        if grp.channel_hash == blink_hash
+            && !crate::IGNORE_BLINK.load(core::sync::atomic::Ordering::Relaxed)
+        {
+            if grp_txt::verify_mac(&blink_key, &grp).is_ok() {
+                if let Ok(dec) = grp_txt::decrypt(&blink_key, &grp) {
+                    let text = core::str::from_utf8(&dec.text).unwrap_or("");
+                    // The command is the last char after "sender: " prefix.
+                    let cmd = text.rsplit(": ").next().unwrap_or("")
+                        .trim()
+                        .as_bytes()
+                        .first()
+                        .copied();
+                    match cmd {
+                        Some(b'r') | Some(b'R') => {
+                            crate::fw::led::set_led(
+                                &crate::fw::led::LED_RED,
+                                crate::fw::led::LedState::BlinkOnce,
+                            );
+                        }
+                        Some(b'g') | Some(b'G') => {
+                            crate::fw::led::set_led(
+                                &crate::fw::led::LED_GREEN,
+                                crate::fw::led::LedState::BlinkOnce,
+                            );
+                        }
+                        Some(b'b') | Some(b'B') => {
+                            crate::fw::led::set_led(
+                                &crate::fw::led::LED_BLUE,
+                                crate::fw::led::LedState::BlinkOnce,
+                            );
+                        }
+                        _ => {}
+                    }
+                    defmt::info!("blinkme: cmd={=u8:#04x}", cmd.unwrap_or(0));
+                }
+            }
+        }
+    }
+
     let ch = match channels.iter().find(|c| c.hash == grp.channel_hash) {
         Some(c) => c,
         None => {

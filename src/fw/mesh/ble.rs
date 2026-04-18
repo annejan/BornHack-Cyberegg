@@ -572,6 +572,11 @@ async fn nus_peripheral_loop<C>(
                 Ok(()) => defmt::info!("settings: other_params persisted from menu"),
                 Err(e) => defmt::warn!("settings: other_params persist failed: {:?}", e),
             }
+            let ignore = crate::IGNORE_BLINK.load(Relaxed);
+            match settings::set_ignore_blink(ignore).await {
+                Ok(()) => defmt::info!("settings: ignore_blink={=bool} persisted", ignore),
+                Err(e) => defmt::warn!("settings: ignore_blink persist failed: {:?}", e),
+            }
         }
         // Persist advert scheduling when changed from the menu.
         if crate::ADVERT_CHANGED_SIGNAL.signaled() {

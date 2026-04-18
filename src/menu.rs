@@ -786,6 +786,23 @@ fn label_telemetry_share() -> &'static str {
     }
 }
 
+// ── Ignore blink toggle ────────────────────────────────────────────────────
+
+fn label_ignore_blink() -> &'static str {
+    if crate::IGNORE_BLINK.load(Ordering::Relaxed) {
+        "Ignore Blink: ON"
+    } else {
+        "Ignore Blink: OFF"
+    }
+}
+
+fn action_ignore_blink() {
+    let cur = crate::IGNORE_BLINK.load(Ordering::Relaxed);
+    crate::IGNORE_BLINK.store(!cur, Ordering::Relaxed);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
+}
+
 fn action_telemetry_toggle() {
     let cur = crate::TELEMETRY_SHARE.load(Ordering::Relaxed);
     crate::TELEMETRY_SHARE.store(!cur, Ordering::Relaxed);
@@ -925,29 +942,22 @@ fn action_tz_dec() {
     }
 }
 
-fn action_melody_0() {
+fn play_melody(_index: usize) {
     #[cfg(feature = "embassy-base")]
-    crate::fw::buzzer::play(0);
+    crate::fw::buzzer::play(_index);
+    #[cfg(feature = "game")]
+    crate::game::lifecycle::play();
 }
 
-fn action_melody_1() {
-    #[cfg(feature = "embassy-base")]
-    crate::fw::buzzer::play(1);
-}
-
-fn action_melody_2() {
-    #[cfg(feature = "embassy-base")]
-    crate::fw::buzzer::play(2);
-}
-
-fn action_melody_3() {
-    #[cfg(feature = "embassy-base")]
-    crate::fw::buzzer::play(3);
-}
+fn action_melody_0() { play_melody(0); }
+fn action_melody_1() { play_melody(1); }
+fn action_melody_2() { play_melody(2); }
+fn action_melody_3() { play_melody(3); }
+fn action_melody_4() { play_melody(4); }
 
 // ── Static item arrays ────────────────────────────────────────────────────────
 
-static MELODY_ITEMS: [MenuItem; 5] = [
+static MELODY_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -967,6 +977,10 @@ static MELODY_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: || "Sandstorm",
         kind: MenuItemKind::Action(action_melody_3),
+    },
+    MenuItem {
+        label: || "Pink Panther",
+        kind: MenuItemKind::Action(action_melody_4),
     },
 ];
 
@@ -1040,7 +1054,7 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static MESHCORE_MENU_ITEMS: [MenuItem; 10] = [
+static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1078,6 +1092,10 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 10] = [
             inc: action_path_hash_inc,
             dec: action_path_hash_dec,
         },
+    },
+    MenuItem {
+        label: label_ignore_blink,
+        kind: MenuItemKind::Action(action_ignore_blink),
     },
     MenuItem {
         label: || "",
@@ -1168,10 +1186,16 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
 ];
 
 #[cfg(feature = "game")]
-static GAME_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "BornPets",
-    kind: MenuItemKind::Action(|| {}),
-}];
+static GAME_ITEMS: [MenuItem; 2] = [
+    MenuItem {
+        label: || "BornPets",
+        kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: || "Play Music",
+        kind: MenuItemKind::Submenu(&MELODY_ITEMS),
+    },
+];
 
 static ABOUT_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "< Back",
@@ -1242,18 +1266,10 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
-static MAIN_ITEMS: [MenuItem; 6] = [
+static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
-    },
-    MenuItem {
-        label: || "Play melodies",
-        kind: MenuItemKind::Submenu(&MELODY_ITEMS),
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Separator,
     },
     MenuItem {
         label: || "Settings",

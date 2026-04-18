@@ -46,6 +46,8 @@ pub enum ModalKind {
     Heal       = 4,   // bot row, col 1
     Play       = 5,   // bot row, col 2
     Rest       = 6,   // bot row, col 3
+    // Sub-modal opened from Play.
+    Music      = 7,
 }
 
 impl ModalKind {
@@ -57,6 +59,7 @@ impl ModalKind {
             4 => Self::Heal,
             5 => Self::Play,
             6 => Self::Rest,
+            7 => Self::Music,
             _ => Self::None,
         }
     }
@@ -70,6 +73,7 @@ impl ModalKind {
             Self::Heal      => "Heal",
             Self::Play      => "Play",
             Self::Rest      => "Rest",
+            Self::Music     => "Music",
         }
     }
 
@@ -78,8 +82,9 @@ impl ModalKind {
             Self::Stats     => &["View stats",   "Cancel"],
             Self::Hibernate => &["Hibernate",    "Wake up",     "Cancel"],
             Self::Feed      => &["Feed now",     "Cancel"],
-            Self::Heal      => &["Give dose",    "Cancel"],
-            Self::Play      => &["Play now",     "Cancel"],
+            Self::Heal      => &["Give medicine",    "Cancel"],
+            Self::Play      => &["Play now",     "Play music",  "Cancel"],
+            Self::Music     => &["Startup", "Rickroll", "Imp. March", "Sandstorm", "Pink Panther", "Cancel"],
             Self::Rest      => &["Sleep",        "Relax",       "Cancel"],
             Self::None      => &[],
         }
@@ -98,10 +103,12 @@ fn is_item_available(label: &str) -> bool {
 
     match label {
         "Feed now"   => stats.can_feed,
-        "Give dose"  => stats.can_heal,
+        "Give medicine"  => stats.can_heal,
         "Sleep"      => stats.can_sleep,
         "Relax"      => stats.can_relax,
         "Play now"   => stats.can_play,
+        "Play music" => true,
+        "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" => true,
         "Hibernate"  => !stats.hibernating,
         "Wake up"    => stats.hibernating,
         _            => true, // Cancel, View stats, etc.
@@ -196,14 +203,29 @@ pub fn activate() {
     match label {
         "View stats"  => { STATS_VIEW.store(true, Ordering::Relaxed); }
         "Feed now"    => { lifecycle::feed(); close(); }
-        "Give dose"   => { lifecycle::heal(); close(); }
+        "Give medicine"   => { lifecycle::heal(); close(); }
         "Sleep"       => { lifecycle::sleep(); close(); }
         "Relax"       => { lifecycle::relax(); close(); }
         "Play now"    => { lifecycle::play(); close(); }
+        "Play music"  => {
+            open(ModalKind::Music);
+        }
+        "Startup"     => { play_song(0); }
+        "Rickroll"    => { play_song(1); }
+        "Imp. March"  => { play_song(2); }
+        "Sandstorm"   => { play_song(3); }
+        "Pink Panther" => { play_song(4); }
         "Hibernate"   => { lifecycle::hibernate(); close(); }
         "Wake up"     => { lifecycle::wake_from_hibernation(); close(); }
         _ => {}
     }
+}
+
+fn play_song(_index: usize) {
+    #[cfg(feature = "embassy-base")]
+    crate::fw::buzzer::play(_index);
+    super::lifecycle::play();
+    close();
 }
 
 // ── Drawing ───────────────────────────────────────────────────────────────────

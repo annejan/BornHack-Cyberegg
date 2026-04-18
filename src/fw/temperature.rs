@@ -37,3 +37,15 @@ pub async fn read_and_cache() -> i16 {
 pub fn last_c10() -> i16 {
     CACHED_TEMP_C10.load(Ordering::Relaxed)
 }
+
+/// Read the current temperature via MPSL (safe after MPSL init).
+///
+/// Returns °C × 10. MPSL's `mpsl_temperature_get()` returns units of
+/// 0.25 °C, so we multiply by 2.5 (raw * 10 / 4).
+#[cfg(feature = "mesh")]
+pub fn read_via_mpsl() -> i16 {
+    let raw = unsafe { nrf_mpsl::raw::mpsl_temperature_get() };
+    let c10 = (raw * 10 / 4) as i16;
+    CACHED_TEMP_C10.store(c10, Ordering::Relaxed);
+    c10
+}

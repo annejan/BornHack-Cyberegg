@@ -83,7 +83,6 @@ pub fn dispatch(btn: ButtonId) -> bool {
                     }
                 }
                 ButtonId::Cancel | ButtonId::Left | ButtonId::Right => return true,
-                _ => {}
             },
             BrowserState::ChannelView {
                 channel_idx,
@@ -194,22 +193,7 @@ where
         .alignment(Alignment::Left)
         .build();
 
-    // Header
-    Text::with_text_style("Channels", Point::new(76, 2), FONT, center).draw(display)?;
-
-    // Battery
-    let mut bat: heapless::String<8> = heapless::String::new();
-    let _ = core::fmt::Write::write_fmt(&mut bat, format_args!("{}%", bat_prc));
-    let right = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Right)
-        .build();
-    Text::with_text_style(&bat, Point::new(148, 2), FONT, right).draw(display)?;
-
-    // Divider
-    Rectangle::new(Point::new(0, 16), Size::new(152, 1))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
+    crate::draw_header(display, "Channels", bat_prc)?;
 
     // Channel list — scrolling window of 9 visible rows
     let visible_rows = 9usize;

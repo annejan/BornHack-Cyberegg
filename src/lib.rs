@@ -19,16 +19,17 @@ use core::cell::RefCell;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
 use core::result::{Result, Result::Ok};
-use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32, Ordering};
-#[cfg(feature = "mesh")]
+use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
+#[cfg(feature = "embassy-base")]
+use core::sync::atomic::Ordering;
 use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
 use embedded_graphics::{
     mono_font::{
         MonoTextStyle,
-        ascii::{FONT_7X13, FONT_10X20},
+        ascii::FONT_7X13,
     },
     prelude::*,
-    primitives::{Circle, PrimitiveStyle, Rectangle},
+    primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 #[cfg(feature = "embassy-base")]
@@ -36,6 +37,7 @@ use embedded_graphics::{
 fn get_device_id() -> [u8; 4] {
     *b"A3F7"
 }
+#[cfg(feature = "embassy-base")]
 use heapless::format;
 // Embassy: re-export Color from ssd1675 hardware driver
 #[cfg(feature = "embassy-base")]
@@ -90,8 +92,6 @@ use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 #[cfg(feature = "embassy-base")]
 use embassy_sync::signal::Signal;
 
-#[cfg(feature = "simulator")]
-use std::sync::Mutex;
 
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
@@ -159,6 +159,9 @@ pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 /// Fired when the menu's text entry submits a new node name.
 #[cfg(feature = "embassy-base")]
 pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// When true, #blinkme channel LED commands are ignored.
+pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);
 
 /// When true, the LoRa radio is put into standby and the meshcore task
 /// pauses all RX/TX until re-enabled.
@@ -341,7 +344,6 @@ macro_rules! with_display_state_mut {
 }
 
 // Position of the animated circle
-static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 
 // Re-export screen indices from ScreenId for convenience.
 // The game screen is always at index 0 but disabled when the game feature is off.
@@ -414,6 +416,7 @@ fn draw_ble_pin_overlay<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
+    use embedded_graphics::mono_font::ascii::FONT_10X20;
     let passkey_val = BLE_PASSKEY.load(Ordering::Relaxed);
     if passkey_val == u32::MAX {
         return Ok(());
@@ -458,24 +461,108 @@ where
 }
 
 /// Format battery percentage with charging indicator prefix.
-fn bat_text(pct: &u8) -> heapless::String<5> {
-    #[cfg(feature = "embassy-base")]
-    let charging = fw::battery::is_charging();
-    #[cfg(not(feature = "embassy-base"))]
-    let charging = false;
-
-    if charging {
-        format!(5; "+{}%", pct).unwrap()
-    } else {
-        format!(5; "{}%", pct).unwrap()
-    }
-}
-
-fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
+/// Draw a standard screen frame with optional header and footer.
+///
+/// Returns `(body_y_start, body_y_end)` — the vertical pixel range available
+/// for screen-specific content.
+///
+/// - `header`: if `Some`, draws bold title (left) + battery % (right) + divider.
+/// - `footer`: if `Some`, draws bold text centered in a bottom bar + divider above.
+pub fn draw_frame<D>(
+    display: &mut D,
+    header: Option<(&str, &u8)>,
+    footer: Option<&str>,
+) -> Result<(i32, i32), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
+    let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
+    let body_start = if let Some((title, bat_prc)) = header {
+        Text::with_text_style(title, Point::new(4, 14), font_bold, bottom).draw(display)?;
+        draw_battery_icon(display, 128, 2, *bat_prc)?;
+        Rectangle::new(Point::new(0, 16), Size::new(152, 1))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        18
+    } else {
+        0
+    };
+
+    let body_end = if let Some(text) = footer {
+        let footer_y = 140;
+        Rectangle::new(Point::new(0, footer_y - 2), Size::new(152, 1))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        Text::with_text_style(
+            text,
+            Point::new(76, footer_y + 5),
+            font_bold,
+            TextStyleBuilder::new()
+                .baseline(Baseline::Middle)
+                .alignment(Alignment::Center)
+                .build(),
+        )
+        .draw(display)?;
+        footer_y - 4
+    } else {
+        152
+    };
+
+    Ok((body_start, body_end))
+}
+
+/// Convenience: draw a frame with header only (no footer).
+#[cfg(feature = "mesh")]
+pub fn draw_header<D>(display: &mut D, title: &str, bat_prc: &u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    draw_frame(display, Some((title, bat_prc)), None)?;
+    Ok(())
+}
+
+/// Draw a battery icon at `(x, y)` using 2x2 pixel blocks.
+///
+/// - Nob: 4w × 6h on the left, centered vertically
+/// - Body: 20w × 12h, 2px border
+/// - Fill: proportional to `pct`, fills right-to-left (full = all black)
+/// - Below 5%: rendered in red
+pub fn draw_battery_icon<D>(display: &mut D, x: i32, y: i32, pct: u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let color = if pct < 5 { RED } else { BLACK };
+
+    // Nob on the left (4×6, centered vertically in 12px body)
+    Rectangle::new(Point::new(x, y + 3), Size::new(4, 6))
+        .into_styled(PrimitiveStyle::with_fill(color))
+        .draw(display)?;
+
+    // Body outline (20×12, 2px border)
+    let bx = x + 4;
+    Rectangle::new(Point::new(bx, y), Size::new(20, 12))
+        .into_styled(PrimitiveStyle::with_stroke(color, 2))
+        .draw(display)?;
+
+    // Interior: 16×8 (body minus 2px border). Fill from right to left.
+    let interior_w = 16u32;
+    let fill_w = ((pct as u32).min(100) * interior_w / 100) as u32;
+    if fill_w > 0 {
+        let fill_x = bx + 2 + (interior_w - fill_w) as i32;
+        Rectangle::new(Point::new(fill_x, y + 2), Size::new(fill_w, 8))
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(display)?;
+    }
+
+    Ok(())
+}
+
+fn draw_screen_main<D>(display: &mut D, _health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
     // About screen: full-screen credits, no other elements.
     let (about, about_page) = with_display_state!(|state| {
         let s = state.current_screen();
@@ -500,54 +587,57 @@ where
         return menu::draw_confirm(display, prompt);
     }
 
-    let circle_post = CIRCLE_POS.load(Ordering::Relaxed);
-    CIRCLE_POS.store(circle_post.wrapping_add(1) % 4, Ordering::Relaxed);
-
-    // Animated red dot
-    let dot_pos = Point::new(((circle_post * 20) + 15) as i32, 7);
-    Circle::with_center(dot_pos, 10)
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-
-    // Bottom banner
-    Rectangle::new(Point::new(0, 108), Size::new(152, 44))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
-    Rectangle::new(Point::new(0, 108), Size::new(152, 44))
-        .into_styled(PrimitiveStyle::with_stroke(RED, 2))
-        .draw(display)?;
-
-    let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BLACK);
-    let bat_style = MonoTextStyle::new(&FONT_7X13, BLACK);
-
-    let bat_text = bat_text(bat_prc);
-    Text::with_text_style(
-        &bat_text,
-        Point::new(110, 16),
-        bat_style,
-        TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
-    )
-    .draw(display)?;
+    // Build the device ID string for the header title.
     #[cfg(feature = "embassy-base")]
-    NODE_NAME.lock(|cell| -> Result<(), D::Error> {
-        let name = cell.borrow();
-        let display_name = if name.is_empty() {
-            "<Empty>"
-        } else {
-            name.as_str()
-        };
-        Text::with_text_style(
-            display_name,
-            Point::new(148, 33),
-            text_style_inverted,
-            TextStyleBuilder::new()
-                .baseline(Baseline::Bottom)
-                .alignment(Alignment::Right)
-                .build(),
-        )
-        .draw(display)
-        .map(|_| ())
-    })?;
+    let device_id = {
+        let id = fw::device_id::get_bytes();
+        let mut s: heapless::String<15> = heapless::String::new();
+        let _ = s.push_str("Cyber ");
+        // Æ in UTF-8
+        let _ = s.push('\u{00C6}');
+        let _ = s.push_str("gg ");
+        let _ = s.push_str(core::str::from_utf8(&id).unwrap_or("????"));
+        s
+    };
+    #[cfg(not(feature = "embassy-base"))]
+    let device_id: heapless::String<15> = {
+        let mut s = heapless::String::new();
+        let _ = s.push_str("Cyber \u{00C6}gg A3F7");
+        s
+    };
+
+    // Build the footer: node name + time
+    #[cfg(feature = "embassy-base")]
+    let footer_text = {
+        let mut f: heapless::String<24> = heapless::String::new();
+        NODE_NAME.lock(|cell| {
+            let name = cell.borrow();
+            if !name.is_empty() {
+                let _ = f.push_str(truncate_str(name.as_str(), 16));
+            }
+        });
+        if let Some(unix) = unix_now() {
+            let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
+            let local = (unix as i64 + offset_secs) as u32;
+            let h = (local % 86400) / 3600;
+            let m = (local % 3600) / 60;
+            if !f.is_empty() {
+                let _ = f.push_str(" ");
+            }
+            let _ = core::fmt::Write::write_fmt(&mut f, format_args!("{:02}:{:02}", h, m));
+        }
+        f
+    };
+    #[cfg(not(feature = "embassy-base"))]
+    let footer_text: heapless::String<24> = heapless::String::new();
+
+    let footer = if footer_text.is_empty() {
+        None
+    } else {
+        Some(footer_text.as_str())
+    };
+
+    draw_frame(display, Some((device_id.as_str(), bat_prc)), footer)?;
 
     let (items, pos, stepper_active) = with_display_state!(|state| {
         let screen = state.current_screen();
@@ -558,36 +648,7 @@ where
         )
     });
 
-    {
-        menu::draw_menu(display, items, pos, stepper_active)?;
-
-        Text::with_text_style(
-            health_str,
-            Point::new(10, 128),
-            text_style_inverted,
-            TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
-        )
-        .draw(display)?;
-
-        #[cfg(feature = "embassy-base")]
-        if let Some(unix) = unix_now() {
-            let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
-            let local = (unix as i64 + offset_secs) as u32;
-            let h = (local % 86400) / 3600;
-            let m = (local % 3600) / 60;
-            let time_str = format!(5; "{:02}:{:02}", h, m).unwrap();
-            Text::with_text_style(
-                &time_str,
-                Point::new(148, 148),
-                MonoTextStyle::new(&FONT_7X13, BLACK),
-                TextStyleBuilder::new()
-                    .baseline(Baseline::Bottom)
-                    .alignment(Alignment::Right)
-                    .build(),
-            )
-            .draw(display)?;
-        }
-    }
+    menu::draw_menu(display, items, pos, stepper_active)?;
 
     Ok(())
 }
@@ -629,26 +690,11 @@ where
     D: DrawTarget<Color = TriColor>,
 {
     let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
     let style_rssi = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
-    // Header bar: "Direct Message" + battery
-    Text::with_text_style("Direct Message", Point::new(4, 14), style_bold, bottom).draw(display)?;
-    let bat_text = bat_text(bat_prc);
-    Text::with_text_style(
-        &bat_text,
-        Point::new(148, 14),
-        style_msg,
-        TextStyleBuilder::new()
-            .baseline(Baseline::Bottom)
-            .alignment(Alignment::Right)
-            .build(),
-    )
-    .draw(display)?;
-    Rectangle::new(Point::new(0, 16), Size::new(152, 1))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
+    draw_header(display, "Direct Message", bat_prc)?;
 
     LAST_PM.lock(|cell| -> Result<(), D::Error> {
         match *cell.borrow() {
@@ -680,7 +726,7 @@ where
                     .draw(display)?;
 
                 // Message text wrapped
-                draw_wrapped(display, msg.text.as_str(), 4, 46, 14, 21, style_msg)?;
+                draw_wrapped(display, msg.text.as_str(), 4, 46, 14, 21, style_small)?;
 
                 // RSSI at bottom
                 let rssi_text = format!(16; "{} dBm", msg.rssi).unwrap();
@@ -702,8 +748,7 @@ where
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style("Channels (no mesh)", Point::new(76, 76), font, center)
-        .draw(display)?;
+    Text::with_text_style("Channels (no mesh)", Point::new(76, 76), font, center).draw(display)?;
     Ok(())
 }
 
@@ -713,21 +758,10 @@ where
     D: DrawTarget<Color = TriColor>,
 {
     let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
     let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
-    let bat_text = bat_text(bat_prc);
-    Text::with_text_style(
-        &bat_text,
-        Point::new(148, 14),
-        style_msg,
-        TextStyleBuilder::new()
-            .baseline(Baseline::Bottom)
-            .alignment(Alignment::Right)
-            .build(),
-    )
-    .draw(display)?;
+    draw_header(display, "Adverts", bat_prc)?;
 
     LAST_ADVERT.lock(|cell| -> Result<(), D::Error> {
         match *cell.borrow() {
@@ -760,7 +794,7 @@ where
                     4 => "Sensor",
                     _ => "Unknown role",
                 };
-                Text::with_text_style(role, Point::new(4, 28), style_msg, bottom).draw(display)?;
+                Text::with_text_style(role, Point::new(4, 28), style_small, bottom).draw(display)?;
 
                 // Divider
                 Rectangle::new(Point::new(0, 30), Size::new(152, 1))

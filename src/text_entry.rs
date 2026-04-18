@@ -119,11 +119,6 @@ impl TextEntry {
         self.state = InputState::Root;
     }
 
-    fn backspace(&mut self) {
-        self.text.pop();
-        self.state = InputState::Root;
-    }
-
     fn clear(&mut self) {
         self.text.clear();
         self.state = InputState::Root;

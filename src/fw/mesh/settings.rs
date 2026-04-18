@@ -214,6 +214,22 @@ pub async fn set_position(p: Position) -> Result<(), kv::KvError> {
 }
 
 // ---------------------------------------------------------------------------
+// Ignore blink  (menu only)
+// ---------------------------------------------------------------------------
+
+pub async fn get_ignore_blink() -> bool {
+    let mut b = [0u8; 1];
+    match ns().get("no_blink", &mut b).await {
+        Ok(1) => b[0] != 0,
+        _ => false,
+    }
+}
+
+pub async fn set_ignore_blink(ignore: bool) -> Result<(), kv::KvError> {
+    ns().set("no_blink", &[ignore as u8], true).await
+}
+
+// ---------------------------------------------------------------------------
 // LoRa enabled  (menu only — not part of the companion protocol)
 // ---------------------------------------------------------------------------
 

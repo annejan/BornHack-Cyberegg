@@ -19,23 +19,31 @@ use crate::fw::fat12::{self, FileRef};
 use crate::fw::epd::EpdGfx;
 
 /// Display dimensions.
+#[cfg(feature = "embassy-base")]
 const DISP_WIDTH: usize = 152;
+#[cfg(feature = "embassy-base")]
 const DISP_HEIGHT: usize = 152;
 /// Display buffer bytes per row.
+#[cfg(feature = "embassy-base")]
 const DISP_ROW_STRIDE: usize = DISP_WIDTH / 8;
 
 /// PCX header size.
+#[cfg(feature = "embassy-base")]
 const PCX_HEADER_SIZE: usize = 128;
 
 /// Maximum number of sprite files.
+#[cfg(feature = "embassy-base")]
 const MAX_FRAMES: usize = 32;
 
 // ---------------------------------------------------------------------------
 // Static state
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "embassy-base")]
 struct SyncCell<T>(core::cell::UnsafeCell<T>);
+#[cfg(feature = "embassy-base")]
 unsafe impl<T> Sync for SyncCell<T> {}
+#[cfg(feature = "embassy-base")]
 impl<T> SyncCell<T> {
     const fn new(v: T) -> Self { Self(core::cell::UnsafeCell::new(v)) }
     fn get(&self) -> *mut T { self.0.get() }

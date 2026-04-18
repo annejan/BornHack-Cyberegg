@@ -5,7 +5,9 @@
 //! in this module.  All functions are async (flash access goes through
 //! the shared QSPI mutex).
 
-use super::engine::{GameState, PetStats, DisplayAnim, SAVE_SIZE};
+use super::engine::{GameState, PetStats, DisplayAnim};
+#[cfg(feature = "embassy-base")]
+use super::engine::SAVE_SIZE;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
