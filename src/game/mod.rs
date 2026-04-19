@@ -20,6 +20,7 @@ pub mod lifecycle;
 pub mod modal;
 pub mod nav;
 pub mod sprite_loader;
+pub mod tictactoe;
 pub use nav::{GameNav, Row};
 
 use embedded_graphics::{
@@ -194,6 +195,11 @@ where
         .alignment(Alignment::Center)
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+
+    // ── Tic-tac-toe full-screen takeover ────────────────────────────────
+    if tictactoe::is_active() {
+        return tictactoe::draw(display);
+    }
 
     // Battery icon — top-right.
     #[cfg(feature = "embassy-base")]

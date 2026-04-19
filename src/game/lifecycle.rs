@@ -193,6 +193,14 @@ pub fn wake_from_hibernation() -> bool {
     with_state(|s| s.wake_from_hibernation())
 }
 
+/// Award inspiration for winning a mini-game.
+pub fn award_inspiration() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.award_inspiration();
+    }
+}
+
 /// Start a new generation (after pet has left).
 pub fn new_generation() {
     let state = unsafe { (*GAME.get()).as_mut() };

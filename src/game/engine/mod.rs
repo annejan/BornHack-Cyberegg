@@ -660,6 +660,13 @@ impl GameState {
         true
     }
 
+    /// Award inspiration (reduce drained) as a reward for mini-game wins.
+    pub fn award_inspiration(&mut self) {
+        if self.phase != Phase::Active { return; }
+        // Equivalent to ~2 ticks of relax relief, as a one-shot bonus.
+        self.drained = sat_sub(self.drained, RELAX_DRAINED_RELIEF * 2);
+    }
+
     /// Total hours the pet has spent in hibernation during its life.
     pub fn hibernate_hours(&self) -> u32 {
         self.hibernate_ticks / 360 // 360 ticks = 1 hour

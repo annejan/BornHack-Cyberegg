@@ -44,6 +44,19 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Fire);
     }
 
+    // ── Tic-tac-toe mini-game ──────────────────────────────────────────
+    if super::tictactoe::is_active() {
+        match btn {
+            ButtonId::Cancel  => super::tictactoe::close(),
+            ButtonId::Up      => super::tictactoe::cursor_up(),
+            ButtonId::Down    => super::tictactoe::cursor_down(),
+            ButtonId::Left    => super::tictactoe::cursor_left(),
+            ButtonId::Right   => super::tictactoe::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => { super::tictactoe::place(); }
+        }
+        return true;
+    }
+
     // ── Active: modal or icon navigation ─────────────────────────────
     if modal::is_open() {
         match btn {
