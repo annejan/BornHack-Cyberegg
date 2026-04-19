@@ -97,8 +97,9 @@ pub fn cursor_right() {
 pub fn place() -> bool {
     // If game is over, any Fire press closes.
     if RESULT.load(Ordering::Relaxed) != 0 {
-        // Award inspiration if player won.
-        if RESULT.load(Ordering::Relaxed) == 1 {
+        // Award inspiration on win or draw.
+        let r = RESULT.load(Ordering::Relaxed);
+        if r == 1 || r == 3 {
             super::lifecycle::award_inspiration();
         }
         close();
@@ -298,7 +299,7 @@ where
     let msg = match result {
         1 => "You win! +inspired",
         2 => "AI wins!",
-        3 => "Draw!",
+        3 => "Draw! +inspired",
         _ => "Your turn (X)",
     };
     Text::with_text_style(msg, Point::new(76, 134), font, centered)

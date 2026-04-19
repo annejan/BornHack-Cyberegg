@@ -79,8 +79,8 @@ Classic 3x3 grid. You play as **X** (red) against the computer **O** (black).
 - **Fire**: place your mark
 - **Cancel**: quit early
 
-The AI plays optimally, so the best you can do is a draw — but any win
-still awards the inspiration bonus.
+The AI plays optimally, so the best you can do is a draw. Both a win
+and a draw award the inspiration bonus.
 
 ### Lights Out
 
