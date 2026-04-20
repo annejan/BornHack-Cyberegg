@@ -104,6 +104,7 @@ pub fn activate() {
     if SOLVED.load(Ordering::Relaxed) {
         // Puzzle already solved — Fire closes and awards reward.
         super::lifecycle::award_inspiration();
+        super::show_toast(super::Toast::Inspired);
         close();
         return;
     }

@@ -136,7 +136,7 @@ fn start_reply(channel_idx: u8) {
         }));
     }
 
-    crate::text_entry::begin(&[], 160, on_reply_complete);
+    crate::text_entry::begin(&[], 160, on_reply_complete, "Reply");
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────

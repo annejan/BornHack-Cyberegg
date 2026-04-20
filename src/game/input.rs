@@ -18,6 +18,11 @@ use super::nav::{get_nav, nav_down, nav_left, nav_right, nav_up, NavResult};
 /// Returns `false` if the caller should forward to the menu
 /// (e.g. `Right` at the grid edge to advance to the next screen).
 pub fn dispatch(btn: ButtonId) -> bool {
+    // ── Text entry (pet naming): pass through to menu handler ────────
+    if crate::text_entry::is_active() {
+        return false;
+    }
+
     // ── Not started: only Fire starts the game ───────────────────────
     if !lifecycle::is_started() {
         if btn == ButtonId::Fire {
@@ -34,14 +39,14 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Execute | ButtonId::Fire | ButtonId::Cancel);
     }
 
-    // ── Gone: Execute starts a new generation ────────────────────────
+    // ── Gone: Fire or Execute starts a new generation ─────────────────
     if anim == DisplayAnim::Gone {
-        if btn == ButtonId::Execute {
+        if btn == ButtonId::Fire || btn == ButtonId::Execute {
             lifecycle::new_generation();
             return true;
         }
         // Let Left/Right pass through to switch screens.
-        return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Fire);
+        return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel);
     }
 
     // ── Lights Out mini-game ──────────────────────────────────────────

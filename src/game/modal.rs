@@ -203,11 +203,11 @@ pub fn activate() {
 
     match label {
         "View stats"  => { STATS_VIEW.store(true, Ordering::Relaxed); }
-        "Feed now"    => { lifecycle::feed(); close(); }
-        "Give medicine"   => { lifecycle::heal(); close(); }
-        "Sleep"       => { lifecycle::sleep(); close(); }
-        "Relax"       => { lifecycle::relax(); close(); }
-        "Play now"    => { lifecycle::play(); close(); }
+        "Feed now"    => { lifecycle::feed(); super::show_toast(super::Toast::Feed); close(); }
+        "Give medicine"   => { lifecycle::heal(); super::show_toast(super::Toast::Heal); close(); }
+        "Sleep"       => { lifecycle::sleep(); super::show_toast(super::Toast::Sleep); close(); }
+        "Relax"       => { lifecycle::relax(); super::show_toast(super::Toast::Relax); close(); }
+        "Play now"    => { lifecycle::play(); super::show_toast(super::Toast::Play); close(); }
         "Tic Tac Toe" => { super::tictactoe::open(); close(); }
         "Lights Out"  => { super::lightsout::open(); close(); }
         "Play music"  => {
@@ -219,8 +219,8 @@ pub fn activate() {
         "Sandstorm"   => { play_song(3); }
         "Pink Panther" => { play_song(4); }
         "Trololo"     => { play_song(5); }
-        "Hibernate"   => { lifecycle::hibernate(); close(); }
-        "Wake up"     => { lifecycle::wake_from_hibernation(); close(); }
+        "Hibernate"   => { lifecycle::hibernate(); super::show_toast(super::Toast::Hibernate); close(); }
+        "Wake up"     => { lifecycle::wake_from_hibernation(); super::show_toast(super::Toast::Wake); close(); }
         _ => {}
     }
 }
@@ -455,15 +455,23 @@ where
         }
     }
 
-    // Footer: generation + age.
+    // Footer: name, generation + age.
+    let name = super::lifecycle::pet_name();
     let age_hours = stats.age_ticks / 360;
     let age_days = age_hours / 24;
     let footer_y = MARGIN + MODAL_H as i32 - BORDER as i32 - 14;
     let mut footer: heapless::String<32> = heapless::String::new();
-    let _ = core::fmt::Write::write_fmt(
-        &mut footer,
-        format_args!("Gen {} | {}d {}h", stats.generation, age_days, age_hours % 24),
-    );
+    if !name.is_empty() {
+        let _ = core::fmt::Write::write_fmt(
+            &mut footer,
+            format_args!("{} | {}d {}h", name, age_days, age_hours % 24),
+        );
+    } else {
+        let _ = core::fmt::Write::write_fmt(
+            &mut footer,
+            format_args!("Gen {} | {}d {}h", stats.generation, age_days, age_hours % 24),
+        );
+    }
     Text::with_text_style(
         footer.as_str(),
         Point::new(MARGIN + MODAL_W as i32 / 2, footer_y),

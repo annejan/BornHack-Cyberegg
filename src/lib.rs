@@ -384,6 +384,12 @@ where
         };
     }
 
+    // Unicorn Realm: full-screen past-pets view.
+    #[cfg(feature = "game")]
+    if game::realm_view::is_active() {
+        return game::realm_view::draw(display);
+    }
+
     let active = with_display_state!(|state| state.active_screen());
     match active {
         #[cfg(feature = "game")]

@@ -21,6 +21,7 @@ pub mod modal;
 pub mod nav;
 pub mod sprite_loader;
 pub mod lightsout;
+pub mod realm_view;
 pub mod tictactoe;
 pub use nav::{GameNav, Row};
 
@@ -30,6 +31,63 @@ use embedded_graphics::{
 };
 
 use crate::{BLACK, TriColor, WHITE};
+
+// ── Action feedback toast ────────────────────────────────────────────────────
+
+use core::sync::atomic::{AtomicU8, Ordering};
+
+/// Action feedback shown briefly after an action.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Toast {
+    None        = 0,
+    Feed        = 1,
+    Heal        = 2,
+    Sleep       = 3,
+    Relax       = 4,
+    Play        = 5,
+    Inspired    = 6,
+    Hibernate   = 7,
+    Wake        = 8,
+}
+
+impl Toast {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Feed, 2 => Self::Heal, 3 => Self::Sleep,
+            4 => Self::Relax, 5 => Self::Play, 6 => Self::Inspired,
+            7 => Self::Hibernate, 8 => Self::Wake, _ => Self::None,
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Toast::None      => "",
+            Toast::Feed      => "-hunger",
+            Toast::Heal      => "-sick",
+            Toast::Sleep     => "-tired",
+            Toast::Relax     => "-drained",
+            Toast::Play      => "-miserable",
+            Toast::Inspired  => "+inspired",
+            Toast::Hibernate => "hibernating",
+            Toast::Wake      => "waking up",
+        }
+    }
+}
+
+/// Toast message index.
+static TOAST_MSG: AtomicU8 = AtomicU8::new(0);
+/// Remaining draw cycles before the toast disappears.
+static TOAST_TTL: AtomicU8 = AtomicU8::new(0);
+
+/// Number of display refreshes to show the toast (~2–3 sec per refresh on e-ink).
+const TOAST_DRAWS: u8 = 2;
+
+/// Show a feedback toast for the next few display refreshes.
+pub fn show_toast(toast: Toast) {
+    TOAST_MSG.store(toast as u8, Ordering::Relaxed);
+    TOAST_TTL.store(TOAST_DRAWS, Ordering::Relaxed);
+}
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -245,7 +303,7 @@ where
             Text::with_text_style("Your pet has left", Point::new(76, 50), font, centered)
                 .draw(display)?;
         }
-        Text::with_text_style("Press Execute", Point::new(76, 90), font, centered).draw(display)?;
+        Text::with_text_style("Press Fire", Point::new(76, 90), font, centered).draw(display)?;
         Text::with_text_style("for a new egg", Point::new(76, 106), font, centered)
             .draw(display)?;
         return Ok(());
@@ -301,6 +359,28 @@ where
         }
     }
 
+    // Action feedback toast — shown briefly after an action.
+    let ttl = TOAST_TTL.load(Ordering::Relaxed);
+    if ttl > 0 {
+        let toast = Toast::from_u8(TOAST_MSG.load(Ordering::Relaxed));
+        let msg = toast.message();
+        if !msg.is_empty() {
+            use embedded_graphics::text::{Text, TextStyleBuilder, Baseline};
+            use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD};
+            let style = TextStyleBuilder::new()
+                .baseline(Baseline::Top)
+                .build();
+            Text::with_text_style(
+                msg,
+                Point::new(2, SEP_TOP + 2),
+                MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+                style,
+            )
+            .draw(display)?;
+        }
+        TOAST_TTL.store(ttl - 1, Ordering::Relaxed);
+    }
+
     modal::draw_modal(display)?;
 
     Ok(())
@@ -321,6 +401,13 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
 
     if lifecycle::is_started() {
         lifecycle::cycle();
+
+        // After hatching completes, prompt the player to name their pet.
+        if lifecycle::take_naming_pending() {
+            let seed = lifecycle::now_tick();
+            let default = lifecycle::random_default_name(seed);
+            crate::text_entry::begin(default.as_bytes(), 12, on_pet_named, "Name your Pet");
+        }
     }
 
     // Blit sprite from flash.
@@ -390,4 +477,10 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
     if lifecycle::is_started() {
         lifecycle::save_if_needed().await;
     }
+}
+
+/// Text entry callback: player has submitted a pet name.
+#[cfg(feature = "embassy-base")]
+fn on_pet_named(name: &[u8]) {
+    lifecycle::set_pet_name(name);
 }

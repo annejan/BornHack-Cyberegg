@@ -77,6 +77,8 @@ pub struct TextEntry {
     shift: bool,
     state: InputState,
     on_complete: fn(&[u8]),
+    /// Optional title shown above the text area (e.g. "Name your Pet").
+    title: &'static str,
 }
 
 fn char_table(id: u8) -> &'static [u8] {
@@ -95,7 +97,7 @@ fn char_table(id: u8) -> &'static [u8] {
 }
 
 impl TextEntry {
-    pub fn new(prefill: &[u8], max_len: u8, on_complete: fn(&[u8])) -> Self {
+    pub fn new(prefill: &[u8], max_len: u8, on_complete: fn(&[u8]), title: &'static str) -> Self {
         let mut text = heapless::Vec::new();
         let n = prefill.len().min(max_len as usize).min(MAX_TEXT_LEN);
         let _ = text.extend_from_slice(&prefill[..n]);
@@ -105,6 +107,7 @@ impl TextEntry {
             shift: false,
             state: InputState::Root,
             on_complete,
+            title,
         }
     }
 
@@ -331,6 +334,7 @@ const FONT_INV: MonoTextStyle<'static, TriColor> =
 const CHAR_W: i32 = 7;
 const LINE_H: i32 = 14;
 const DISPLAY_W: i32 = 152;
+const DISPLAY_H: i32 = 152;
 const CHARS_PER_LINE: usize = 20;
 
 const TEXT_AREA_Y: i32 = 2;
@@ -343,6 +347,29 @@ pub fn draw_text_entry<D>(display: &mut D, entry: &TextEntry) -> Result<(), D::E
 where
     D: DrawTarget<Color = TriColor>,
 {
+    // Clear the full screen so sprite graphics don't bleed through.
+    Rectangle::new(Point::zero(), Size::new(DISPLAY_W as u32, DISPLAY_H as u32))
+        .into_styled(PrimitiveStyle::with_fill(WHITE))
+        .draw(display)?;
+
+    // Title bar (if set).
+    if !entry.title.is_empty() {
+        Rectangle::new(Point::zero(), Size::new(DISPLAY_W as u32, 18))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        let ts = TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Center)
+            .build();
+        Text::with_text_style(
+            entry.title,
+            Point::new(DISPLAY_W / 2, 9),
+            MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
+            ts,
+        )
+        .draw(display)?;
+    }
+
     draw_text_area(display, entry)?;
 
     // Divider
@@ -716,10 +743,10 @@ pub static TEXT_ENTRY: std::sync::Mutex<RefCell<Option<TextEntry>>> =
     std::sync::Mutex::new(RefCell::new(None));
 
 /// Start a text entry session. `prefill` is the initial text, `max_len` the
-/// maximum number of characters, and `on_complete` is called with the final
-/// text bytes when the user submits.
-pub fn begin(prefill: &[u8], max_len: u8, on_complete: fn(&[u8])) {
-    let entry = TextEntry::new(prefill, max_len, on_complete);
+/// maximum number of characters, `on_complete` is called with the final
+/// text bytes when the user submits, and `title` is shown above the text area.
+pub fn begin(prefill: &[u8], max_len: u8, on_complete: fn(&[u8]), title: &'static str) {
+    let entry = TextEntry::new(prefill, max_len, on_complete, title);
     #[cfg(feature = "embassy-base")]
     TEXT_ENTRY.lock(|cell| cell.replace(Some(entry)));
     #[cfg(feature = "simulator")]

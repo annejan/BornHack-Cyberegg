@@ -100,6 +100,14 @@ pub struct GameState {
     /// Set on game start and phase transitions so the save happens
     /// immediately rather than waiting 15 minutes.
     save_pending: bool,
+
+    /// Transient flag (not serialized): set when the pet transitions to
+    /// Gone, so lifecycle can record it in the Unicorn Realm.
+    pub realm_pending: bool,
+
+    /// Transient flag (not serialized): set when hatching completes,
+    /// so lifecycle can prompt the player to name their pet.
+    pub naming_pending: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +166,8 @@ impl GameState {
             hibernate_ticks: 0,
             last_save_tick: 0,
             save_pending: true,
+            realm_pending: false,
+            naming_pending: false,
         }
     }
 
@@ -253,16 +263,22 @@ impl GameState {
             return;
         }
 
+        match self.phase {
+            Phase::Gone => return,
+            _ => {}
+        }
+
         self.age_ticks += total_delta;
 
         match self.phase {
-            Phase::Gone => return,
+            Phase::Gone => unreachable!(),
             Phase::Hatching => {
                 let consumed = total_delta.min(self.hatching_countdown as u32);
                 self.hatching_countdown -= consumed as u16;
                 if self.hatching_countdown == 0 {
                     self.phase = Phase::Active;
                     self.save_pending = true;
+                    self.naming_pending = true;
                 }
                 return;
             }
@@ -584,6 +600,7 @@ impl GameState {
         if self.leaving_countdown >= threshold {
             self.phase = Phase::Gone;
             self.save_pending = true;
+            self.realm_pending = true;
         } else if self.phase == Phase::Active {
             self.phase = Phase::Leaving;
             self.save_pending = true;
@@ -997,6 +1014,143 @@ impl GameState {
             is_sleeping, hibernating, hibernate_ticks,
             last_save_tick,
             save_pending: false,
+            realm_pending: false,
+            naming_pending: false,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unicorn Realm — past pet records
+// ---------------------------------------------------------------------------
+
+/// Maximum length of a pet name in bytes.
+pub const PET_NAME_MAX: usize = 12;
+
+/// Compact record of a past pet for the Unicorn Realm.
+#[derive(Clone, Copy)]
+pub struct PetRecord {
+    pub generation: u16,
+    pub age_ticks: u32,
+    pub vitality: u16,
+    pub curiosity: u16,
+    pub resilience: u16,
+    /// Pet name (UTF-8, up to PET_NAME_MAX bytes, zero-padded).
+    pub name: [u8; PET_NAME_MAX],
+    pub name_len: u8,
+}
+
+/// Serialized size of one PetRecord (12 data + 12 name + 1 name_len).
+pub const PET_RECORD_SIZE: usize = 25;
+/// Maximum number of past pets stored.
+pub const REALM_MAX_PETS: usize = 10;
+/// Total serialized size: 1 byte count + N records.
+pub const REALM_SAVE_SIZE: usize = 1 + REALM_MAX_PETS * PET_RECORD_SIZE;
+
+impl PetRecord {
+    /// Create a record from the current game state and name (call when pet leaves).
+    pub fn from_game_state(state: &GameState, pet_name: &[u8]) -> Self {
+        let mut name = [0u8; PET_NAME_MAX];
+        let len = pet_name.len().min(PET_NAME_MAX);
+        name[..len].copy_from_slice(&pet_name[..len]);
+        Self {
+            generation: state.generation,
+            age_ticks: state.age_ticks,
+            vitality: state.vitality,
+            curiosity: state.curiosity,
+            resilience: state.resilience,
+            name,
+            name_len: len as u8,
+        }
+    }
+
+    fn to_bytes(&self, buf: &mut [u8]) {
+        buf[0..2].copy_from_slice(&self.generation.to_le_bytes());
+        buf[2..6].copy_from_slice(&self.age_ticks.to_le_bytes());
+        buf[6..8].copy_from_slice(&self.vitality.to_le_bytes());
+        buf[8..10].copy_from_slice(&self.curiosity.to_le_bytes());
+        buf[10..12].copy_from_slice(&self.resilience.to_le_bytes());
+        buf[12..24].copy_from_slice(&self.name);
+        buf[24] = self.name_len;
+    }
+
+    fn from_bytes(buf: &[u8]) -> Self {
+        let mut name = [0u8; PET_NAME_MAX];
+        if buf.len() >= 25 {
+            name.copy_from_slice(&buf[12..24]);
+        }
+        Self {
+            generation: u16::from_le_bytes([buf[0], buf[1]]),
+            age_ticks: u32::from_le_bytes([buf[2], buf[3], buf[4], buf[5]]),
+            vitality: u16::from_le_bytes([buf[6], buf[7]]),
+            curiosity: u16::from_le_bytes([buf[8], buf[9]]),
+            resilience: u16::from_le_bytes([buf[10], buf[11]]),
+            name,
+            name_len: if buf.len() >= 25 { buf[24] } else { 0 },
+        }
+    }
+
+    /// Pet name as a str.
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len as usize]).unwrap_or("")
+    }
+
+    /// Format age as "Xd Xh".
+    pub fn age_str(&self) -> heapless::String<12> {
+        let hours = self.age_ticks / 360;
+        let days = hours / 24;
+        let mut s = heapless::String::new();
+        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}d {}h", days, hours % 24));
+        s
+    }
+}
+
+/// Ring buffer of past pet records, newest first.
+pub struct PetRealm {
+    pub pets: [PetRecord; REALM_MAX_PETS],
+    pub count: u8,
+}
+
+impl PetRealm {
+    pub const fn new() -> Self {
+        Self {
+            pets: [PetRecord { generation: 0, age_ticks: 0, vitality: 0, curiosity: 0, resilience: 0, name: [0; PET_NAME_MAX], name_len: 0 }; REALM_MAX_PETS],
+            count: 0,
+        }
+    }
+
+    /// Add a pet record, shifting older entries down. Drops the oldest if full.
+    pub fn push(&mut self, record: PetRecord) {
+        // Shift everything down by one.
+        for i in (1..REALM_MAX_PETS).rev() {
+            self.pets[i] = self.pets[i - 1];
+        }
+        self.pets[0] = record;
+        if (self.count as usize) < REALM_MAX_PETS {
+            self.count += 1;
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; REALM_SAVE_SIZE] {
+        let mut buf = [0u8; REALM_SAVE_SIZE];
+        buf[0] = self.count;
+        for i in 0..self.count as usize {
+            let offset = 1 + i * PET_RECORD_SIZE;
+            self.pets[i].to_bytes(&mut buf[offset..offset + PET_RECORD_SIZE]);
+        }
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> Self {
+        let mut realm = Self::new();
+        if buf.is_empty() { return realm; }
+        realm.count = buf[0].min(REALM_MAX_PETS as u8);
+        for i in 0..realm.count as usize {
+            let offset = 1 + i * PET_RECORD_SIZE;
+            if offset + PET_RECORD_SIZE <= buf.len() {
+                realm.pets[i] = PetRecord::from_bytes(&buf[offset..]);
+            }
+        }
+        realm
     }
 }

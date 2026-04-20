@@ -75,7 +75,11 @@ static LUT_TEMP_C10: core::sync::atomic::AtomicI16 =
 /// The `display` reference is needed to update its stored LUT and temperature.
 pub async fn maybe_reload_lut<'a>(display: &mut EpdGfx<'a>) {
     // Read current temperature via MPSL (safe after init, synchronous).
+    // MPSL is only available when the mesh feature (nrf-mpsl) is enabled.
+    #[cfg(feature = "mesh")]
     let current_c10 = super::temperature::read_via_mpsl();
+    #[cfg(not(feature = "mesh"))]
+    let current_c10 = super::temperature::last_c10();
     let last = LUT_TEMP_C10.load(core::sync::atomic::Ordering::Relaxed);
     if last != i16::MIN {
         let delta = (current_c10 - last).unsigned_abs();

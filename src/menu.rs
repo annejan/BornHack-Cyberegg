@@ -452,6 +452,17 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
 
+        // Unicorn Realm intercepts all input when active.
+        #[cfg(feature = "game")]
+        if crate::game::realm_view::is_active() {
+            match btn {
+                ButtonId::Up => crate::game::realm_view::scroll_up(),
+                ButtonId::Down => crate::game::realm_view::scroll_down(),
+                _ => crate::game::realm_view::close(),
+            }
+            return;
+        }
+
         // Channel browser intercepts input on the Channel screen.
         #[cfg(feature = "mesh")]
         if self.active_screen == crate::SCREEN_CHANNEL {
@@ -903,7 +914,7 @@ fn action_set_name() {
         buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
         (buf, n)
     };
-    crate::text_entry::begin(&prefill.0[..prefill.1], 31, on_name_complete);
+    crate::text_entry::begin(&prefill.0[..prefill.1], 31, on_name_complete, "Set Node Name");
 }
 
 fn action_lora_toggle() {
@@ -942,22 +953,29 @@ fn action_tz_dec() {
     }
 }
 
+#[cfg(feature = "game")]
 fn play_melody(_index: usize) {
     #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(_index);
-    #[cfg(feature = "game")]
     crate::game::lifecycle::play();
 }
 
+#[cfg(feature = "game")]
 fn action_melody_0() { play_melody(0); }
+#[cfg(feature = "game")]
 fn action_melody_1() { play_melody(1); }
+#[cfg(feature = "game")]
 fn action_melody_2() { play_melody(2); }
+#[cfg(feature = "game")]
 fn action_melody_3() { play_melody(3); }
+#[cfg(feature = "game")]
 fn action_melody_4() { play_melody(4); }
+#[cfg(feature = "game")]
 fn action_melody_5() { play_melody(5); }
 
 // ── Static item arrays ────────────────────────────────────────────────────────
 
+#[cfg(feature = "game")]
 static MELODY_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "< Back",
@@ -1159,7 +1177,7 @@ static SETTINGS_ITEMS: [MenuItem; 7] = [
     },
 ];
 
-static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
+static BORNAGOTCHI_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1173,20 +1191,25 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
         kind: MenuItemKind::Action(|| {}),
     },
     MenuItem {
-        label: || "Set Name",
-        kind: MenuItemKind::Action(|| {}),
-    },
-    MenuItem {
         label: || "",
         kind: MenuItemKind::Separator,
     },
     MenuItem {
         label: || "Reset Pet",
-        kind: MenuItemKind::Action(|| {}),
+        kind: MenuItemKind::Confirm {
+            prompt: "Reset pet?",
+            action: || {
+                #[cfg(feature = "game")]
+                crate::game::lifecycle::new_generation();
+            },
+        },
     },
     MenuItem {
         label: || "Unicorn Realm",
-        kind: MenuItemKind::Action(|| {}),
+        kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "game")]
+            crate::game::realm_view::open();
+        }),
     },
 ];
 

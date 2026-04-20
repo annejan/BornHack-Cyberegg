@@ -101,6 +101,7 @@ pub fn place() -> bool {
         let r = RESULT.load(Ordering::Relaxed);
         if r == 1 || r == 3 {
             super::lifecycle::award_inspiration();
+            super::show_toast(super::Toast::Inspired);
         }
         close();
         return true;
