@@ -6,8 +6,14 @@ keep it happy, and play mini-games to earn rewards.
 ## Getting Started
 
 When you first navigate to the game screen, you'll see the start screen.
-Press **Fire** to hatch your first egg. A 1-minute countdown begins with
-an egg animation — once it completes, your pet is born!
+Press **Fire** to begin — you'll be asked to choose your pet:
+
+- **Snail** — the original CyberÆgg companion
+- **Cat** — a feline friend
+
+Use **Up/Down** to highlight your choice and **Fire** to confirm. A
+1-minute egg hatching countdown begins with an animation — once it
+completes, your pet is born and you'll be asked to give it a name!
 
 Your game is automatically saved to flash. If the badge resets or loses
 power, your pet will be right where you left it.
@@ -51,16 +57,16 @@ five stat bars at once.
 
 ## Actions
 
-| Icon     | Options       | What it does                            |
-| -------- | ------------- | --------------------------------------- |
-| **Feed** | Feed now      | Reduces hunger (and a bit of drained)   |
-| **Heal** | Give medicine | Reduces sick                            |
-| **Play** | Play now      | Zeroes miserable (costs some energy)    |
-|          | Tic Tac Toe   | Mini-game: win to boost inspiration     |
-|          | Lights Out    | Mini-game: solve to boost inspiration   |
-|          | Play music    | Play a melody on the buzzer             |
-| **Rest** | Sleep         | Pet sleeps until rested (reduces tired) |
-|          | Relax         | Reduces drained (costs some hunger)     |
+| Icon     | Options       | What it does                              |
+| -------- | ------------- | ----------------------------------------- |
+| **Feed** | Feed now      | Reduces hunger (and a bit of drained)     |
+| **Heal** | Give medicine | Reduces sick                              |
+| **Play** | Play now      | Zeroes miserable (costs some energy)      |
+|          | Tic Tac Toe   | Mini-game: draw/win to boost inspiration  |
+|          | Lights Out    | Mini-game: solve to boost inspiration     |
+|          | Play music    | Play a melody on the buzzer               |
+| **Rest** | Sleep         | Pet sleeps until rested (reduces tired)   |
+|          | Relax         | Reduces drained (costs some hunger)       |
 
 Each action has a **cooldown** — you'll see "(wait)" next to items that
 aren't ready yet. Actions are mutually exclusive: the pet can only do one
@@ -123,11 +129,12 @@ Your pet goes through these phases:
 1. **Active** — stats decay over time, you keep the pet happy with actions
 1. **Leaving** — if stats max out for too long, the pet starts leaving
    (countdown depends on how many stats are maxed)
-1. **Gone** — the pet has left. Press **Execute** to start a new
-   generation with a fresh egg
+1. **Gone** — the pet has left. Press **Fire** to choose a new pet
+   and start a fresh egg
 
 Each new generation inherits the generation counter, so you can see how
-many pets you've raised.
+many pets you've raised. Past pets are recorded in the **Unicorn Realm**
+(see below).
 
 ## Traits
 
@@ -185,6 +192,22 @@ maxed, the faster the pet leaves:
 
 If you reduce the maxed stats back to zero, the countdown resets and the
 pet returns to the Active phase.
+
+## Pet Naming
+
+After hatching, you'll be prompted to name your pet using the on-screen
+keyboard. A random default name is pre-filled — you can keep it or type
+your own (up to 12 characters). The name is shown in the stats view and
+saved to flash.
+
+## Unicorn Realm
+
+When a pet leaves, it is recorded in the **Unicorn Realm** — a hall of
+fame for your past companions. The last 10 pets are stored, showing their
+name, kind, age, and traits.
+
+Access it from the main menu: **Settings > BornPets > Unicorn Realm**.
+Use **Up/Down** to scroll through entries, any other button to close.
 
 ## Tips
 

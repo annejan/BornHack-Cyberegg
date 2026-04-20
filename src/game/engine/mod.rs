@@ -20,6 +20,39 @@ pub use to_display::DisplayAnim;
 // Types
 // ---------------------------------------------------------------------------
 
+/// Kind of pet — determines which sprite set to use.
+///
+/// New variants can be added here for future pets; the filename
+/// generation in `anim_files` and the selection screen will pick
+/// them up automatically.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[repr(u8)]
+pub enum PetKind {
+    Snail = 0,
+    Cat   = 1,
+}
+
+impl PetKind {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Cat,
+            _ => Self::Snail,
+        }
+    }
+
+    /// Human-readable name for the selection screen and Unicorn Realm.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Snail => "Snail",
+            Self::Cat   => "Cat",
+        }
+    }
+
+    /// All available pet kinds, in order.
+    pub const ALL: &'static [PetKind] = &[PetKind::Snail, PetKind::Cat];
+}
+
 /// Lifecycle phase of the pet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
@@ -47,6 +80,9 @@ pub enum Action {
 /// The complete game state.  Serialisable to ekv for save/restore.
 #[derive(Clone)]
 pub struct GameState {
+    // Pet kind.
+    pub pet_kind: PetKind,
+
     // Primary stats (0 = best, STAT_MAX = worst).
     pub hunger: u16,
     pub tired: u16,
@@ -116,7 +152,7 @@ pub struct GameState {
 
 impl GameState {
     /// Create a new egg with randomised traits from a seed.
-    pub fn new_egg(seed: u64) -> Self {
+    pub fn new_egg(seed: u64, kind: PetKind) -> Self {
         // Simple xorshift64 for deterministic trait generation.
         let mut rng = seed;
         let mut next = || -> u16 {
@@ -132,6 +168,8 @@ impl GameState {
         let resilience = next();
 
         Self {
+            pet_kind: kind,
+
             hunger: 0,
             tired: 0,
             drained: 0,
@@ -172,9 +210,9 @@ impl GameState {
     }
 
     /// Start a new generation (pet left, hatch new egg).
-    pub fn new_generation(&mut self, seed: u64) {
+    pub fn new_generation(&mut self, seed: u64, kind: PetKind) {
         let next_gen = self.generation + 1;
-        *self = Self::new_egg(seed);
+        *self = Self::new_egg(seed, kind);
         self.generation = next_gen;
     }
 }
@@ -915,7 +953,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 65;
+pub const SAVE_SIZE: usize = 66;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -956,7 +994,9 @@ impl GameState {
         w32!(self.hibernate_ticks);
         // Save tick (4 bytes).
         w32!(self.last_save_tick);
-        // Total: 65 bytes.
+        // Pet kind (1 byte).
+        w8!(self.pet_kind as u8);
+        // Total: 66 bytes.
         b
     }
 
@@ -964,7 +1004,8 @@ impl GameState {
     /// Returns `None` if the buffer is too short.
     #[allow(unused_assignments)]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() < SAVE_SIZE { return None; }
+        // Accept old 65-byte saves (default to Snail) and new 66-byte saves.
+        if b.len() < SAVE_SIZE - 1 { return None; }
         let mut i = 0;
 
         macro_rules! r16 { () => {{ let v = u16::from_le_bytes([b[i], b[i+1]]); i += 2; v }}; }
@@ -1002,8 +1043,10 @@ impl GameState {
         let hibernating = r8!() != 0;
         let hibernate_ticks = r32!();
         let last_save_tick = r32!();
+        let pet_kind = if i < b.len() { PetKind::from_u8(r8!()) } else { PetKind::Snail };
 
         Some(Self {
+            pet_kind,
             hunger, tired, drained, sick, miserable,
             vitality, curiosity, resilience,
             last_update_tick, age_ticks,
@@ -1035,13 +1078,14 @@ pub struct PetRecord {
     pub vitality: u16,
     pub curiosity: u16,
     pub resilience: u16,
+    pub pet_kind: PetKind,
     /// Pet name (UTF-8, up to PET_NAME_MAX bytes, zero-padded).
     pub name: [u8; PET_NAME_MAX],
     pub name_len: u8,
 }
 
-/// Serialized size of one PetRecord (12 data + 12 name + 1 name_len).
-pub const PET_RECORD_SIZE: usize = 25;
+/// Serialized size of one PetRecord (12 data + 1 kind + 12 name + 1 name_len).
+pub const PET_RECORD_SIZE: usize = 26;
 /// Maximum number of past pets stored.
 pub const REALM_MAX_PETS: usize = 10;
 /// Total serialized size: 1 byte count + N records.
@@ -1059,6 +1103,7 @@ impl PetRecord {
             vitality: state.vitality,
             curiosity: state.curiosity,
             resilience: state.resilience,
+            pet_kind: state.pet_kind,
             name,
             name_len: len as u8,
         }
@@ -1070,23 +1115,32 @@ impl PetRecord {
         buf[6..8].copy_from_slice(&self.vitality.to_le_bytes());
         buf[8..10].copy_from_slice(&self.curiosity.to_le_bytes());
         buf[10..12].copy_from_slice(&self.resilience.to_le_bytes());
-        buf[12..24].copy_from_slice(&self.name);
-        buf[24] = self.name_len;
+        buf[12] = self.pet_kind as u8;
+        buf[13..25].copy_from_slice(&self.name);
+        buf[25] = self.name_len;
     }
 
     fn from_bytes(buf: &[u8]) -> Self {
         let mut name = [0u8; PET_NAME_MAX];
-        if buf.len() >= 25 {
+        let pet_kind = if buf.len() >= 26 {
+            name.copy_from_slice(&buf[13..25]);
+            PetKind::from_u8(buf[12])
+        } else if buf.len() >= 25 {
+            // Old 25-byte format without pet_kind.
             name.copy_from_slice(&buf[12..24]);
-        }
+            PetKind::Snail
+        } else {
+            PetKind::Snail
+        };
         Self {
             generation: u16::from_le_bytes([buf[0], buf[1]]),
             age_ticks: u32::from_le_bytes([buf[2], buf[3], buf[4], buf[5]]),
             vitality: u16::from_le_bytes([buf[6], buf[7]]),
             curiosity: u16::from_le_bytes([buf[8], buf[9]]),
             resilience: u16::from_le_bytes([buf[10], buf[11]]),
+            pet_kind,
             name,
-            name_len: if buf.len() >= 25 { buf[24] } else { 0 },
+            name_len: if buf.len() >= 26 { buf[25] } else if buf.len() >= 25 { buf[24] } else { 0 },
         }
     }
 
@@ -1114,7 +1168,7 @@ pub struct PetRealm {
 impl PetRealm {
     pub const fn new() -> Self {
         Self {
-            pets: [PetRecord { generation: 0, age_ticks: 0, vitality: 0, curiosity: 0, resilience: 0, name: [0; PET_NAME_MAX], name_len: 0 }; REALM_MAX_PETS],
+            pets: [PetRecord { generation: 0, age_ticks: 0, vitality: 0, curiosity: 0, resilience: 0, pet_kind: PetKind::Snail, name: [0; PET_NAME_MAX], name_len: 0 }; REALM_MAX_PETS],
             count: 0,
         }
     }

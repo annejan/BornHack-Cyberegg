@@ -95,18 +95,19 @@ where
 
         let y = 22 + i as i32 * 32;
 
-        // Name / generation header.
-        let mut line: heapless::String<24> = heapless::String::new();
+        // Name / kind header.
+        let mut line: heapless::String<28> = heapless::String::new();
         let name = pet.name_str();
+        let kind_name = pet.pet_kind.name();
         if !name.is_empty() {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
-                format_args!("{} - {}", name, pet.age_str()),
+                format_args!("{} ({}) - {}", name, kind_name, pet.age_str()),
             );
         } else {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
-                format_args!("Gen {} - {}", pet.generation, pet.age_str()),
+                format_args!("{} Gen {} - {}", kind_name, pet.generation, pet.age_str()),
             );
         }
         Text::with_text_style(line.as_str(), Point::new(4, y), font_bold, left)

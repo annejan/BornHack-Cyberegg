@@ -1,0 +1,157 @@
+//! Pet selection screen — shown before hatching to choose a pet kind.
+//!
+//! Displayed full-screen when the player starts a new game or a new
+//! generation. Up/Down cycles through available pet kinds, Fire confirms.
+
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+use embedded_graphics::{
+    mono_font::{ascii::{FONT_7X13, FONT_7X13_BOLD}, MonoTextStyle},
+    prelude::*,
+    primitives::{PrimitiveStyle, Rectangle},
+    text::{Alignment, Baseline, Text, TextStyleBuilder},
+};
+
+use crate::{BLACK, TriColor, WHITE};
+use super::engine::PetKind;
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+static SELECTION: AtomicU8 = AtomicU8::new(0);
+
+/// What to do after selection: 0 = new game, 1 = new generation.
+static MODE: AtomicU8 = AtomicU8::new(0);
+
+const MODE_NEW_GAME: u8 = 0;
+const MODE_NEW_GEN: u8 = 1;
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+pub fn is_active() -> bool {
+    ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Open the pet selection screen for a brand new game.
+pub fn open_new_game() {
+    SELECTION.store(0, Ordering::Relaxed);
+    MODE.store(MODE_NEW_GAME, Ordering::Relaxed);
+    ACTIVE.store(true, Ordering::Relaxed);
+}
+
+/// Open the pet selection screen for a new generation (pet left / reset).
+pub fn open_new_generation() {
+    SELECTION.store(0, Ordering::Relaxed);
+    MODE.store(MODE_NEW_GEN, Ordering::Relaxed);
+    ACTIVE.store(true, Ordering::Relaxed);
+}
+
+pub fn close() {
+    ACTIVE.store(false, Ordering::Relaxed);
+}
+
+// ── Input ────────────────────────────────────────────────────────────────────
+
+pub fn cursor_up() {
+    let s = SELECTION.load(Ordering::Relaxed);
+    if s > 0 {
+        SELECTION.store(s - 1, Ordering::Relaxed);
+    }
+}
+
+pub fn cursor_down() {
+    let s = SELECTION.load(Ordering::Relaxed);
+    let max = PetKind::ALL.len() as u8;
+    if s + 1 < max {
+        SELECTION.store(s + 1, Ordering::Relaxed);
+    }
+}
+
+/// Confirm selection — starts the game with the chosen pet kind.
+pub fn confirm() {
+    let idx = SELECTION.load(Ordering::Relaxed) as usize;
+    let kind = PetKind::ALL.get(idx).copied().unwrap_or(PetKind::Snail);
+    let mode = MODE.load(Ordering::Relaxed);
+
+    match mode {
+        MODE_NEW_GAME => super::lifecycle::start_new_game(kind),
+        MODE_NEW_GEN  => super::lifecycle::new_generation(kind),
+        _ => {}
+    }
+
+    close();
+}
+
+// ── Drawing ──────────────────────────────────────────────────────────────────
+
+pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let selection = SELECTION.load(Ordering::Relaxed) as usize;
+
+    // Background.
+    Rectangle::new(Point::zero(), Size::new(152, 152))
+        .into_styled(PrimitiveStyle::with_fill(WHITE))
+        .draw(display)?;
+
+    // Title bar.
+    Rectangle::new(Point::zero(), Size::new(152, 18))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    let title_style = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    Text::with_text_style(
+        "Choose your Pet",
+        Point::new(76, 9),
+        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
+        title_style,
+    )
+    .draw(display)?;
+
+    // Pet list.
+    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let font_inv = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+
+    let start_y = 40;
+    let row_h = 24i32;
+
+    for (i, kind) in PetKind::ALL.iter().enumerate() {
+        let y = start_y + i as i32 * row_h;
+        let is_selected = i == selection;
+
+        if is_selected {
+            Rectangle::new(
+                Point::new(10, y - row_h / 2 + 1),
+                Size::new(132, row_h as u32 - 2),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        }
+
+        let f = if is_selected { font_inv } else { font };
+        Text::with_text_style(kind.name(), Point::new(76, y), f, centered)
+            .draw(display)?;
+    }
+
+    // Hint at bottom.
+    let hint_style = TextStyleBuilder::new()
+        .baseline(Baseline::Bottom)
+        .alignment(Alignment::Center)
+        .build();
+    Text::with_text_style(
+        "Fire to confirm",
+        Point::new(76, 148),
+        MonoTextStyle::new(&FONT_7X13, BLACK),
+        hint_style,
+    )
+    .draw(display)?;
+
+    Ok(())
+}

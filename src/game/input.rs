@@ -23,10 +23,22 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return false;
     }
 
-    // ── Not started: only Fire starts the game ───────────────────────
+    // ── Pet selection screen ────────────────────────────────────────────
+    if super::pet_select::is_active() {
+        match btn {
+            ButtonId::Up    => super::pet_select::cursor_up(),
+            ButtonId::Down  => super::pet_select::cursor_down(),
+            ButtonId::Fire | ButtonId::Execute => super::pet_select::confirm(),
+            ButtonId::Cancel => super::pet_select::close(),
+            _ => {}
+        }
+        return true;
+    }
+
+    // ── Not started: Fire opens pet selection ────────────────────────
     if !lifecycle::is_started() {
         if btn == ButtonId::Fire {
-            lifecycle::start_new_game();
+            super::pet_select::open_new_game();
             return true;
         }
         // Let Left/Right pass through to switch screens.
@@ -39,10 +51,10 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Execute | ButtonId::Fire | ButtonId::Cancel);
     }
 
-    // ── Gone: Fire or Execute starts a new generation ─────────────────
+    // ── Gone: Fire opens pet selection for new generation ────────────
     if anim == DisplayAnim::Gone {
         if btn == ButtonId::Fire || btn == ButtonId::Execute {
-            lifecycle::new_generation();
+            super::pet_select::open_new_generation();
             return true;
         }
         // Let Left/Right pass through to switch screens.

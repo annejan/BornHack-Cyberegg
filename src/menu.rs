@@ -1200,7 +1200,7 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 6] = [
             prompt: "Reset pet?",
             action: || {
                 #[cfg(feature = "game")]
-                crate::game::lifecycle::new_generation();
+                crate::game::pet_select::open_new_generation();
             },
         },
     },

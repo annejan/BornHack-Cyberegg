@@ -131,18 +131,18 @@ async fn try_load() -> Option<GameState> {
 }
 
 #[cfg(feature = "embassy-base")]
-fn new_egg() -> GameState {
+fn new_egg(kind: super::engine::PetKind) -> GameState {
     let id = crate::fw::device_id::get_bytes();
     let seed = u64::from_le_bytes([
         id[0], id[1], id[2], id[3],
         id[0] ^ 0xAA, id[1] ^ 0x55, id[2] ^ 0xCC, id[3] ^ 0x33,
     ]);
-    GameState::new_egg(seed)
+    GameState::new_egg(seed, kind)
 }
 
 #[cfg(not(feature = "embassy-base"))]
-fn new_egg() -> GameState {
-    GameState::new_egg(42)
+fn new_egg(kind: super::engine::PetKind) -> GameState {
+    GameState::new_egg(42, kind)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,9 +156,9 @@ pub fn is_started() -> bool {
 }
 
 /// Create a new egg and begin the hatching countdown.
-/// Called when the player presses Fire on the "start game" screen.
-pub fn start_new_game() {
-    let mut egg = new_egg();
+/// Called after the player selects a pet kind on the selection screen.
+pub fn start_new_game(kind: super::engine::PetKind) {
+    let mut egg = new_egg(kind);
     egg.last_update_tick = now_tick();
     unsafe { *GAME.get() = Some(egg); }
 }
@@ -293,12 +293,21 @@ pub fn award_inspiration() {
 }
 
 /// Start a new generation (after pet has left).
-pub fn new_generation() {
+pub fn new_generation(kind: super::engine::PetKind) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
         let seed = now_tick() as u64 ^ 0xDEAD_BEEF;
-        s.new_generation(seed);
+        s.new_generation(seed, kind);
         s.last_update_tick = now_tick();
+    }
+}
+
+/// Get the current pet's kind (defaults to Snail if no game).
+pub fn pet_kind() -> super::engine::PetKind {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.pet_kind,
+        None => super::engine::PetKind::Snail,
     }
 }
 

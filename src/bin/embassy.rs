@@ -396,14 +396,13 @@ async fn display_loop(
         // Advance animation frame only when the sprite timer fired.
         #[cfg(feature = "game")]
         if sprite_advance {
-            let count = hello_graphics::game::sprite_loader::frame_count();
+            let anim = hello_graphics::game::lifecycle::display_anim();
+            let kind = hello_graphics::game::lifecycle::pet_kind();
+            let count = hello_graphics::game::engine::anim_files::frame_count(kind, anim);
             if count > 0 {
                 let next = sprite_frame + 1;
                 // During hatching, clamp to the last frame instead of wrapping.
-                let is_hatching = matches!(
-                    hello_graphics::game::lifecycle::display_anim(),
-                    hello_graphics::game::engine::DisplayAnim::Hatching { .. }
-                );
+                let is_hatching = matches!(anim, hello_graphics::game::engine::DisplayAnim::Hatching { .. });
                 sprite_frame = if is_hatching {
                     next.min(count - 1)
                 } else {
@@ -444,7 +443,8 @@ async fn wait_display_event(
                 // Hatching: spread frames over the full countdown.
                 // Everything else: 10 seconds per frame (EPD is slow with red).
                 let anim = hello_graphics::game::lifecycle::display_anim();
-                let frame_count = hello_graphics::game::engine::anim_files::frame_count(anim);
+                let kind = hello_graphics::game::lifecycle::pet_kind();
+                let frame_count = hello_graphics::game::engine::anim_files::frame_count(kind, anim);
                 let interval_secs = match anim {
                     hello_graphics::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
                         let total_secs = ticks_remaining as u64 * 10;

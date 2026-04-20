@@ -21,6 +21,7 @@ pub mod modal;
 pub mod nav;
 pub mod sprite_loader;
 pub mod lightsout;
+pub mod pet_select;
 pub mod realm_view;
 pub mod tictactoe;
 pub use nav::{GameNav, Row};
@@ -255,7 +256,10 @@ where
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
 
-    // ── Mini-game full-screen takeover ─────────────────────────────────
+    // ── Full-screen takeover screens ───────────────────────────────────
+    if pet_select::is_active() {
+        return pet_select::draw(display);
+    }
     if tictactoe::is_active() {
         return tictactoe::draw(display);
     }
@@ -415,17 +419,19 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
 
     if !lifecycle::is_started() {
         // Start screen: full 152×152 graphic at origin.
-        if let Ok(file) = fat12::find_file(b"00000000PCX").await {
+        let start_name = anim_files::start_screen_filename();
+        if let Ok(file) = fat12::find_file(&start_name).await {
             sprite_loader::blit_file(display, &file, 0, 0).await;
             has_sprite = true;
         }
     } else {
         // In-game animation in the pet area.
+        let kind = lifecycle::pet_kind();
         let anim = lifecycle::display_anim();
-        let frame_count = anim_files::frame_count(anim);
+        let frame_count = anim_files::frame_count(kind, anim);
         if frame_count > 0 {
-            let name = anim_files::anim_filename(anim, sprite_frame);
-            if let Ok(file) = fat12::find_file(name).await {
+            let name = anim_files::anim_filename(kind, anim, sprite_frame);
+            if let Ok(file) = fat12::find_file(&name).await {
                 sprite_loader::blit_file(display, &file, 0, PET_AREA_TOP as i32).await;
                 has_sprite = true;
             }
