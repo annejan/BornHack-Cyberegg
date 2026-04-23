@@ -390,6 +390,12 @@ where
         return game::realm_view::draw(display);
     }
 
+    // Rolled stats: full-screen live-pet traits view.
+    #[cfg(feature = "game")]
+    if game::traits_view::is_active() {
+        return game::traits_view::draw(display);
+    }
+
     let active = with_display_state!(|state| state.active_screen());
     match active {
         #[cfg(feature = "game")]

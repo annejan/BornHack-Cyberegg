@@ -142,6 +142,13 @@ impl BondStore {
         bonds.retain(|b| b.identity.bd_addr.into_inner() != *addr);
         self.store_all(&bonds).await;
     }
+
+    /// Delete the `"bonds:all"` key entirely (cleaner than writing a 0-length value).
+    async fn clear_all(&self) {
+        if let Err(e) = self.kv.delete("all").await {
+            defmt::warn!("BondStore: clear: {:?}", e);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +199,7 @@ pub async fn bond_task() {
             }
             BondCmd::ClearAll => {
                 defmt::info!("BondStore: clearing all bonds — rebooting");
-                store.store_all(&Vec::new()).await;
+                store.clear_all().await;
                 cortex_m::peripheral::SCB::sys_reset();
             }
         }

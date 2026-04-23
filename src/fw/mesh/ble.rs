@@ -721,24 +721,6 @@ async fn nus_peripheral_loop<C>(
             defmt::warn!("BLE: set_bondable failed: {:?}", defmt::Debug2Format(&e));
         }
 
-        // Proactively request security (SMP pairing) right after connection.
-        // This triggers the passkey exchange immediately rather than waiting
-        // for the first GATT write to be rejected with INSUFFICIENT_AUTHENTICATION.
-        // Helps with Bluez which expects the peripheral to initiate security
-        // rather than relying on the error-retry pattern that Android uses.
-        match conn.security_level() {
-            Ok(level) if !level.authenticated() => {
-                if let Err(e) = conn.request_security() {
-                    defmt::warn!("BLE: request_security failed: {:?}", defmt::Debug2Format(&e));
-                } else {
-                    defmt::info!("BLE: security requested");
-                }
-            }
-            _ => {
-                defmt::info!("BLE: already authenticated (bonded)");
-            }
-        }
-
         let gatt_conn = match conn.with_attribute_server(&server.server) {
             Ok(c) => c,
             Err(e) => {

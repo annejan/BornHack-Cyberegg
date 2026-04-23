@@ -79,7 +79,7 @@ impl ModalKind {
 
     fn items(self) -> &'static [&'static str] {
         match self {
-            Self::Stats     => &["View stats",   "Cancel"],
+            Self::Stats     => &["View stats",   "Rolled stats", "Cancel"],
             Self::Hibernate => &["Hibernate",    "Wake up",     "Cancel"],
             Self::Feed      => &["Feed now",     "Cancel"],
             Self::Heal      => &["Give medicine",    "Cancel"],
@@ -203,6 +203,7 @@ pub fn activate() {
 
     match label {
         "View stats"  => { STATS_VIEW.store(true, Ordering::Relaxed); }
+        "Rolled stats" => { super::traits_view::open(); close(); }
         "Feed now"    => { lifecycle::feed(); super::show_toast(super::Toast::Feed); close(); }
         "Give medicine"   => { lifecycle::heal(); super::show_toast(super::Toast::Heal); close(); }
         "Sleep"       => { lifecycle::sleep(); super::show_toast(super::Toast::Sleep); close(); }

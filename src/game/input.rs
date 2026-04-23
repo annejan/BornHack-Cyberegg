@@ -23,6 +23,12 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return false;
     }
 
+    // ── Rolled-stats view: any button closes it ────────────────────────
+    if super::traits_view::is_active() {
+        super::traits_view::close();
+        return true;
+    }
+
     // ── Pet selection screen ────────────────────────────────────────────
     if super::pet_select::is_active() {
         match btn {

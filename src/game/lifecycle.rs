@@ -320,6 +320,22 @@ pub fn pet_kind() -> super::engine::PetKind {
     }
 }
 
+/// Get the current pet's rolled traits (vitality, curiosity, resilience).
+/// Returns `None` if no game is active.
+pub fn pet_traits() -> Option<(u16, u16, u16)> {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    state.map(|s| (s.vitality, s.curiosity, s.resilience))
+}
+
+/// Get the current generation (defaults to 0 if no game).
+pub fn pet_generation() -> u16 {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.generation,
+        None => 0,
+    }
+}
+
 fn with_state(f: impl FnOnce(&mut GameState) -> bool) -> bool {
     let state = unsafe { (*GAME.get()).as_mut() };
     match state {

@@ -169,8 +169,15 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
         if byte >= 0xC0 {
             // Run: lower 6 bits = count, next byte = value.
             let count = (byte & 0x3F) as usize;
-            let val = if si < src.len() { src[si] } else { 0 };
-            si += 1;
+            // Only consume the value byte if it's actually present — otherwise
+            // si would overshoot src.len() when a slice ends on a run header.
+            let val = if si < src.len() {
+                let v = src[si];
+                si += 1;
+                v
+            } else {
+                0
+            };
             for _ in 0..count {
                 if di < bytes_per_line {
                     dst[di] = val;
@@ -206,65 +213,92 @@ pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
 
 /// Blit a PCX file (by [`FileRef`]) onto the display at position (`x`, `y`).
 ///
-/// Reads the PCX header for size, RLE-decodes scanlines via the work
-/// buffer, and writes 2bpp pixels into the black and red framebuffers.
+/// Streams the PCX from flash through a small sliding buffer, RLE-decodes
+/// one scanline at a time, and writes 2bpp pixels into the black and red
+/// framebuffers.  No size limit: file can exceed any on-device buffer.
 /// Clips to display bounds.  Transparent pixels (index 3) are skipped.
 #[cfg(feature = "embassy-base")]
 pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, y: i32) {
     let file_size = file.size as usize;
-    let work_len = display.work_buffer_mut().len();
-    if file_size > work_len || file_size < PCX_HEADER_SIZE {
-        defmt::warn!("sprite: PCX too large or too small ({}B)", file_size);
+    if file_size < PCX_HEADER_SIZE {
+        defmt::warn!("sprite: PCX too small ({}B)", file_size);
         return;
     }
 
-    {
-        let work = display.work_buffer_mut();
-        let n = fat12::read_file(file, 0, &mut work[..file_size])
-            .await
-            .unwrap_or(0);
-        if n < file_size {
-            defmt::warn!("sprite: short read: {} of {}", n, file_size);
+    // Sliding read-ahead buffer.  Refilled from flash as the RLE decoder
+    // consumes bytes; sized for several worst-case scanlines (bpl ≤ 38 for
+    // 152-wide 2bpp) to amortise flash reads.
+    let mut read_buf = [0u8; 256];
+    let mut read_pos: usize;        // bytes consumed from read_buf (set after header)
+    let mut read_len: usize;        // valid bytes in read_buf (set by prime read)
+    let mut file_offset: u32;       // next byte to fetch from flash (set by prime read)
+
+    // Prime the buffer with the header + as much compressed data as fits.
+    let first = read_buf.len().min(file_size);
+    match fat12::read_file(file, 0, &mut read_buf[..first]).await {
+        Ok(n) if n >= PCX_HEADER_SIZE => {
+            read_len = n;
+            file_offset = n as u32;
+        }
+        _ => {
+            defmt::warn!("sprite: short header read");
             return;
         }
     }
 
-    // Parse header from work buffer.
-    let work = display.work_buffer_mut();
-    let info = match parse_pcx_header(&work[..PCX_HEADER_SIZE]) {
+    let info = match parse_pcx_header(&read_buf[..PCX_HEADER_SIZE]) {
         Some(i) => i,
         None => {
             defmt::trace!("sprite: invalid PCX header");
             return;
         }
     };
+    read_pos = PCX_HEADER_SIZE;
 
     let bpl = info.bytes_per_line as usize;
     let pcx_w = info.width as i32;
     let pcx_h = info.height as i32;
 
-    // RLE-decode each scanline and blit to the framebuffers.
-    // We decode one line at a time into a stack buffer, then write pixels.
-    // The compressed data starts right after the 128-byte header.
-    //
-    // We need to split: work buffer holds the compressed file, and we also
-    // need the black/red buffers.  Use all_buffers_mut to get all three,
-    // then RLE-decode from work into a stack-local line buffer.
-
-    let (black, red, work) = display.all_buffers_mut();
-    let compressed = &work[PCX_HEADER_SIZE..file_size];
-    let mut src_offset = 0;
-
     // Stack buffer for one decoded scanline (max 38 bytes for 152px @ 2bpp).
     let mut line_buf = [0u8; 256];
 
+    // We only need black/red framebuffers now — the work buffer is no
+    // longer used for sprite decoding.
+    let (black, red, _work) = display.all_buffers_mut();
+
     for pcx_row in 0..pcx_h {
+        // Worst-case compressed bytes per scanline is `2 * bpl`: when every
+        // pixel byte is ≥ 0xC0 it must be escaped as a (0xC1, val) 2-byte
+        // run — doubling the per-scanline size.  Refill if we don't have
+        // that much buffered and flash still has data.
+        if read_len - read_pos < 2 * bpl && (file_offset as usize) < file_size {
+            // Compact: slide unread bytes to the start.
+            read_buf.copy_within(read_pos..read_len, 0);
+            read_len -= read_pos;
+            read_pos = 0;
+
+            let want = read_buf.len() - read_len;
+            let can = (file_size - file_offset as usize).min(want);
+            if can > 0 {
+                match fat12::read_file(file, file_offset, &mut read_buf[read_len..read_len + can]).await {
+                    Ok(n) => {
+                        read_len += n;
+                        file_offset += n as u32;
+                    }
+                    Err(_) => {
+                        defmt::warn!("sprite: flash read failed mid-stream");
+                        return;
+                    }
+                }
+            }
+        }
+
         let consumed = decode_rle_line(
-            &compressed[src_offset..],
+            &read_buf[read_pos..read_len],
             &mut line_buf[..bpl],
             bpl,
         );
-        src_offset += consumed;
+        read_pos += consumed;
 
         // PCX is top-down (row 0 = top of image).
         let screen_y = y + pcx_row;
