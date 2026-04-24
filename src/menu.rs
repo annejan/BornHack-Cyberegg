@@ -1417,7 +1417,7 @@ where
     Ok(())
 }
 
-const ABOUT_PAGES: u8 = 5;
+const ABOUT_PAGES: u8 = 8;
 
 /// Draw the About / credits screen.  `page` selects which page to show.
 pub fn draw_about<D>(display: &mut D, page: u8) -> Result<(), D::Error>
@@ -1485,7 +1485,7 @@ where
             y += lh;
             Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
         }
-        _ => {
+        4 => {
             Text::with_text_style("-- Graphics --", Point::new(x, y), font, center)
                 .draw(display)?;
             y += lh + 4;
@@ -1494,6 +1494,49 @@ where
             Text::with_text_style("NightOwlNL", Point::new(x, y), font, center).draw(display)?;
             y += lh;
             Text::with_text_style("Lilium", Point::new(x, y), font, center).draw(display)?;
+        }
+        5 => {
+            Text::with_text_style("-- Sponsors --", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Thank you to our", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh;
+            Text::with_text_style("generous sponsors", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh;
+            Text::with_text_style("for supporting the", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh;
+            Text::with_text_style("Cyber AEgg badge!", Point::new(x, y), font, center)
+                .draw(display)?;
+        }
+        6 => {
+            Text::with_text_style("-- Sponsors --", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Nordic Semiconductor", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh;
+            Text::with_text_style("nordicsemi.com", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Procolix", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("procolix.com", Point::new(x, y), font, center).draw(display)?;
+        }
+        _ => {
+            Text::with_text_style("-- Sponsors --", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Allnet", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("allnet.de", Point::new(x, y), font, center).draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Mollerup Automation", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh;
+            Text::with_text_style("mollerup.info", Point::new(x, y), font, center).draw(display)?;
         }
     }
 
