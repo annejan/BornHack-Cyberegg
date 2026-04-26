@@ -90,8 +90,8 @@ const CAT_FRAMES: [u8; 21] = [
     2,  // 0x0C: feeding
     2,  // 0x0D: healing
     2,  // 0x0E: relaxing
-    2,  // 0x0F: playing
-    1,  // 0x10: sleeping
+    4,  // 0x0F: playing
+    2,  // 0x10: sleeping
     1,  // 0x11: leaving
     1,  // 0x12: gone
     1,  // 0x13: hibernating
