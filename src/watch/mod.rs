@@ -165,6 +165,21 @@ static ALARM_MINUTE: AtomicU8 = AtomicU8::new(0);
 static ALARM_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Day-of-week mask: bit 0 = Mon .. bit 6 = Sun. Default = every day.
 static ALARM_DAYS: AtomicU8 = AtomicU8::new(0b0111_1111);
+/// Index into [`crate::fw::buzzer::MELODIES`] used as the alarm ringtone.
+/// Default: 8 = the dedicated `ALARM` beep-beep pattern.
+static ALARM_MELODY: AtomicU8 = AtomicU8::new(8);
+
+/// Curated alarm-tone choices: (menu label, melody index).
+/// Order is the cycle order in the Settings → Alarm → Tone stepper.
+const ALARM_TONES: &[(&str, u8)] = &[
+    ("Tone: Beep", 8),
+    ("Tone: Imp. March", 2),
+    ("Tone: Rickroll", 1),
+    ("Tone: Pink Pant.", 4),
+    ("Tone: Sandstorm", 3),
+    ("Tone: Startup", 0),
+    ("Tone: Trololo", 5),
+];
 
 #[cfg(feature = "embassy-base")]
 pub static SETTINGS_DIRTY_SIGNAL: embassy_sync::signal::Signal<
@@ -234,6 +249,46 @@ pub fn alarm_toggle_day(day: u8) {
     signal_settings_dirty();
 }
 
+pub fn alarm_melody() -> u8 {
+    ALARM_MELODY.load(Ordering::Relaxed)
+}
+
+fn alarm_tone_position() -> usize {
+    let m = alarm_melody();
+    ALARM_TONES
+        .iter()
+        .position(|(_, idx)| *idx == m)
+        .unwrap_or(0)
+}
+
+pub fn alarm_tone_label() -> &'static str {
+    ALARM_TONES[alarm_tone_position()].0
+}
+
+pub fn alarm_inc_melody() {
+    let pos = alarm_tone_position();
+    let next = (pos + 1) % ALARM_TONES.len();
+    let idx = ALARM_TONES[next].1;
+    ALARM_MELODY.store(idx, Ordering::Relaxed);
+    signal_settings_dirty();
+    #[cfg(feature = "embassy-base")]
+    crate::fw::buzzer::play(idx as usize);
+}
+
+pub fn alarm_dec_melody() {
+    let pos = alarm_tone_position();
+    let prev = if pos == 0 {
+        ALARM_TONES.len() - 1
+    } else {
+        pos - 1
+    };
+    let idx = ALARM_TONES[prev].1;
+    ALARM_MELODY.store(idx, Ordering::Relaxed);
+    signal_settings_dirty();
+    #[cfg(feature = "embassy-base")]
+    crate::fw::buzzer::play(idx as usize);
+}
+
 /// Load persisted watch settings (alarm + face choice) from the `"watch"` kv
 /// namespace. Call once at boot, after `kv::init()`. Silently leaves defaults
 /// in place if a key is missing or invalid.
@@ -257,6 +312,11 @@ pub async fn load_settings_from_kv() {
     if let Ok(1) = ns.get("alarm_days", &mut b).await {
         ALARM_DAYS.store(b[0] & 0x7F, Ordering::Relaxed);
     }
+    if let Ok(1) = ns.get("alarm_mel", &mut b).await
+        && ALARM_TONES.iter().any(|(_, idx)| *idx == b[0])
+    {
+        ALARM_MELODY.store(b[0], Ordering::Relaxed);
+    }
     if let Ok(1) = ns.get("face", &mut b).await
         && b[0] <= 1
     {
@@ -276,6 +336,7 @@ pub async fn settings_persister_task() {
         let _ = ns.set("alarm_m", &[alarm_minute()], true).await;
         let _ = ns.set("alarm_on", &[alarm_enabled() as u8], true).await;
         let _ = ns.set("alarm_days", &[alarm_days()], true).await;
+        let _ = ns.set("alarm_mel", &[alarm_melody()], true).await;
         let _ = ns
             .set("face", &[WATCH_FACE.load(Ordering::Relaxed)], true)
             .await;
@@ -310,7 +371,7 @@ pub fn check_and_fire_alarm() {
     if clock.hour == alarm_hour() && clock.minute == alarm_minute() {
         ALARM_RINGING.store(true, Ordering::Relaxed);
         ALARM_RING_SIGNAL.signal(());
-        crate::fw::buzzer::play(crate::fw::buzzer::ALARM_INDEX);
+        crate::fw::buzzer::play(alarm_melody() as usize);
     }
 }
 
@@ -348,7 +409,7 @@ pub async fn alarm_ring_timeout_task() {
             if !ALARM_RINGING.load(Ordering::Relaxed) {
                 break;
             }
-            crate::fw::buzzer::play(crate::fw::buzzer::ALARM_INDEX);
+            crate::fw::buzzer::play(alarm_melody() as usize);
         }
         ALARM_RINGING.store(false, Ordering::Relaxed);
     }

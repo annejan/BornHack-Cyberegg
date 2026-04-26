@@ -1034,6 +1034,11 @@ fn label_alarm_days() -> &'static str {
     }
 }
 
+#[cfg(feature = "watch")]
+fn label_alarm_tone() -> &'static str {
+    crate::watch::alarm_tone_label()
+}
+
 // Per-day toggle labels — one fn per day so the menu's `fn()`-typed action
 // pointers can call them.
 #[cfg(feature = "watch")]
@@ -1147,7 +1152,7 @@ static ALARM_DAYS_ITEMS: [MenuItem; 8] = [
 ];
 
 #[cfg(feature = "watch")]
-static ALARM_ITEMS: [MenuItem; 5] = [
+static ALARM_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1169,6 +1174,13 @@ static ALARM_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: label_alarm_days,
         kind: MenuItemKind::Submenu(&ALARM_DAYS_ITEMS),
+    },
+    MenuItem {
+        label: label_alarm_tone,
+        kind: MenuItemKind::Stepper {
+            inc: crate::watch::alarm_inc_melody,
+            dec: crate::watch::alarm_dec_melody,
+        },
     },
     MenuItem {
         label: label_alarm_enabled,
