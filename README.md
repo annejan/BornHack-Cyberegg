@@ -127,12 +127,45 @@ The badge has a 152x152 e-paper display and a 4-direction joystick with Fire, Ex
 
 A standalone watch screen — accessible from the main icon grid via Left/Right — with two switchable faces:
 
-- **Digital** — Casio-style 7-segment LCD with hex (lozenge) segments that meet at 45° miters. Big `HH:MM` digits, ISO date underneath, and a bottom-anchored weekday strip with the current day shown inverted (white-on-black).
+- **Digital** — Casio-style 7-segment LCD with hex (lozenge) segments that meet at 45° miters. Big `HH:MM` digits, ISO date underneath, and a bottom-anchored weekday strip with the current day shown white-on-red and the others outlined in red.
 - **Analog** — circular dial with 12 hour ticks (longer at 12/3/6/9), thick hour hand and thin minute hand. The hour hand carries the minute fraction so it advances smoothly between hour marks. Same date and weekday strip below the dial.
 
-Press **Up** or **Down** on the watch screen to toggle between faces. Left/Right still navigate to adjacent screens. The screen redraws on every minute boundary via the shared `MINUTE_TICK` signal — no second hand and no per-second redraws, since the e-paper refresh is too slow for that anyway.
+The screen redraws on every minute boundary via the shared `MINUTE_TICK` signal — no second hand and no per-second redraws, since the e-paper refresh is too slow for that anyway.
 
 The watch reads `unix_now()` (set via the MeshCore companion `SET_DEVICE_TIME` 0x06 command) and applies `TIMEZONE_OFFSET` (configured under Settings → Timezone). When the clock has not yet been synced the screen shows "Clock not set".
+
+#### Watch buttons
+
+In normal viewing mode:
+
+| Button         | Action                                            |
+| -------------- | ------------------------------------------------- |
+| Up / Down      | Toggle between digital and analog face            |
+| Fire / Execute | Enter alarm-edit mode (see below)                 |
+| Left / Right   | Navigate to adjacent screens                      |
+
+The current face survives reboots — it's persisted to the `"watch"` kv namespace alongside the alarm settings.
+
+#### Alarm
+
+The watch screen has a built-in once-per-day alarm. When armed, the header shows `ALM HH:MM` (white-on-black) so the time is visible even on a fast B&W refresh.
+
+There are two ways to set it:
+
+1. **On the watch screen** — press Fire/Execute to enter edit mode. The header changes to `Edit Alarm`, the digits show the alarm time (not the wall clock), and an `[ On ]` / `[ Off ]` indicator appears below. A thick black bar marks the active field.
+
+   | Button         | In alarm-edit mode                                  |
+   | -------------- | --------------------------------------------------- |
+   | Left / Right   | Cycle field: Hour → Minute → Enabled → Hour …      |
+   | Up / Down      | Increment / decrement the active field              |
+   | Fire / Execute | Exit edit mode                                      |
+   | Cancel         | Exit edit mode                                      |
+
+2. **From Settings** — Main → Settings → Alarm. The submenu has Hour and Minute steppers, a Days submenu, and an Enabled toggle. The Days submenu lets you toggle individual weekdays; the parent label summarises the mask as `Daily`, `Weekdays`, `Weekends`, `Custom`, or `None`.
+
+When the wall clock matches the armed time on a selected day, the buzzer plays a short "beep beep" pattern and repeats up to 4 times every 8 s. **Pressing any button anywhere in the menu silences the buzzer** (and consumes that button — a second press is needed to actually navigate). After 5 s an un-dismissed alarm auto-clears so it stops eating button presses.
+
+All alarm state — hour, minute, day mask, and enabled flag — is persisted to flash and survives reboots.
 
 ### Channel browser
 
