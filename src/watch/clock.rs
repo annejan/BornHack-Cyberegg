@@ -8,7 +8,7 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_7X13_BOLD};
+use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_6X13_BOLD, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{
     Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Triangle,
@@ -97,16 +97,23 @@ const COLON_TOP_Y: i32 = DIGIT_Y + STROKE + VERT_LEN / 2 - COLON_W / 2;
 const COLON_BOT_Y: i32 = DIGIT_Y + 2 * STROKE + VERT_LEN + VERT_LEN / 2 - COLON_W / 2;
 
 // ── Analog face geometry ─────────────────────────────────────────────────────
+//
+// The analog face fills almost the entire body between the header and the
+// weekday strip — the date is rendered as a small red `DD MON` complication
+// inside the dial rather than below it (so the digital face's date row only
+// applies to digital).
 const ANALOG_CX: i32 = 76;
-const ANALOG_CY: i32 = 65;
-const ANALOG_R: i32 = 44;
+const ANALOG_CY: i32 = 78;
+const ANALOG_R: i32 = 54;
 const ANALOG_TICK_HOUR: i32 = 4;
 const ANALOG_TICK_CARDINAL: i32 = 7;
-const HOUR_HAND_LEN: i32 = 25;
-const MINUTE_HAND_LEN: i32 = 38;
+const HOUR_HAND_LEN: i32 = 30;
+const MINUTE_HAND_LEN: i32 = 46;
 const HOUR_HAND_W: u32 = 4;
 const MINUTE_HAND_W: u32 = 2;
 const CENTER_DOT_R: u32 = 7; // diameter
+/// Date complication position — between the centre dot and the 6 o'clock tick.
+const DATE_COMPL_Y: i32 = ANALOG_CY + 27;
 
 // ── Date label ───────────────────────────────────────────────────────────────
 const DATE_X: i32 = 76;
@@ -412,11 +419,46 @@ where
     .into_styled(minute_style)
     .draw(display)?;
 
+    // Date complication inside the dial — small `DD MON` in red between
+    // the centre dot and the 6 o'clock tick.  Drawn before the hands so
+    // the minute hand (which crosses it when pointing down) reads on top
+    // in black.  Red lives in its own plane so the two coexist legibly.
+    draw_analog_date_complication(display, clock)?;
+
     // Centre dot covers the hand pivot.
     Circle::with_center(Point::new(ANALOG_CX, ANALOG_CY), CENTER_DOT_R)
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
+    Ok(())
+}
+
+const MONTH_ABBR: [&str; 12] = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+];
+
+fn draw_analog_date_complication<D>(display: &mut D, clock: &Clock) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+
+    let month_idx = (clock.month as usize).saturating_sub(1).min(11);
+    let mon = MONTH_ABBR[month_idx];
+
+    let mut buf: heapless::String<8> = heapless::String::new();
+    let _ = core::fmt::write(&mut buf, format_args!("{:02} {}", clock.day, mon));
+
+    Text::with_text_style(
+        &buf,
+        Point::new(ANALOG_CX, DATE_COMPL_Y),
+        MonoTextStyle::new(&FONT_6X13_BOLD, RED),
+        centered,
+    )
+    .draw(display)?;
     Ok(())
 }
 
@@ -498,12 +540,16 @@ where
         return Ok(());
     };
 
+    // Analog draws the date as a red `DD MON` complication inside the dial,
+    // so we only render the dedicated black date row for the digital face.
     match current_face() {
-        WatchFace::Digital => draw_digital(display, &clock)?,
+        WatchFace::Digital => {
+            draw_digital(display, &clock)?;
+            draw_date(display, &clock)?;
+        }
         WatchFace::Analog => draw_analog(display, &clock)?,
     }
 
-    draw_date(display, &clock)?;
     draw_day_strip(display, clock.weekday)?;
     Ok(())
 }
