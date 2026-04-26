@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::{
-    FONT_6X10, FONT_6X13_BOLD, FONT_7X13_BOLD, FONT_9X18_BOLD,
+    FONT_6X10, FONT_7X13_BOLD, FONT_8X13_BOLD, FONT_9X18_BOLD,
 };
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{
@@ -458,7 +458,7 @@ where
     Text::with_text_style(
         DAY_NAMES[weekday_idx],
         Point::new(ANALOG_CX, DAY_COMPL_Y),
-        MonoTextStyle::new(&FONT_6X13_BOLD, RED),
+        MonoTextStyle::new(&FONT_8X13_BOLD, RED),
         centered,
     )
     .draw(display)?;
@@ -483,7 +483,7 @@ where
     Text::with_text_style(
         &buf,
         Point::new(ANALOG_CX, DATE_COMPL_Y),
-        MonoTextStyle::new(&FONT_6X13_BOLD, RED),
+        MonoTextStyle::new(&FONT_8X13_BOLD, RED),
         centered,
     )
     .draw(display)?;
