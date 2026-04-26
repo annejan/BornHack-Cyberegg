@@ -8,7 +8,9 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_6X13_BOLD, FONT_7X13_BOLD};
+use embedded_graphics::mono_font::ascii::{
+    FONT_6X10, FONT_6X13_BOLD, FONT_7X13_BOLD, FONT_9X18_BOLD,
+};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{
     Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Triangle,
@@ -120,7 +122,9 @@ const DAY_COMPL_Y: i32 = ANALOG_CY + 40;
 
 // ── Date label ───────────────────────────────────────────────────────────────
 const DATE_X: i32 = 76;
-const DATE_Y: i32 = 122;
+// Centred between the bottom of the digit pair (y=95) and the top of the
+// day strip (y=136) so the date sits in the visual middle of the band.
+const DATE_Y: i32 = 115;
 
 // ── Day-of-week strip (bottom of screen) ─────────────────────────────────────
 const DAY_NAMES: [&str; 7] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
@@ -503,7 +507,7 @@ where
     Text::with_text_style(
         &date_buf,
         Point::new(DATE_X, DATE_Y),
-        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+        MonoTextStyle::new(&FONT_9X18_BOLD, BLACK),
         centered,
     )
     .draw(display)?;
