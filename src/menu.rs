@@ -76,6 +76,16 @@ pub enum MenuItemKind {
         inc: fn(),
         dec: fn(),
     },
+    /// Like `Stepper`, but renders its label by formatting into the menu
+    /// buffer instead of returning a baked `&'static str`.  Use this for
+    /// numeric value pickers (hour, minute, timezone, …) so we don't have
+    /// to pre-bake `[&str; 24]` / `[&str; 60]` tables just to put a leading
+    /// zero on 0–9.  `MenuItem::label` is ignored for this variant.
+    ValueStepper {
+        format: fn(&mut heapless::String<24>),
+        inc: fn(),
+        dec: fn(),
+    },
     /// Destructive action that first shows a full-screen "Are you sure?"
     /// confirmation dialog. `prompt` is the action name shown in the dialog;
     /// `action` runs only if the user presses Fire/Execute to confirm.
@@ -196,8 +206,9 @@ impl ScreenState {
     pub fn menu_up(&mut self) {
         // While editing a stepper, Up increments the value.
         if self.stepper_active {
-            if let MenuItemKind::Stepper { inc, .. } = self.current_item().kind {
-                inc();
+            match self.current_item().kind {
+                MenuItemKind::Stepper { inc, .. } | MenuItemKind::ValueStepper { inc, .. } => inc(),
+                _ => {}
             }
             return;
         }
@@ -218,8 +229,9 @@ impl ScreenState {
     pub fn menu_down(&mut self) {
         // While editing a stepper, Down decrements the value.
         if self.stepper_active {
-            if let MenuItemKind::Stepper { dec, .. } = self.current_item().kind {
-                dec();
+            match self.current_item().kind {
+                MenuItemKind::Stepper { dec, .. } | MenuItemKind::ValueStepper { dec, .. } => dec(),
+                _ => {}
             }
             return;
         }
@@ -264,7 +276,7 @@ impl ScreenState {
                 self.sub_items = None;
             }
             MenuItemKind::Separator => {}
-            MenuItemKind::Stepper { .. } => {
+            MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. } => {
                 self.stepper_active = true;
             }
             MenuItemKind::Confirm { prompt, action } => {
@@ -956,15 +968,12 @@ fn action_lora_toggle() {
     crate::LORA_DISABLED_CHANGED.signal(());
 }
 
-static TZ_LABELS: [&str; 27] = [
-    "UTC-12", "UTC-11", "UTC-10", "UTC-9", "UTC-8", "UTC-7", "UTC-6", "UTC-5", "UTC-4", "UTC-3",
-    "UTC-2", "UTC-1", "UTC+0", "UTC+1", "UTC+2", "UTC+3", "UTC+4", "UTC+5", "UTC+6", "UTC+7",
-    "UTC+8", "UTC+9", "UTC+10", "UTC+11", "UTC+12", "UTC+13", "UTC+14",
-];
-
-fn label_timezone() -> &'static str {
-    let offset = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
-    TZ_LABELS[(offset.clamp(-12, 14) + 12) as usize]
+fn fmt_timezone(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    let offset = crate::TIMEZONE_OFFSET
+        .load(Ordering::Relaxed)
+        .clamp(-12, 14);
+    let _ = write!(buf, "UTC{:+}", offset);
 }
 
 fn action_tz_inc() {
@@ -986,32 +995,15 @@ fn action_tz_dec() {
 }
 
 #[cfg(feature = "watch")]
-static ALARM_HOUR_LABELS: [&str; 24] = [
-    "Hour: 00", "Hour: 01", "Hour: 02", "Hour: 03", "Hour: 04", "Hour: 05", "Hour: 06", "Hour: 07",
-    "Hour: 08", "Hour: 09", "Hour: 10", "Hour: 11", "Hour: 12", "Hour: 13", "Hour: 14", "Hour: 15",
-    "Hour: 16", "Hour: 17", "Hour: 18", "Hour: 19", "Hour: 20", "Hour: 21", "Hour: 22", "Hour: 23",
-];
-
-#[cfg(feature = "watch")]
-static ALARM_MIN_LABELS: [&str; 60] = [
-    "Min: 00", "Min: 01", "Min: 02", "Min: 03", "Min: 04", "Min: 05", "Min: 06", "Min: 07",
-    "Min: 08", "Min: 09", "Min: 10", "Min: 11", "Min: 12", "Min: 13", "Min: 14", "Min: 15",
-    "Min: 16", "Min: 17", "Min: 18", "Min: 19", "Min: 20", "Min: 21", "Min: 22", "Min: 23",
-    "Min: 24", "Min: 25", "Min: 26", "Min: 27", "Min: 28", "Min: 29", "Min: 30", "Min: 31",
-    "Min: 32", "Min: 33", "Min: 34", "Min: 35", "Min: 36", "Min: 37", "Min: 38", "Min: 39",
-    "Min: 40", "Min: 41", "Min: 42", "Min: 43", "Min: 44", "Min: 45", "Min: 46", "Min: 47",
-    "Min: 48", "Min: 49", "Min: 50", "Min: 51", "Min: 52", "Min: 53", "Min: 54", "Min: 55",
-    "Min: 56", "Min: 57", "Min: 58", "Min: 59",
-];
-
-#[cfg(feature = "watch")]
-fn label_alarm_hour() -> &'static str {
-    ALARM_HOUR_LABELS[crate::watch::alarm_hour().min(23) as usize]
+fn fmt_alarm_hour(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    let _ = write!(buf, "Hour: {:02}", crate::watch::alarm_hour().min(23));
 }
 
 #[cfg(feature = "watch")]
-fn label_alarm_minute() -> &'static str {
-    ALARM_MIN_LABELS[crate::watch::alarm_minute().min(59) as usize]
+fn fmt_alarm_minute(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    let _ = write!(buf, "Min: {:02}", crate::watch::alarm_minute().min(59));
 }
 
 #[cfg(feature = "watch")]
@@ -1148,15 +1140,17 @@ static ALARM_ITEMS: [MenuItem; 6] = [
         kind: MenuItemKind::Back,
     },
     MenuItem {
-        label: label_alarm_hour,
-        kind: MenuItemKind::Stepper {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_alarm_hour,
             inc: crate::watch::alarm_inc_hour,
             dec: crate::watch::alarm_dec_hour,
         },
     },
     MenuItem {
-        label: label_alarm_minute,
-        kind: MenuItemKind::Stepper {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_alarm_minute,
             inc: crate::watch::alarm_inc_minute,
             dec: crate::watch::alarm_dec_minute,
         },
@@ -1376,8 +1370,9 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
         kind: MenuItemKind::Submenu(&MESHCORE_MENU_ITEMS),
     },
     MenuItem {
-        label: label_timezone,
-        kind: MenuItemKind::Stepper {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_timezone,
             inc: action_tz_inc,
             dec: action_tz_dec,
         },
@@ -1770,7 +1765,10 @@ where
                         .draw(display)?;
                 } else {
                     let mut label: heapless::String<24> = heapless::String::new();
-                    let is_stepper = matches!(item.kind, MenuItemKind::Stepper { .. });
+                    let is_stepper = matches!(
+                        item.kind,
+                        MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. }
+                    );
                     if is_stepper {
                         if stepper_active && is_center {
                             let _ = label.push_str("[ ");
@@ -1778,7 +1776,13 @@ where
                             let _ = label.push_str("< ");
                         }
                     }
-                    let _ = label.push_str((item.label)());
+                    // ValueStepper writes its own value via `format`; every other
+                    // kind uses the static `MenuItem::label` callback.
+                    if let MenuItemKind::ValueStepper { format, .. } = item.kind {
+                        format(&mut label);
+                    } else {
+                        let _ = label.push_str((item.label)());
+                    }
                     if matches!(item.kind, MenuItemKind::Submenu(_)) {
                         let _ = label.push_str(" >");
                     } else if is_stepper {
