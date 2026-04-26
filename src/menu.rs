@@ -1016,22 +1016,12 @@ fn label_alarm_minute() -> &'static str {
 
 #[cfg(feature = "watch")]
 fn label_alarm_enabled() -> &'static str {
-    if crate::watch::alarm_enabled() {
-        "Enabled: On"
-    } else {
-        "Enabled: Off"
-    }
+    crate::watch::alarm_enabled_label()
 }
 
 #[cfg(feature = "watch")]
 fn label_alarm_days() -> &'static str {
-    match crate::watch::alarm_days() {
-        0x7F => "Days: Daily",
-        0x1F => "Days: Weekdays",
-        0x60 => "Days: Weekends",
-        0x00 => "Days: None",
-        _ => "Days: Custom",
-    }
+    crate::watch::alarm_days_label()
 }
 
 #[cfg(feature = "watch")]

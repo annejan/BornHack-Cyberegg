@@ -5,8 +5,10 @@
 //!   * Fire/Execute  — enter alarm-edit mode
 //!
 //! Alarm-edit mode buttons:
-//!   * Left/Right    — cycle selected field (Hour → Minute → Enabled → Hour)
+//!   * Left/Right    — cycle selected field
+//!                     (Hour → Minute → Days → Tone → Enabled → Hour)
 //!   * Up/Down       — increment / decrement the selected field
+//!                     (steppers, day-mask presets, tone preview, toggle)
 //!   * Fire/Cancel   — exit edit mode (changes are live, no save needed)
 //!
 //! The current weekday is highlighted in red (white-on-red) for visual punch.
@@ -66,7 +68,9 @@ enum WatchMode {
 enum EditField {
     Hour = 0,
     Minute = 1,
-    Enabled = 2,
+    Days = 2,
+    Tone = 3,
+    Enabled = 4,
 }
 
 static WATCH_MODE: AtomicU8 = AtomicU8::new(WatchMode::Normal as u8);
@@ -82,7 +86,9 @@ fn current_mode() -> WatchMode {
 fn current_field() -> EditField {
     match EDIT_FIELD.load(Ordering::Relaxed) {
         1 => EditField::Minute,
-        2 => EditField::Enabled,
+        2 => EditField::Days,
+        3 => EditField::Tone,
+        4 => EditField::Enabled,
         _ => EditField::Hour,
     }
 }
@@ -99,11 +105,15 @@ fn exit_edit() {
 fn cycle_field(forward: bool) {
     let next = match (current_field(), forward) {
         (EditField::Hour, true) => EditField::Minute,
-        (EditField::Minute, true) => EditField::Enabled,
+        (EditField::Minute, true) => EditField::Days,
+        (EditField::Days, true) => EditField::Tone,
+        (EditField::Tone, true) => EditField::Enabled,
         (EditField::Enabled, true) => EditField::Hour,
         (EditField::Hour, false) => EditField::Enabled,
         (EditField::Minute, false) => EditField::Hour,
-        (EditField::Enabled, false) => EditField::Minute,
+        (EditField::Days, false) => EditField::Minute,
+        (EditField::Tone, false) => EditField::Days,
+        (EditField::Enabled, false) => EditField::Tone,
     };
     EDIT_FIELD.store(next as u8, Ordering::Relaxed);
 }
@@ -122,6 +132,14 @@ fn step_current_field(up: bool) {
                 alarm_inc_minute();
             } else {
                 alarm_dec_minute();
+            }
+        }
+        EditField::Days => alarm_step_days_preset(up),
+        EditField::Tone => {
+            if up {
+                alarm_inc_melody();
+            } else {
+                alarm_dec_melody();
             }
         }
         EditField::Enabled => alarm_toggle_enabled(),
@@ -247,6 +265,45 @@ pub fn alarm_toggle_day(day: u8) {
     let v = ALARM_DAYS.load(Ordering::Relaxed);
     ALARM_DAYS.store((v ^ (1 << day)) & 0x7F, Ordering::Relaxed);
     signal_settings_dirty();
+}
+
+/// Cycle the day mask through preset modes:
+/// Daily ↔ Weekdays ↔ Weekends ↔ None ↔ Daily.  Used by the on-screen
+/// alarm-edit Days field.  A "Custom" mask (anything else) jumps to
+/// Daily on either direction.
+pub fn alarm_step_days_preset(forward: bool) {
+    let cur = ALARM_DAYS.load(Ordering::Relaxed) & 0x7F;
+    let next: u8 = match (cur, forward) {
+        (0x7F, true) => 0x1F,
+        (0x1F, true) => 0x60,
+        (0x60, true) => 0x00,
+        (0x00, true) => 0x7F,
+        (0x7F, false) => 0x00,
+        (0x00, false) => 0x60,
+        (0x60, false) => 0x1F,
+        (0x1F, false) => 0x7F,
+        _ => 0x7F,
+    };
+    ALARM_DAYS.store(next, Ordering::Relaxed);
+    signal_settings_dirty();
+}
+
+pub fn alarm_days_label() -> &'static str {
+    match alarm_days() {
+        0x7F => "Days: Daily",
+        0x1F => "Days: Weekdays",
+        0x60 => "Days: Weekends",
+        0x00 => "Days: None",
+        _ => "Days: Custom",
+    }
+}
+
+pub fn alarm_enabled_label() -> &'static str {
+    if alarm_enabled() {
+        "Enabled: On"
+    } else {
+        "Enabled: Off"
+    }
 }
 
 pub fn alarm_melody() -> u8 {
@@ -893,37 +950,61 @@ where
         .alignment(Alignment::Center)
         .build();
 
-    let enabled_label = if alarm_enabled() { "[ On ]" } else { "[ Off ]" };
-    let enabled_y = 116i32;
+    // Three info rows: Days, Tone, Enabled. FONT_6X10 keeps them tight so
+    // there's room for an underline beneath each without overlapping the
+    // next row's text.
+    const ROW_DAYS_Y: i32 = 108;
+    const ROW_TONE_Y: i32 = 124;
+    const ROW_ENABLED_Y: i32 = 140;
+    const ROW_UL_X: i32 = 26;
+    const ROW_UL_W: u32 = 100;
+    const DIGIT_UL_THICK: u32 = 3;
+    const ROW_UL_THICK: u32 = 2;
+
+    let row_style = MonoTextStyle::new(&FONT_6X10, BLACK);
     Text::with_text_style(
-        enabled_label,
-        Point::new(76, enabled_y),
-        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+        alarm_days_label(),
+        Point::new(76, ROW_DAYS_Y),
+        row_style,
+        centered,
+    )
+    .draw(display)?;
+    Text::with_text_style(
+        alarm_tone_label(),
+        Point::new(76, ROW_TONE_Y),
+        row_style,
+        centered,
+    )
+    .draw(display)?;
+    Text::with_text_style(
+        alarm_enabled_label(),
+        Point::new(76, ROW_ENABLED_Y),
+        row_style,
         centered,
     )
     .draw(display)?;
 
-    // Black bar under the selected field.
-    const UL_THICK: u32 = 3;
-    let (ul_x, ul_w, ul_y) = match current_field() {
-        EditField::Hour => (HH_TENS_X, PAIR_W as u32, DIGIT_Y + DIGIT_H + 2),
-        EditField::Minute => (MM_TENS_X, PAIR_W as u32, DIGIT_Y + DIGIT_H + 2),
-        EditField::Enabled => {
-            // [ Off ] is widest at 7 chars × 7 = 49 px. Centre under x=76.
-            (51, 50, enabled_y + 9)
-        }
+    // Underline beneath the active field.
+    let (ul_x, ul_y, ul_w, ul_h) = match current_field() {
+        EditField::Hour => (
+            HH_TENS_X,
+            DIGIT_Y + DIGIT_H + 2,
+            PAIR_W as u32,
+            DIGIT_UL_THICK,
+        ),
+        EditField::Minute => (
+            MM_TENS_X,
+            DIGIT_Y + DIGIT_H + 2,
+            PAIR_W as u32,
+            DIGIT_UL_THICK,
+        ),
+        EditField::Days => (ROW_UL_X, ROW_DAYS_Y + 7, ROW_UL_W, ROW_UL_THICK),
+        EditField::Tone => (ROW_UL_X, ROW_TONE_Y + 7, ROW_UL_W, ROW_UL_THICK),
+        EditField::Enabled => (ROW_UL_X, ROW_ENABLED_Y + 7, ROW_UL_W, ROW_UL_THICK),
     };
-    Rectangle::new(Point::new(ul_x, ul_y), Size::new(ul_w, UL_THICK))
+    Rectangle::new(Point::new(ul_x, ul_y), Size::new(ul_w, ul_h))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
-
-    Text::with_text_style(
-        "L/R field   U/D value",
-        Point::new(76, 142),
-        MonoTextStyle::new(&FONT_6X10, BLACK),
-        centered,
-    )
-    .draw(display)?;
 
     Ok(())
 }
