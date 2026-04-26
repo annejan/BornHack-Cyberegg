@@ -7,18 +7,15 @@
 use core::cell::RefCell;
 use core::sync::atomic::Ordering::Relaxed;
 
-use super::meshcore::truncate_bytes;
-
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD},
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
-
+use super::meshcore::truncate_bytes;
 use crate::menu::ButtonId;
 use crate::{BLACK, TriColor, WHITE};
 
@@ -26,20 +23,24 @@ use crate::{BLACK, TriColor, WHITE};
 
 #[derive(Clone, Copy)]
 enum BrowserState {
-    ChannelList { cursor: u8 },
+    ChannelList {
+        cursor: u8,
+    },
     /// Channel message browser.  `anchor` identifies which message sits
     /// at the bottom of the visible body:
     ///
-    /// * `None` → pinned to the newest message.  New arrivals stay
-    ///   visible at the bottom; older messages flow upward.  This is
-    ///   the default when the view is opened.
-    /// * `Some(content_hash)` → anchored on a specific message.  The
-    ///   anchor survives eviction of *other* messages — the user's
-    ///   place is preserved.  If the anchor itself is evicted from the
-    ///   ring, the renderer falls back to the oldest available message
-    ///   in the channel (the closest still-known position to where the
-    ///   user was reading).
-    ChannelView { channel_idx: u8, anchor: Option<u32> },
+    /// * `None` → pinned to the newest message.  New arrivals stay visible at
+    ///   the bottom; older messages flow upward.  This is the default when the
+    ///   view is opened.
+    /// * `Some(content_hash)` → anchored on a specific message.  The anchor
+    ///   survives eviction of *other* messages — the user's place is preserved.
+    ///   If the anchor itself is evicted from the ring, the renderer falls back
+    ///   to the oldest available message in the channel (the closest
+    ///   still-known position to where the user was reading).
+    ChannelView {
+        channel_idx: u8,
+        anchor: Option<u32>,
+    },
 }
 
 pub struct ChannelBrowser {
@@ -51,7 +52,8 @@ pub static BROWSER: Mutex<CriticalSectionRawMutex, RefCell<ChannelBrowser>> =
         state: BrowserState::ChannelList { cursor: 0 },
     }));
 
-/// Reset the browser to the channel list (called when navigating to the screen).
+/// Reset the browser to the channel list (called when navigating to the
+/// screen).
 pub fn reset() {
     BROWSER.lock(|cell| {
         cell.borrow_mut().state = BrowserState::ChannelList { cursor: 0 };
@@ -84,9 +86,8 @@ pub fn dispatch(btn: ButtonId) -> bool {
                     }
                 }
                 ButtonId::Execute | ButtonId::Fire => {
-                    let ch_idx = crate::CACHED_CHANNELS.lock(|c| {
-                        c.borrow().get(cursor as usize).map(|ch| ch.slot_idx)
-                    });
+                    let ch_idx = crate::CACHED_CHANNELS
+                        .lock(|c| c.borrow().get(cursor as usize).map(|ch| ch.slot_idx));
                     if let Some(idx) = ch_idx {
                         b.state = BrowserState::ChannelView {
                             channel_idx: idx,
@@ -149,8 +150,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
 }
 
 fn start_reply(channel_idx: u8) {
-    static REPLY_CHANNEL_IDX: core::sync::atomic::AtomicU8 =
-        core::sync::atomic::AtomicU8::new(0);
+    static REPLY_CHANNEL_IDX: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
     REPLY_CHANNEL_IDX.store(channel_idx, Relaxed);
 
     fn on_reply_complete(text: &[u8]) {
@@ -180,9 +180,8 @@ const LH: i32 = 14;
 /// The fallback rules let the view tolerate ring eviction:
 /// * `None`                       → newest message (`total - 1`).
 /// * `Some(h)` and hash present   → that message's index.
-/// * `Some(h)` and hash *missing* → `0` (oldest still-available),
-///                                  i.e. the closest known position to
-///                                  where the user was reading.
+/// * `Some(h)` and hash *missing* → `0` (oldest still-available), i.e. the
+///   closest known position to where the user was reading.
 fn resolve_anchor(channel_idx: u8, anchor: Option<u32>) -> (usize, usize) {
     crate::CHANNEL_MSG_RING.lock(|cell| {
         let ring = cell.borrow();
@@ -314,7 +313,10 @@ where
         // Show unread indicator: count messages in ring for this channel
         let ch_idx = channels[idx].0;
         let msg_count = crate::CHANNEL_MSG_RING.lock(|cell| {
-            cell.borrow().iter().filter(|m| m.channel_idx == ch_idx).count()
+            cell.borrow()
+                .iter()
+                .filter(|m| m.channel_idx == ch_idx)
+                .count()
         });
 
         let mut label: heapless::String<24> = heapless::String::new();
@@ -390,10 +392,7 @@ where
     // Header: channel name (capped at 16 chars) + message count
     let mut header: heapless::String<24> = heapless::String::new();
     let name_cap = truncate_bytes(ch_name.as_str(), 16);
-    let _ = core::fmt::Write::write_fmt(
-        &mut header,
-        format_args!("{} ({})", name_cap, msg_total),
-    );
+    let _ = core::fmt::Write::write_fmt(&mut header, format_args!("{} ({})", name_cap, msg_total));
     Rectangle::new(Point::new(0, 0), Size::new(152, 16))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
@@ -412,21 +411,18 @@ where
         // Eviction handling:
         //   * `None`                     → newest (msg_total - 1)
         //   * `Some(h)` and hash present → that message's position
-        //   * `Some(h)` and hash missing → oldest available (0), the
-        //     closest known position to where the user was reading
+        //   * `Some(h)` and hash missing → oldest available (0), the closest known
+        //     position to where the user was reading
         let anchor_idx = match anchor {
             None => msg_total - 1,
-            Some(h) => msgs
-                .iter()
-                .position(|m| m.4 == h)
-                .unwrap_or(0),
+            Some(h) => msgs.iter().position(|m| m.4 == h).unwrap_or(0),
         };
 
         // Lines required by each message: 1 (sender header) + the
         // wrapped-text line count.
         let mut lines_per: heapless::Vec<usize, { crate::CHANNEL_MSG_RING_SIZE }> =
             heapless::Vec::new();
-        for (_, text, _, _, _) in msgs.iter() {
+        for (_, text, ..) in msgs.iter() {
             let text_lines = if text.is_empty() {
                 0
             } else {
@@ -478,7 +474,11 @@ where
             let nick: heapless::String<24> = if is_own {
                 let mut lbl: heapless::String<24> = heapless::String::new();
                 if repeat_count > 0 {
-                    let digit = if repeat_count > 9 { b'9' } else { b'0' + repeat_count };
+                    let digit = if repeat_count > 9 {
+                        b'9'
+                    } else {
+                        b'0' + repeat_count
+                    };
                     let _ = core::fmt::Write::write_fmt(
                         &mut lbl,
                         format_args!("{} > You", digit as char),
@@ -497,8 +497,7 @@ where
             Rectangle::new(Point::new(2, y), Size::new(nick_w, LH as u32))
                 .into_styled(PrimitiveStyle::with_fill(BLACK))
                 .draw(display)?;
-            Text::with_text_style(&nick, Point::new(4, y + 1), FONT_INV, left)
-                .draw(display)?;
+            Text::with_text_style(&nick, Point::new(4, y + 1), FONT_INV, left).draw(display)?;
             y += LH;
 
             // Message text — wrap on char boundaries
@@ -561,8 +560,7 @@ where
     Rectangle::new(Point::new(0, 140), Size::new(152, 12))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
-    Text::with_text_style("Fire: Reply", Point::new(76, 140), FONT_INV, center)
-        .draw(display)?;
+    Text::with_text_style("Fire: Reply", Point::new(76, 140), FONT_INV, center).draw(display)?;
 
     Ok(())
 }

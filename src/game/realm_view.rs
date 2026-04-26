@@ -5,11 +5,9 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use embedded_graphics::{
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
 
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK};
 use crate::{BLACK, TriColor, WHITE};
@@ -32,13 +30,17 @@ pub fn close() {
 
 pub fn scroll_up() {
     let s = SCROLL.load(Ordering::Relaxed);
-    if s > 0 { SCROLL.store(s - 1, Ordering::Relaxed); }
+    if s > 0 {
+        SCROLL.store(s - 1, Ordering::Relaxed);
+    }
 }
 
 pub fn scroll_down() {
     let count = super::lifecycle::realm_count();
     let s = SCROLL.load(Ordering::Relaxed);
-    if s + 1 < count { SCROLL.store(s + 1, Ordering::Relaxed); }
+    if s + 1 < count {
+        SCROLL.store(s + 1, Ordering::Relaxed);
+    }
 }
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
@@ -67,7 +69,9 @@ where
     let visible = 4usize.min(count as usize - scroll);
     for i in 0..visible {
         let idx = scroll + i;
-        let Some(pet) = super::lifecycle::realm_pet(idx) else { break };
+        let Some(pet) = super::lifecycle::realm_pet(idx) else {
+            break;
+        };
 
         let y = 22 + i as i32 * 32;
 
@@ -112,10 +116,8 @@ where
     // Scroll indicator.
     if count as usize > 4 {
         let mut indicator: heapless::String<8> = heapless::String::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut indicator,
-            format_args!("{}/{}", scroll + 1, count),
-        );
+        let _ =
+            core::fmt::Write::write_fmt(&mut indicator, format_args!("{}/{}", scroll + 1, count));
         let right = TextStyleBuilder::new()
             .baseline(Baseline::Bottom)
             .alignment(embedded_graphics::text::Alignment::Right)

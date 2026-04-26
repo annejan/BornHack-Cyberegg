@@ -9,7 +9,6 @@ use core::sync::atomic::Ordering::Relaxed;
 
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-
 use meshcore::dedup::{MsgHashRing, relay_hash};
 use meshcore::packet::{Message, RouteType};
 
@@ -62,13 +61,13 @@ pub fn try_relay(msg: &Message, identity: &DeviceIdentity) -> Option<crate::TxRe
     let _ = new_path.extend_from_slice(&identity.pub_key[..hash_size]);
 
     let relay_msg = Message {
-        payload_type:   msg.payload_type,
-        route:          msg.route,
-        version:        msg.version,
+        payload_type: msg.payload_type,
+        route: msg.route,
+        version: msg.version,
         transport_code: msg.transport_code,
-        path_len_byte:  new_path_len_byte,
-        path:           new_path,
-        payload:        msg.payload.clone(),
+        path_len_byte: new_path_len_byte,
+        path: new_path,
+        payload: msg.payload.clone(),
     };
 
     let mut frame = [0u8; meshcore::MAX_TRANS_UNIT];

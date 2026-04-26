@@ -9,6 +9,7 @@
 //! second (at 0 ms, 50 ms, and 500 ms within each period).
 
 use core::sync::atomic::{AtomicU8, Ordering};
+
 use embassy_nrf::gpio::Output;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
@@ -19,17 +20,17 @@ use embassy_time::Timer;
 #[repr(u8)]
 pub enum LedState {
     /// LED off.
-    Off        = 0,
+    Off = 0,
     /// LED on continuously.
-    On         = 1,
+    On = 1,
     /// 50 % duty cycle (500 ms on, 500 ms off), repeating.
-    Duty50     = 2,
+    Duty50 = 2,
     /// Short blink (50 ms on, 950 ms off), repeating.
-    Blink      = 3,
+    Blink = 3,
     /// Single 500 ms pulse, then auto-resets to Off.
     Duty50Once = 4,
     /// Single 50 ms blink, then auto-resets to Off.
-    BlinkOnce  = 5,
+    BlinkOnce = 5,
 }
 
 impl LedState {
@@ -46,9 +47,9 @@ impl LedState {
 }
 
 // One atomic per colour — writable from any task.
-pub static LED_RED:   AtomicU8 = AtomicU8::new(0);
+pub static LED_RED: AtomicU8 = AtomicU8::new(0);
 pub static LED_GREEN: AtomicU8 = AtomicU8::new(0);
-pub static LED_BLUE:  AtomicU8 = AtomicU8::new(0);
+pub static LED_BLUE: AtomicU8 = AtomicU8::new(0);
 
 /// Signalled by [`set_led`] / [`all_off`] to wake the task from sleep.
 static WAKE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -99,32 +100,41 @@ pub async fn led_task(
         }
 
         // Phase 0: Blink/BlinkOnce + Duty50/Duty50Once + On turn on.
-        drive(&mut red,   &LED_RED,   0);
+        drive(&mut red, &LED_RED, 0);
         drive(&mut green, &LED_GREEN, 0);
-        drive(&mut blue,  &LED_BLUE,  0);
-        if matches!(select(Timer::after_millis(50), WAKE.wait()).await, Either::Second(_)) {
+        drive(&mut blue, &LED_BLUE, 0);
+        if matches!(
+            select(Timer::after_millis(50), WAKE.wait()).await,
+            Either::Second(_)
+        ) {
             continue; // new state arrived — restart cycle
         }
 
         // Phase 1: Blink variants turn off; BlinkOnce auto-resets.
-        auto_reset(&LED_RED,   LedState::BlinkOnce);
+        auto_reset(&LED_RED, LedState::BlinkOnce);
         auto_reset(&LED_GREEN, LedState::BlinkOnce);
-        auto_reset(&LED_BLUE,  LedState::BlinkOnce);
-        drive(&mut red,   &LED_RED,   1);
+        auto_reset(&LED_BLUE, LedState::BlinkOnce);
+        drive(&mut red, &LED_RED, 1);
         drive(&mut green, &LED_GREEN, 1);
-        drive(&mut blue,  &LED_BLUE,  1);
-        if matches!(select(Timer::after_millis(450), WAKE.wait()).await, Either::Second(_)) {
+        drive(&mut blue, &LED_BLUE, 1);
+        if matches!(
+            select(Timer::after_millis(450), WAKE.wait()).await,
+            Either::Second(_)
+        ) {
             continue;
         }
 
         // Phase 2: Duty50 variants turn off; Duty50Once auto-resets.
-        auto_reset(&LED_RED,   LedState::Duty50Once);
+        auto_reset(&LED_RED, LedState::Duty50Once);
         auto_reset(&LED_GREEN, LedState::Duty50Once);
-        auto_reset(&LED_BLUE,  LedState::Duty50Once);
-        drive(&mut red,   &LED_RED,   2);
+        auto_reset(&LED_BLUE, LedState::Duty50Once);
+        drive(&mut red, &LED_RED, 2);
         drive(&mut green, &LED_GREEN, 2);
-        drive(&mut blue,  &LED_BLUE,  2);
-        if matches!(select(Timer::after_millis(500), WAKE.wait()).await, Either::Second(_)) {
+        drive(&mut blue, &LED_BLUE, 2);
+        if matches!(
+            select(Timer::after_millis(500), WAKE.wait()).await,
+            Either::Second(_)
+        ) {
             continue;
         }
     }
@@ -133,12 +143,16 @@ pub async fn led_task(
 /// Set pin for the given phase.  Active-low: set_low = on.
 fn drive(pin: &mut Output<'_>, state: &AtomicU8, phase: u8) {
     let on = match LedState::from_u8(state.load(Ordering::Relaxed)) {
-        LedState::Off        => false,
-        LedState::On         => true,
+        LedState::Off => false,
+        LedState::On => true,
         LedState::Duty50 | LedState::Duty50Once => phase < 2,
-        LedState::Blink  | LedState::BlinkOnce  => phase == 0,
+        LedState::Blink | LedState::BlinkOnce => phase == 0,
     };
-    if on { pin.set_low(); } else { pin.set_high(); }
+    if on {
+        pin.set_low();
+    } else {
+        pin.set_high();
+    }
 }
 
 /// If the LED is in `target` state, reset it to Off.

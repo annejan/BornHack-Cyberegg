@@ -15,8 +15,8 @@
 //!   7. Warning stat (attention needed soon — not yet critical)
 //!   8. Idle / Happy (pet is content)
 
-use super::{Action, GameState, Phase};
 use super::thresholds::*;
+use super::{Action, GameState, Phase};
 
 /// What the pet display area should show right now.
 ///
@@ -32,7 +32,9 @@ pub enum DisplayAnim {
     /// All progression frozen.
     Hibernating,
     /// Egg is hatching.  `ticks_remaining` counts down to zero.
-    Hatching { ticks_remaining: u16 },
+    Hatching {
+        ticks_remaining: u16,
+    },
 
     // ── Group 2: active actions (mutually exclusive) ────────────────
     Feeding,
@@ -43,7 +45,9 @@ pub enum DisplayAnim {
 
     // ── Group 3: leaving danger ─────────────────────────────────────
     /// Pet is about to leave.  `maxed_count` (1–4) indicates urgency.
-    Leaving { maxed_count: u8 },
+    Leaving {
+        maxed_count: u8,
+    },
 
     // ── Group 4: critical stats (needs immediate action) ────────────
     CriticalSick,

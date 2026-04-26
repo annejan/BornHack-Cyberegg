@@ -76,8 +76,8 @@ pub mod iso14443_4 {
         /// Block count spin bit: 0 or 1
         block_num: u8,
 
-        /// true if deselected. This is permanent, you must create another IsoDep
-        /// instance if we get selected again.
+        /// true if deselected. This is permanent, you must create another
+        /// IsoDep instance if we get selected again.
         deselected: bool,
 
         /// last response, in case we need to retransmit.

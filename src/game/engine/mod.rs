@@ -1,4 +1,5 @@
-//! Cyber Ægg game engine — delta-T progression with boundary-based wake scheduling.
+//! Cyber Ægg game engine — delta-T progression with boundary-based wake
+//! scheduling.
 //!
 //! Instead of ticking every 10 seconds, the engine:
 //! 1. Computes elapsed ticks since the last update.
@@ -364,15 +365,14 @@ impl GameState {
     /// Enforce the minimum-`miserable` floor required by the severe and
     /// leaving caps:
     ///
-    /// * `Phase::Leaving` → miserable ≥ 50 % of `STAT_MAX`
-    ///   (≡ displayed Happy ≤ 50 %).  This is a flat cap and does *not*
-    ///   add to the per-stat severe penalties.
-    /// * Each primary stat above its critical threshold → an additional
-    ///   −20 % cap on Happy (= +20 % miserable per critical stat).  Up
-    ///   to 4 stats can be critical, so the severe path can push
-    ///   miserable to 80 %.
-    /// * The two rules are evaluated independently and the **higher**
-    ///   floor wins (= lower Happy displayed).
+    /// * `Phase::Leaving` → miserable ≥ 50 % of `STAT_MAX` (≡ displayed Happy ≤
+    ///   50 %).  This is a flat cap and does *not* add to the per-stat severe
+    ///   penalties.
+    /// * Each primary stat above its critical threshold → an additional −20 %
+    ///   cap on Happy (= +20 % miserable per critical stat).  Up to 4 stats can
+    ///   be critical, so the severe path can push miserable to 80 %.
+    /// * The two rules are evaluated independently and the **higher** floor
+    ///   wins (= lower Happy displayed).
     ///
     /// Recovery via `Play` only goes down to whichever floor is active
     /// at the time, so the player can never make a leaving / severely
@@ -1370,7 +1370,8 @@ pub const REALM_MAX_PETS: usize = 10;
 pub const REALM_SAVE_SIZE: usize = 1 + REALM_MAX_PETS * PET_RECORD_SIZE;
 
 impl PetRecord {
-    /// Create a record from the current game state and name (call when pet leaves).
+    /// Create a record from the current game state and name (call when pet
+    /// leaves).
     pub fn from_game_state(state: &GameState, pet_name: &[u8]) -> Self {
         let mut name = [0u8; PET_NAME_MAX];
         let len = pet_name.len().min(PET_NAME_MAX);

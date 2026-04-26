@@ -9,37 +9,31 @@ use embassy_nrf::pwm::SimplePwm;
 use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
 use embassy_time::Timer;
 use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
-use hello_graphics::fw::button::BTN_WATCH;
-use hello_graphics::fw::device_id;
-use hello_graphics::fw::kv;
-use hello_graphics::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, board,
-    draw_graphics,
-    fw::button::run_buttons,
-    fw::buzzer::{Buzzer, buzzer_task},
-    fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd},
-    fw::led,
-    fw::nfct::run_nfct,
-    health_err, unix_now, with_health,
-};
-use ssd1675::UpdateMode;
-use ssd1675::graphics::Color;
-use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
-
+use hello_graphics::fw::button::{BTN_WATCH, run_buttons};
+use hello_graphics::fw::buzzer::{Buzzer, buzzer_task};
+use hello_graphics::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd};
 #[cfg(feature = "mesh")]
 use hello_graphics::fw::mesh::{
     ble::{CompanionContext, init_ble, run_ble_peripheral},
     bonds::bond_task,
     contacts::ContactStore,
     meshcore::run_meshcore_listener,
-    persister,
-    settings,
+    persister, settings,
 };
+use hello_graphics::fw::nfct::run_nfct;
+use hello_graphics::fw::{device_id, kv, led};
 #[cfg(feature = "mesh")]
 use hello_graphics::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
+use hello_graphics::{
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, board, draw_graphics, health_err,
+    unix_now, with_health,
+};
+use ssd1675::UpdateMode;
+use ssd1675::graphics::Color;
+use static_cell::StaticCell;
+use {defmt_rtt as _, panic_probe as _};
 
 // ---------------------------------------------------------------------------
 // Main
@@ -153,10 +147,13 @@ async fn main(spawner: Spawner) {
         {
             use core::sync::atomic::Ordering::Relaxed;
             if let Some(op) = settings::get_other_params().await {
-                hello_graphics::ADVERT_LOC_POLICY
-                    .store(op.advert_loc_policy != 0, Relaxed);
+                hello_graphics::ADVERT_LOC_POLICY.store(op.advert_loc_policy != 0, Relaxed);
                 // Clamp persisted value into the menu-exposed range (1 or 2).
-                let ma = if op.multi_acks == 0 { 1 } else { op.multi_acks.min(2) };
+                let ma = if op.multi_acks == 0 {
+                    1
+                } else {
+                    op.multi_acks.min(2)
+                };
                 hello_graphics::MULTI_ACKS.store(ma, Relaxed);
                 // Derived master-telemetry flag — "on" iff any mode is non-zero.
                 let share = op.telemetry_mode_base != 0
@@ -171,12 +168,9 @@ async fn main(spawner: Spawner) {
             hello_graphics::ADVERT_ENABLED.store(adv.enabled, Relaxed);
             hello_graphics::ADVERT_INTERVAL_HOURS.store(adv.interval_hours, Relaxed);
 
-            hello_graphics::IGNORE_BLINK
-                .store(settings::get_ignore_blink().await, Relaxed);
-            hello_graphics::LORA_DISABLED
-                .store(!settings::get_lora_enabled().await, Relaxed);
-            hello_graphics::BLE_DISABLED
-                .store(!settings::get_ble_enabled().await, Relaxed);
+            hello_graphics::IGNORE_BLINK.store(settings::get_ignore_blink().await, Relaxed);
+            hello_graphics::LORA_DISABLED.store(!settings::get_lora_enabled().await, Relaxed);
+            hello_graphics::BLE_DISABLED.store(!settings::get_ble_enabled().await, Relaxed);
         }
 
         let identity = settings::load_or_create_identity().await;
@@ -271,7 +265,14 @@ async fn main(spawner: Spawner) {
         board!(p, buzzer),
         &Default::default(),
     ))));
-    let battery_monitor = match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd).into(), board!(p, charge).into()).await {
+    let battery_monitor = match init_battery(
+        p.SAADC,
+        board!(p, vbat),
+        board!(p, vbat_rd).into(),
+        board!(p, charge).into(),
+    )
+    .await
+    {
         Ok(m) => m,
         Err(e) => {
             defmt::error!("Battery init failed: {:?}", e);
@@ -395,7 +396,10 @@ async fn display_loop(
             if count > 0 {
                 let next = sprite_frame + 1;
                 // During hatching, clamp to the last frame instead of wrapping.
-                let is_hatching = matches!(anim, hello_graphics::game::engine::DisplayAnim::Hatching { .. });
+                let is_hatching = matches!(
+                    anim,
+                    hello_graphics::game::engine::DisplayAnim::Hatching { .. }
+                );
                 sprite_frame = if is_hatching {
                     next.min(count - 1)
                 } else {
@@ -438,7 +442,8 @@ async fn wait_display_event(
                 // Idle/warning/etc: 10 seconds per frame.
                 let anim = hello_graphics::game::lifecycle::display_anim();
                 let kind = hello_graphics::game::lifecycle::pet_kind();
-                let frame_count = hello_graphics::game::engine::anim_files::frame_count(kind, anim) as u64;
+                let frame_count =
+                    hello_graphics::game::engine::anim_files::frame_count(kind, anim) as u64;
                 if frame_count <= 1 {
                     // Single frame — no animation to advance; sleep until
                     // the game state changes (next wake tick).
@@ -458,7 +463,8 @@ async fn wait_display_event(
                         | hello_graphics::game::engine::DisplayAnim::Playing => {
                             // Spread frames over the remaining action time.
                             let stats = hello_graphics::game::lifecycle::cycle();
-                            let remaining_ticks = stats.map_or(0, |s| s.action_ticks_remaining as u64);
+                            let remaining_ticks =
+                                stats.map_or(0, |s| s.action_ticks_remaining as u64);
                             let total_secs = remaining_ticks * 10;
                             total_secs / frame_count
                         }
@@ -475,8 +481,7 @@ async fn wait_display_event(
 
         #[cfg(feature = "mesh")]
         {
-            use embassy_futures::select::Either4;
-            use embassy_futures::select::select4;
+            use embassy_futures::select::{Either4, select4};
             match select(
                 select3(
                     button_rcvr.changed(),
@@ -541,6 +546,7 @@ async fn wait_display_event(
 #[embassy_executor::task]
 async fn advert_ticker_task() {
     use core::sync::atomic::Ordering::Relaxed;
+
     use embassy_futures::select::{Either, select};
 
     // Brief delay on boot so the radio and mesh stack are up before our first TX.
@@ -555,11 +561,9 @@ async fn advert_ticker_task() {
 
         // Send an advert now, then sleep until the next tick (or wake early
         // if the menu changes the schedule).
-        let _ = hello_graphics::fw::mesh::tx_send(
-            hello_graphics::fw::mesh::TxRequest::Advert(
-                hello_graphics::fw::mesh::meshcore::AdvertMode::Flood,
-            ),
-        );
+        let _ = hello_graphics::fw::mesh::tx_send(hello_graphics::fw::mesh::TxRequest::Advert(
+            hello_graphics::fw::mesh::meshcore::AdvertMode::Flood,
+        ));
 
         let hours = hello_graphics::ADVERT_INTERVAL_HOURS
             .load(Relaxed)
@@ -601,15 +605,11 @@ async fn pet_watchdog_task(mut handle: embassy_nrf::wdt::WatchdogHandle) {
 /// Called from the main battery-init error path before main() returns.
 /// The EPD retains the image after deep_sleep, so the message stays visible
 /// until the operator intervenes.
-async fn show_battery_critical(
-    display: &mut EpdGfx<'_>,
-    err: &battery::BatteryError,
-) {
-    use embedded_graphics::{
-        mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD},
-        prelude::*,
-        text::{Alignment, Baseline, Text, TextStyleBuilder},
-    };
+async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryError) {
+    use embedded_graphics::mono_font::MonoTextStyle;
+    use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+    use embedded_graphics::prelude::*;
+    use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
     let _ = display.clear(Color::White);
 
@@ -619,16 +619,23 @@ async fn show_battery_critical(
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
 
-    let _ = Text::with_text_style("Battery voltage", Point::new(76, 50), font, centered).draw(display);
+    let _ =
+        Text::with_text_style("Battery voltage", Point::new(76, 50), font, centered).draw(display);
     let _ = Text::with_text_style("critical", Point::new(76, 66), font, centered).draw(display);
 
     let mut detail: heapless::String<32> = heapless::String::new();
     let _ = match err {
-        battery::BatteryError::TooLow(mv)  => core::fmt::Write::write_fmt(&mut detail, format_args!("{} mV — too low", mv)),
-        battery::BatteryError::TooHigh(mv) => core::fmt::Write::write_fmt(&mut detail, format_args!("{} mV — too high", mv)),
+        battery::BatteryError::TooLow(mv) => {
+            core::fmt::Write::write_fmt(&mut detail, format_args!("{} mV — too low", mv))
+        }
+        battery::BatteryError::TooHigh(mv) => {
+            core::fmt::Write::write_fmt(&mut detail, format_args!("{} mV — too high", mv))
+        }
     };
-    let _ = Text::with_text_style(detail.as_str(), Point::new(76, 90), font, centered).draw(display);
-    let _ = Text::with_text_style("Check / replace", Point::new(76, 114), font, centered).draw(display);
+    let _ =
+        Text::with_text_style(detail.as_str(), Point::new(76, 90), font, centered).draw(display);
+    let _ =
+        Text::with_text_style("Check / replace", Point::new(76, 114), font, centered).draw(display);
     let _ = Text::with_text_style("battery", Point::new(76, 130), font, centered).draw(display);
 
     let _ = display.reset().await;

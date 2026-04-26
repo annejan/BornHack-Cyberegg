@@ -20,12 +20,12 @@ pub mod settings;
 pub mod sx1262;
 
 // Re-export the meshcore listener entry point for embassy.rs.
-pub use meshcore::run_meshcore_listener;
+use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use core::cell::RefCell;
+pub use meshcore::run_meshcore_listener;
 
 // ---------------------------------------------------------------------------
 // Display data — written by meshcore task, read by display renderer
@@ -107,7 +107,10 @@ impl ChannelMsgRing {
 
     /// Find a mutable entry by content_hash (for repeat-count updates).
     pub fn find_by_hash_mut(&mut self, hash: u32) -> Option<&mut ChannelMsgEntry> {
-        self.entries.iter_mut().filter_map(|e| e.as_mut()).find(|e| e.content_hash == hash)
+        self.entries
+            .iter_mut()
+            .filter_map(|e| e.as_mut())
+            .find(|e| e.content_hash == hash)
     }
 }
 
@@ -155,7 +158,9 @@ pub struct AdvertBleNotif {
 }
 
 pub static ADVERT_BLE_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, AdvertBleNotif, 4,
+    CriticalSectionRawMutex,
+    AdvertBleNotif,
+    4,
 > = embassy_sync::channel::Channel::new();
 
 /// Last received private message (TxtMsg).
@@ -191,32 +196,38 @@ pub static CONTACTS_FULL_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 /// a dropped update just means the phone sees the old path for one extra
 /// reconnect cycle.
 pub static PATH_UPDATED_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, [u8; ::meshcore::PUB_KEY_SIZE], 4,
+    CriticalSectionRawMutex,
+    [u8; ::meshcore::PUB_KEY_SIZE],
+    4,
 > = embassy_sync::channel::Channel::new();
 
-/// In-RAM cache of the persisted `path_hash_mode` setting (CMD_SET_PATH_HASH_MODE, 0x3D).
+/// In-RAM cache of the persisted `path_hash_mode` setting
+/// (CMD_SET_PATH_HASH_MODE, 0x3D).
 ///
 /// Value semantics match the reference: 0 ⇒ 1-byte per-hop hashes,
 /// 1 ⇒ 2-byte, 2 ⇒ 3-byte. Values ≥ 3 are reserved and rejected by the
 /// setter. Read on the hot TX path to compose `path_len_byte` for every
 /// freshly-originated flood packet; loaded from flash once at boot and
 /// refreshed whenever `CMD_SET_PATH_HASH_MODE` is received.
-pub static PATH_HASH_MODE: core::sync::atomic::AtomicU8 =
-    core::sync::atomic::AtomicU8::new(0);
+pub static PATH_HASH_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
-/// Fired by the menu to request the BLE task to wipe and re-seed the channel store.
+/// Fired by the menu to request the BLE task to wipe and re-seed the channel
+/// store.
 pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Fired by the menu when the boost-RX toggle changes so the BLE task can persist it.
+/// Fired by the menu when the boost-RX toggle changes so the BLE task can
+/// persist it.
 pub static BOOST_RX_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired by the menu to request the BLE task to clear all stored contacts.
 pub static CONTACT_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Fired after a `SET_CHANNEL` or channel reset so the meshcore task reloads channels.
+/// Fired after a `SET_CHANNEL` or channel reset so the meshcore task reloads
+/// channels.
 pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Signals the meshcore task that tuning params changed; carries the new airtime_factor_x1000.
+/// Signals the meshcore task that tuning params changed; carries the new
+/// airtime_factor_x1000.
 pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal::new();
 
 /// Wakes the meshcore task out of `lora.receive_packet()` whenever a new TX
@@ -229,10 +240,8 @@ pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal:
 pub static TX_WAKEUP: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// 16-byte transport key for region-scoped flood packets.
-pub static FLOOD_SCOPE_KEY: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<[u8; 16]>>,
-> = Mutex::new(core::cell::Cell::new(None));
+pub static FLOOD_SCOPE_KEY: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<[u8; 16]>>> =
+    Mutex::new(core::cell::Cell::new(None));
 
 // ---------------------------------------------------------------------------
 // Radio stats
@@ -250,10 +259,10 @@ pub struct RadioStats {
 pub static RADIO_STATS: Mutex<CriticalSectionRawMutex, core::cell::Cell<RadioStats>> =
     Mutex::new(core::cell::Cell::new(RadioStats {
         noise_floor: -120,
-        last_rssi:    0,
-        last_snr_x4:  0,
-        tx_air_secs:  0,
-        rx_air_secs:  0,
+        last_rssi: 0,
+        last_snr_x4: 0,
+        tx_air_secs: 0,
+        rx_air_secs: 0,
     }));
 
 // ---------------------------------------------------------------------------
@@ -282,7 +291,9 @@ pub struct ControlDataPkt {
 }
 
 pub static CONTROL_DATA_PKT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, ControlDataPkt, 4,
+    CriticalSectionRawMutex,
+    ControlDataPkt,
+    4,
 > = embassy_sync::channel::Channel::new();
 
 // ---------------------------------------------------------------------------
@@ -319,7 +330,7 @@ pub struct TxLogin {
 /// repeater-stats query sent after a successful login to a repeater.
 pub struct TxAdminStatusReq {
     pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
-    pub tag:     u32,
+    pub tag: u32,
 }
 
 /// Maximum `req_data` payload for a `CMD_SEND_BINARY_REQ`.
@@ -327,8 +338,8 @@ pub const MAX_BINARY_REQ_PARAMS: usize = 24;
 
 /// Generic `PAYLOAD_TYPE_REQ` with an opaque `[req_type:1][params...]` body.
 pub struct TxBinaryReq {
-    pub pub_key:  [u8; ::meshcore::PUB_KEY_SIZE],
-    pub tag:      u32,
+    pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag: u32,
     pub req_data: heapless::Vec<u8, MAX_BINARY_REQ_PARAMS>,
 }
 
@@ -362,12 +373,14 @@ pub enum TxRequest {
     Advert(meshcore::AdvertMode),
     /// Pre-serialized frame (for relay / repeat). Sent as-is via
     /// `lora.send_message()`.
-    RawFrame { data: [u8; ::meshcore::MAX_TRANS_UNIT], len: usize },
+    RawFrame {
+        data: [u8; ::meshcore::MAX_TRANS_UNIT],
+        len: usize,
+    },
 }
 
-pub static TX_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxRequest, 16,
-> = embassy_sync::channel::Channel::new();
+pub static TX_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxRequest, 16> =
+    embassy_sync::channel::Channel::new();
 
 /// Convenience: push a `TxRequest` and wake the meshcore task.
 /// Returns `Err` if the channel is full.
@@ -394,7 +407,9 @@ pub struct DiscoveryResult {
 }
 
 pub static DISCOVERY_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, DiscoveryResult, 2,
+    CriticalSectionRawMutex,
+    DiscoveryResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 /// Raw `RepeaterStats` blob from a `REQ_TYPE_GET_STATUS` reply, ready for the
@@ -405,11 +420,13 @@ pub static DISCOVERY_RESULT_CHANNEL: embassy_sync::channel::Channel<
 pub struct StatusResult {
     pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
     /// Raw 56-byte `RepeaterStats` C struct. Forwarded verbatim to the phone.
-    pub stats:   [u8; 56],
+    pub stats: [u8; 56],
 }
 
 pub static STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, StatusResult, 2,
+    CriticalSectionRawMutex,
+    StatusResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 /// Parsed fields of a `RepeaterStats` reply to `REQ_TYPE_GET_STATUS`.
@@ -418,30 +435,32 @@ pub static STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
 /// 56 bytes of tightly-packed little-endian fields, no padding.
 #[derive(Clone, Copy, Default)]
 pub struct AdminStatusResult {
-    pub pub_key:                [u8; ::meshcore::PUB_KEY_SIZE],
-    pub tag:                    u32,
-    pub batt_milli_volts:       u16,
-    pub curr_tx_queue_len:      u16,
-    pub noise_floor:            i16,
-    pub last_rssi:              i16,
-    pub n_packets_recv:         u32,
-    pub n_packets_sent:         u32,
-    pub total_air_time_secs:    u32,
-    pub total_up_time_secs:     u32,
-    pub n_sent_flood:           u32,
-    pub n_sent_direct:          u32,
-    pub n_recv_flood:           u32,
-    pub n_recv_direct:          u32,
-    pub err_events:             u16,
-    pub last_snr_x4:            i16,
-    pub n_direct_dups:          u16,
-    pub n_flood_dups:           u16,
+    pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag: u32,
+    pub batt_milli_volts: u16,
+    pub curr_tx_queue_len: u16,
+    pub noise_floor: i16,
+    pub last_rssi: i16,
+    pub n_packets_recv: u32,
+    pub n_packets_sent: u32,
+    pub total_air_time_secs: u32,
+    pub total_up_time_secs: u32,
+    pub n_sent_flood: u32,
+    pub n_sent_direct: u32,
+    pub n_recv_flood: u32,
+    pub n_recv_direct: u32,
+    pub err_events: u16,
+    pub last_snr_x4: i16,
+    pub n_direct_dups: u16,
+    pub n_flood_dups: u16,
     pub total_rx_air_time_secs: u32,
-    pub n_recv_errors:          u32,
+    pub n_recv_errors: u32,
 }
 
 pub static ADMIN_STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, AdminStatusResult, 2,
+    CriticalSectionRawMutex,
+    AdminStatusResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 /// Maximum `BinaryResult` body size. The longest reply is `GET_NEIGHBOURS`
@@ -454,12 +473,14 @@ pub const MAX_BINARY_RESP_BODY: usize = 176;
 /// the repeater's `handleRequest()` starting after the echoed tag.
 pub struct BinaryResult {
     pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
-    pub tag:     u32,
-    pub body:    heapless::Vec<u8, MAX_BINARY_RESP_BODY>,
+    pub tag: u32,
+    pub body: heapless::Vec<u8, MAX_BINARY_RESP_BODY>,
 }
 
 pub static BINARY_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, BinaryResult, 2,
+    CriticalSectionRawMutex,
+    BinaryResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 pub struct TraceResult {
@@ -473,7 +494,9 @@ pub struct TraceResult {
 }
 
 pub static TRACE_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TraceResult, 2,
+    CriticalSectionRawMutex,
+    TraceResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 pub struct LoginResult {
@@ -486,7 +509,9 @@ pub struct LoginResult {
 }
 
 pub static LOGIN_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, LoginResult, 2,
+    CriticalSectionRawMutex,
+    LoginResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 pub struct TelemResult {
@@ -495,7 +520,9 @@ pub struct TelemResult {
 }
 
 pub static TELEM_RESULT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TelemResult, 2,
+    CriticalSectionRawMutex,
+    TelemResult,
+    2,
 > = embassy_sync::channel::Channel::new();
 
 // ---------------------------------------------------------------------------
@@ -507,9 +534,8 @@ pub struct AckEvent {
     pub trip_time_ms: u32,
 }
 
-pub static ACK_EVENT_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, AckEvent, 2,
-> = embassy_sync::channel::Channel::new();
+pub static ACK_EVENT_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, AckEvent, 2> =
+    embassy_sync::channel::Channel::new();
 
 #[derive(Clone, Copy)]
 pub struct PendingAck {
@@ -517,44 +543,35 @@ pub struct PendingAck {
     pub sent_at: embassy_time::Instant,
 }
 
-pub static PENDING_ACK: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<PendingAck>>,
-> = Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_ACK: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<PendingAck>>> =
+    Mutex::new(core::cell::Cell::new(None));
 
 // ---------------------------------------------------------------------------
 // Pending request tags
 // ---------------------------------------------------------------------------
 
-pub static PENDING_DISCOVERY_TAG: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<u32>>,
-> = Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_DISCOVERY_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
+    Mutex::new(core::cell::Cell::new(None));
 
 pub static PENDING_STATUS_PUBKEY: Mutex<
     CriticalSectionRawMutex,
     core::cell::Cell<Option<[u8; ::meshcore::PUB_KEY_SIZE]>>,
 > = Mutex::new(core::cell::Cell::new(None));
 
-pub static PENDING_TELEM_TAG: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<u32>>,
-> = Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_TELEM_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
+    Mutex::new(core::cell::Cell::new(None));
 
 /// Tag of the in-flight `REQ_TYPE_GET_STATUS` request. The repeater echoes
 /// this value as the first 4 bytes of its `PAYLOAD_TYPE_RESPONSE` plaintext,
-/// and we match it here to route the parsed `RepeaterStats` to the result channel.
-pub static PENDING_ADMIN_STATUS_TAG: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<u32>>,
-> = Mutex::new(core::cell::Cell::new(None));
+/// and we match it here to route the parsed `RepeaterStats` to the result
+/// channel.
+pub static PENDING_ADMIN_STATUS_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
+    Mutex::new(core::cell::Cell::new(None));
 
 /// Tag of the in-flight generic `CMD_SEND_BINARY_REQ` request. Tag-based
 /// routing delivers the echoed-timestamp response to `BINARY_RESULT_CHANNEL`.
-pub static PENDING_BINARY_REQ_TAG: Mutex<
-    CriticalSectionRawMutex,
-    core::cell::Cell<Option<u32>>,
-> = Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_BINARY_REQ_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
+    Mutex::new(core::cell::Cell::new(None));
 
 /// Fast-path hint for the contact-scan loops in the receive handlers.
 ///

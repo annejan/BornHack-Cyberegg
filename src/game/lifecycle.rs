@@ -5,11 +5,11 @@
 //! in this module.  All functions are async (flash access goes through
 //! the shared QSPI mutex).
 
-use super::engine::{GameState, PetStats, DisplayAnim, PetRealm, PetRecord, PET_NAME_MAX};
-#[cfg(feature = "embassy-base")]
-use super::engine::{SAVE_SIZE, REALM_SAVE_SIZE};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use super::engine::{DisplayAnim, GameState, PET_NAME_MAX, PetRealm, PetRecord, PetStats};
+#[cfg(feature = "embassy-base")]
+use super::engine::{REALM_SAVE_SIZE, SAVE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Static game state
@@ -19,8 +19,12 @@ use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 struct SyncCell<T>(core::cell::UnsafeCell<T>);
 unsafe impl<T> Sync for SyncCell<T> {}
 impl<T> SyncCell<T> {
-    const fn new(v: T) -> Self { Self(core::cell::UnsafeCell::new(v)) }
-    fn get(&self) -> *mut T { self.0.get() }
+    const fn new(v: T) -> Self {
+        Self(core::cell::UnsafeCell::new(v))
+    }
+    fn get(&self) -> *mut T {
+        self.0.get()
+    }
 }
 
 static GAME: SyncCell<Option<GameState>> = SyncCell::new(None);
@@ -75,7 +79,9 @@ pub async fn init() {
     } else {
         defmt::info!("game: no save — waiting for player to start");
     }
-    unsafe { *GAME.get() = state; }
+    unsafe {
+        *GAME.get() = state;
+    }
 
     // Load pet name and Unicorn Realm from KV (always present under embassy-base).
     {
@@ -102,7 +108,9 @@ pub async fn init() {
         if let Ok(n) = ns.get("realm", &mut buf).await {
             let realm = PetRealm::from_bytes(&buf[..n]);
             defmt::info!("game: loaded {} past pets", realm.count);
-            unsafe { *REALM.get() = realm; }
+            unsafe {
+                *REALM.get() = realm;
+            }
         }
     }
 }
@@ -116,8 +124,11 @@ async fn try_load() -> Option<GameState> {
         if n == SAVE_SIZE {
             if let Some(mut s) = GameState::from_bytes(&buf) {
                 s.last_update_tick = 0;
-                defmt::info!("game: restored from flash (gen={} age={})",
-                    s.generation, s.age_ticks);
+                defmt::info!(
+                    "game: restored from flash (gen={} age={})",
+                    s.generation,
+                    s.age_ticks
+                );
                 return Some(s);
             }
             defmt::warn!("game: corrupt save data");
@@ -130,8 +141,14 @@ async fn try_load() -> Option<GameState> {
 fn new_egg(kind: super::engine::PetKind) -> GameState {
     let id = crate::fw::device_id::get_bytes();
     let seed = u64::from_le_bytes([
-        id[0], id[1], id[2], id[3],
-        id[0] ^ 0xAA, id[1] ^ 0x55, id[2] ^ 0xCC, id[3] ^ 0x33,
+        id[0],
+        id[1],
+        id[2],
+        id[3],
+        id[0] ^ 0xAA,
+        id[1] ^ 0x55,
+        id[2] ^ 0xCC,
+        id[3] ^ 0x33,
     ]);
     GameState::new_egg(seed, kind)
 }
@@ -164,7 +181,9 @@ pub fn can_use_station() -> bool {
 pub fn start_new_game(kind: super::engine::PetKind) {
     let mut egg = new_egg(kind);
     egg.last_update_tick = now_tick();
-    unsafe { *GAME.get() = Some(egg); }
+    unsafe {
+        *GAME.get() = Some(egg);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +192,8 @@ pub fn start_new_game(kind: super::engine::PetKind) {
 
 /// Short Danish and Dutch names used as random defaults.
 const DEFAULT_NAMES: &[&str] = &[
-    "Arie", "Bert", "Bjorn", "Bob", "Bram",
-    "Daan", "Femke", "Freja", "Ida", "Jens",
-    "Kees", "Koen", "Lars", "Lotte", "Mette",
-    "Niels", "Rupert", "Stijn", "Sven", "Anja",
+    "Arie", "Bert", "Bjorn", "Bob", "Bram", "Daan", "Femke", "Freja", "Ida", "Jens", "Kees",
+    "Koen", "Lars", "Lotte", "Mette", "Niels", "Rupert", "Stijn", "Sven", "Anja",
 ];
 
 /// Set the pet name from raw bytes (called by text entry callback).
@@ -273,9 +290,8 @@ static LAST_SEVERITY: AtomicU8 = AtomicU8::new(Severity::Uninit as u8);
 fn current_severity(state: &GameState) -> Severity {
     use super::engine::Phase;
     use super::engine::thresholds::{
-        SICK_TRIGGER_DRAINED, SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED,
-        WARNING_DRAINED, WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK,
-        WARNING_TIRED,
+        SICK_TRIGGER_DRAINED, SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED, WARNING_DRAINED,
+        WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK, WARNING_TIRED,
     };
 
     if state.phase == Phase::Gone {
@@ -487,7 +503,9 @@ pub fn realm_pet(index: usize) -> Option<PetRecord> {
 #[cfg(feature = "embassy-base")]
 pub async fn save_if_needed() -> bool {
     let state = unsafe { (*GAME.get()).as_mut() };
-    let Some(state) = state else { return false; };
+    let Some(state) = state else {
+        return false;
+    };
 
     // If the pet just left, record it in the Unicorn Realm.
     if state.realm_pending {
@@ -500,11 +518,16 @@ pub async fn save_if_needed() -> bool {
         if ns.set("realm", &buf, true).await.is_err() {
             defmt::warn!("game: realm save failed");
         } else {
-            defmt::info!("game: pet recorded in Unicorn Realm (gen={})", record.generation);
+            defmt::info!(
+                "game: pet recorded in Unicorn Realm (gen={})",
+                record.generation
+            );
         }
     }
 
-    if !state.needs_save() { return false; }
+    if !state.needs_save() {
+        return false;
+    }
 
     let buf = state.to_bytes();
     let ns = crate::fw::kv::namespace("game");
@@ -525,4 +548,6 @@ pub async fn save_if_needed() -> bool {
 
 /// No-op when ekv is not available (simulator build).
 #[cfg(not(feature = "embassy-base"))]
-pub async fn save_if_needed() -> bool { false }
+pub async fn save_if_needed() -> bool {
+    false
+}

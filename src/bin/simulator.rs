@@ -2,17 +2,12 @@
 extern crate embedded_graphics as eg;
 extern crate embedded_graphics_simulator as simulator;
 
-use hello_graphics::{
-    DISPLAY_STATE, TriColor, draw_graphics,
-    menu::ButtonId,
-    with_display_state_mut,
-};
-
 use eg::pixelcolor::Rgb888;
 use eg::prelude::*;
-use embedded_graphics_simulator::{
-    OutputSettings, SimulatorDisplay, SimulatorEvent, Window, sdl2::Keycode,
-};
+use embedded_graphics_simulator::sdl2::Keycode;
+use embedded_graphics_simulator::{OutputSettings, SimulatorDisplay, SimulatorEvent, Window};
+use hello_graphics::menu::ButtonId;
+use hello_graphics::{DISPLAY_STATE, TriColor, draw_graphics, with_display_state_mut};
 
 /// Adapter that translates TriColor draw calls to an Rgb888 SimulatorDisplay.
 struct TriColorDisplay<'a>(&'a mut SimulatorDisplay<Rgb888>);
@@ -45,15 +40,15 @@ impl OriginDimensions for TriColorDisplay<'_> {
 /// Map SDL keycode to ButtonId.
 fn key_to_button(k: Keycode) -> Option<ButtonId> {
     match k {
-        Keycode::Up        => Some(ButtonId::Up),
-        Keycode::Down      => Some(ButtonId::Down),
-        Keycode::Left      => Some(ButtonId::Left),
-        Keycode::Right     => Some(ButtonId::Right),
-        Keycode::Return    => Some(ButtonId::Fire),
-        Keycode::Space     => Some(ButtonId::Fire),
+        Keycode::Up => Some(ButtonId::Up),
+        Keycode::Down => Some(ButtonId::Down),
+        Keycode::Left => Some(ButtonId::Left),
+        Keycode::Right => Some(ButtonId::Right),
+        Keycode::Return => Some(ButtonId::Fire),
+        Keycode::Space => Some(ButtonId::Fire),
         Keycode::Backspace => Some(ButtonId::Cancel),
-        Keycode::E         => Some(ButtonId::Execute),
-        _                  => None,
+        Keycode::E => Some(ButtonId::Execute),
+        _ => None,
     }
 }
 
@@ -79,7 +74,9 @@ fn main() -> Result<(), core::convert::Infallible> {
             match event {
                 SimulatorEvent::Quit => break 'running,
                 SimulatorEvent::KeyDown { keycode, .. } => {
-                    if keycode == Keycode::Escape { break 'running; }
+                    if keycode == Keycode::Escape {
+                        break 'running;
+                    }
                     if let Some(btn) = key_to_button(keycode) {
                         handle_button(btn);
                         need_redraw = true;
@@ -97,7 +94,8 @@ fn main() -> Result<(), core::convert::Infallible> {
 fn handle_button(btn: ButtonId) {
     #[cfg(feature = "game")]
     {
-        let on_game = hello_graphics::with_display_state!(|s| s.active_screen()) == hello_graphics::SCREEN_GAME;
+        let on_game = hello_graphics::with_display_state!(|s| s.active_screen())
+            == hello_graphics::SCREEN_GAME;
         if on_game && hello_graphics::game::input::dispatch(btn) {
             return;
         }

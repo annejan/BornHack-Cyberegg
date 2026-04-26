@@ -28,12 +28,12 @@
 //!
 //! # How file reading works
 //!
-//! 1. Parse the boot sector to learn where the FAT, root directory, and
-//!    data region start.
-//! 2. Scan the root directory (32 bytes per entry) to find the file's
-//!    first cluster number and size.
-//! 3. To read file data: look up the cluster's absolute flash address,
-//!    read from it, then follow the FAT chain to the next cluster.
+//! 1. Parse the boot sector to learn where the FAT, root directory, and data
+//!    region start.
+//! 2. Scan the root directory (32 bytes per entry) to find the file's first
+//!    cluster number and size.
+//! 3. To read file data: look up the cluster's absolute flash address, read
+//!    from it, then follow the FAT chain to the next cluster.
 //!
 //! # FAT12 cluster chain
 //!
@@ -41,7 +41,8 @@
 //! - Byte offset in FAT = N × 3 / 2
 //! - If N is even: entry = low 12 bits of the 16-bit word at that offset
 //! - If N is odd:  entry = high 12 bits (shift right by 4)
-//! - Entry values: 0x000 = free, 0xFF8–0xFFF = end of chain, else = next cluster
+//! - Entry values: 0x000 = free, 0xFF8–0xFFF = end of chain, else = next
+//!   cluster
 //!
 //! # Usage
 //!
@@ -77,7 +78,8 @@ pub enum FatError {
     FileNotFound,
     /// Flash read failed (QSPI hardware error).
     FlashError,
-    /// Corrupt FAT chain or directory entry (unexpected end-of-chain or bad cluster).
+    /// Corrupt FAT chain or directory entry (unexpected end-of-chain or bad
+    /// cluster).
     Corrupt,
 }
 
@@ -101,7 +103,10 @@ pub struct FileRef {
 
 impl FileRef {
     /// Empty/invalid handle, used for array initialization.
-    pub const EMPTY: Self = Self { first_cluster: 0, size: 0 };
+    pub const EMPTY: Self = Self {
+        first_cluster: 0,
+        size: 0,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +139,7 @@ impl FatParams {
     /// Absolute flash address of the root directory.
     fn root_dir_offset(&self) -> u32 {
         let fat_size = self.num_fats as u32 * self.sectors_per_fat as u32;
-        flash::FAT_OFFSET
-            + (self.reserved_sectors as u32 + fat_size) * self.bytes_per_sector as u32
+        flash::FAT_OFFSET + (self.reserved_sectors as u32 + fat_size) * self.bytes_per_sector as u32
     }
 
     /// Number of sectors occupied by the root directory.
@@ -179,12 +183,12 @@ async fn read_params() -> Result<FatParams, FatError> {
     }
 
     Ok(FatParams {
-        bytes_per_sector: bps,           // BPB offset 11: usually 512
-        sectors_per_cluster: buf[13],    // BPB offset 13: e.g. 8 for 4K clusters
+        bytes_per_sector: bps,        // BPB offset 11: usually 512
+        sectors_per_cluster: buf[13], // BPB offset 13: e.g. 8 for 4K clusters
         reserved_sectors: u16::from_le_bytes([buf[14], buf[15]]), // BPB offset 14
-        num_fats: buf[16],               // BPB offset 16: usually 2
+        num_fats: buf[16],            // BPB offset 16: usually 2
         root_entry_count: u16::from_le_bytes([buf[17], buf[18]]), // BPB offset 17
-        sectors_per_fat: u16::from_le_bytes([buf[22], buf[23]]),  // BPB offset 22
+        sectors_per_fat: u16::from_le_bytes([buf[22], buf[23]]), // BPB offset 22
     })
 }
 
@@ -213,15 +217,19 @@ async fn next_cluster(params: &FatParams, cluster: u16) -> Result<Option<u16>, F
     };
 
     // 0xFF8..=0xFFF = end of chain, 0x000 = free, 0xFF7 = bad sector.
-    if val >= 0xFF8 || val == 0 { Ok(None) } else { Ok(Some(val)) }
+    if val >= 0xFF8 || val == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(val))
+    }
 }
 
 /// Parse a 32-byte directory entry into a filename and file handle.
 ///
 /// Directory entry layout:
 ///   [0..11]  8.3 filename (8 name + 3 ext, space-padded, uppercase)
-///   [11]     attributes (bit flags: read-only, hidden, system, volume, dir, archive)
-///   [26..28] first cluster number (little-endian u16)
+///   [11]     attributes (bit flags: read-only, hidden, system, volume, dir,
+/// archive)   [26..28] first cluster number (little-endian u16)
 ///   [28..32] file size in bytes (little-endian u32)
 fn parse_entry(raw: &[u8; 32]) -> ([u8; 11], FileRef) {
     let mut name = [0u8; 11];
@@ -286,10 +294,18 @@ impl DirReader {
                 .await
                 .map_err(|_| FatError::FlashError)?;
 
-            if raw[0] == 0x00 { return Ok(None); }       // end marker
-            if raw[0] == 0xE5 { continue; }                // deleted
-            if raw[11] & 0x0F == 0x0F { continue; }        // LFN fragment
-            if raw[11] & 0x18 != 0 { continue; }           // volume label or directory
+            if raw[0] == 0x00 {
+                return Ok(None);
+            } // end marker
+            if raw[0] == 0xE5 {
+                continue;
+            } // deleted
+            if raw[11] & 0x0F == 0x0F {
+                continue;
+            } // LFN fragment
+            if raw[11] & 0x18 != 0 {
+                continue;
+            } // volume label or directory
 
             return Ok(Some(parse_entry(&raw)));
         }
@@ -315,7 +331,9 @@ impl DirReader {
     pub async fn nth_by_ext(&mut self, ext: &[u8; 3], n: u16) -> Result<Option<FileRef>, FatError> {
         let mut count = 0u16;
         while let Some(file) = self.next_by_ext(ext).await? {
-            if count == n { return Ok(Some(file)); }
+            if count == n {
+                return Ok(Some(file));
+            }
             count += 1;
         }
         Ok(None)
@@ -354,7 +372,9 @@ pub fn to_8_3(name: &str) -> Option<[u8; 11]> {
     let mut result = [b' '; 11];
     let bytes = name.as_bytes();
     let dot = bytes.iter().position(|&b| b == b'.')?;
-    if dot > 8 || bytes.len() - dot - 1 > 3 { return None; }
+    if dot > 8 || bytes.len() - dot - 1 > 3 {
+        return None;
+    }
     for (i, &b) in bytes[..dot].iter().enumerate() {
         result[i] = b.to_ascii_uppercase();
     }
@@ -385,7 +405,9 @@ pub async fn read_file(file: &FileRef, offset: u32, buf: &mut [u8]) -> Result<us
 
     let remaining = file.size.saturating_sub(offset) as usize;
     let to_read = buf.len().min(remaining);
-    if to_read == 0 { return Ok(0); }
+    if to_read == 0 {
+        return Ok(0);
+    }
 
     // Walk the cluster chain to skip past `offset` bytes.
     // Each cluster holds `cluster_bytes` bytes of file data.
@@ -453,58 +475,72 @@ pub async fn format() -> Result<(), FatError> {
     let mut boot = [0u8; 512];
 
     // Jump instruction + NOP (required for a valid FAT boot sector).
-    boot[0] = 0xEB; boot[1] = 0x3C; boot[2] = 0x90;
+    boot[0] = 0xEB;
+    boot[1] = 0x3C;
+    boot[2] = 0x90;
     // OEM name.
     boot[3..11].copy_from_slice(b"mkfs.fat");
     // BPB (BIOS Parameter Block).
-    boot[11..13].copy_from_slice(&512u16.to_le_bytes());   // bytes per sector
-    boot[13] = 4;                                           // sectors per cluster
-    boot[14..16].copy_from_slice(&1u16.to_le_bytes());     // reserved sectors
-    boot[16] = 2;                                           // number of FATs
-    boot[17..19].copy_from_slice(&512u16.to_le_bytes());   // root entry count
-    boot[19..21].copy_from_slice(&2048u16.to_le_bytes());  // total sectors (1 MiB / 512)
-    boot[21] = 0xF8;                                        // media descriptor (hard disk)
-    boot[22..24].copy_from_slice(&2u16.to_le_bytes());     // sectors per FAT
-    boot[24..26].copy_from_slice(&2u16.to_le_bytes());     // sectors per track (dummy)
-    boot[26..28].copy_from_slice(&1u16.to_le_bytes());     // number of heads (dummy)
+    boot[11..13].copy_from_slice(&512u16.to_le_bytes()); // bytes per sector
+    boot[13] = 4; // sectors per cluster
+    boot[14..16].copy_from_slice(&1u16.to_le_bytes()); // reserved sectors
+    boot[16] = 2; // number of FATs
+    boot[17..19].copy_from_slice(&512u16.to_le_bytes()); // root entry count
+    boot[19..21].copy_from_slice(&2048u16.to_le_bytes()); // total sectors (1 MiB / 512)
+    boot[21] = 0xF8; // media descriptor (hard disk)
+    boot[22..24].copy_from_slice(&2u16.to_le_bytes()); // sectors per FAT
+    boot[24..26].copy_from_slice(&2u16.to_le_bytes()); // sectors per track (dummy)
+    boot[26..28].copy_from_slice(&1u16.to_le_bytes()); // number of heads (dummy)
     // Extended boot record (FAT12/16).
-    boot[36] = 0x80;                                        // drive number
-    boot[38] = 0x29;                                        // extended boot signature
-    boot[39..43].copy_from_slice(&serial.to_le_bytes());    // volume serial
-    boot[43..54].copy_from_slice(&label);                   // volume label (11 bytes)
-    boot[54..62].copy_from_slice(b"FAT12   ");             // filesystem type
+    boot[36] = 0x80; // drive number
+    boot[38] = 0x29; // extended boot signature
+    boot[39..43].copy_from_slice(&serial.to_le_bytes()); // volume serial
+    boot[43..54].copy_from_slice(&label); // volume label (11 bytes)
+    boot[54..62].copy_from_slice(b"FAT12   "); // filesystem type
     // Boot signature.
-    boot[510] = 0x55; boot[511] = 0xAA;
+    boot[510] = 0x55;
+    boot[511] = 0xAA;
 
     // Erase and write boot sector.
-    flash::erase(flash::FAT_OFFSET).await.map_err(|_| FatError::FlashError)?;
-    flash::write(flash::FAT_OFFSET, &boot).await.map_err(|_| FatError::FlashError)?;
+    flash::erase(flash::FAT_OFFSET)
+        .await
+        .map_err(|_| FatError::FlashError)?;
+    flash::write(flash::FAT_OFFSET, &boot)
+        .await
+        .map_err(|_| FatError::FlashError)?;
 
     // -- FAT tables (sectors 1–4: FAT1 at sector 1, FAT2 at sector 3) ---
     // Each FAT is 2 sectors (1024 bytes).  First two entries are reserved:
     //   entry 0 = media descriptor (0xFF8), entry 1 = end-of-chain (0xFFF).
     //   Packed as 3 bytes: F8 FF FF.
     let mut fat = [0u8; 1024];
-    fat[0] = 0xF8; fat[1] = 0xFF; fat[2] = 0xFF;
+    fat[0] = 0xF8;
+    fat[1] = 0xFF;
+    fat[2] = 0xFF;
     // Rest is 0x00 = free clusters.
 
-    let fat1_addr = flash::FAT_OFFSET + 512;  // sector 1
-    let fat2_addr = fat1_addr + 1024;          // sector 3
+    let fat1_addr = flash::FAT_OFFSET + 512; // sector 1
+    let fat2_addr = fat1_addr + 1024; // sector 3
 
-    // Erase the sectors covering both FATs (sectors 1–4 = 2048 bytes = 1 erase page on 4K flash,
-    // but our sectors are 512 bytes and erase granularity is 4K; sector 0 already erased above).
-    // FAT1 starts at byte 512, FAT2 ends at byte 2560.  That's within the first 4K page
-    // (already erased for the boot sector).  But the root dir starts at sector 5 = byte 2560
-    // which spans into the next 4K page.
-    // Let's erase page-by-page for the full range: sectors 0–36 = 18944 bytes = 5 pages (0–4).
+    // Erase the sectors covering both FATs (sectors 1–4 = 2048 bytes = 1 erase page
+    // on 4K flash, but our sectors are 512 bytes and erase granularity is 4K;
+    // sector 0 already erased above). FAT1 starts at byte 512, FAT2 ends at
+    // byte 2560.  That's within the first 4K page (already erased for the boot
+    // sector).  But the root dir starts at sector 5 = byte 2560 which spans
+    // into the next 4K page. Let's erase page-by-page for the full range:
+    // sectors 0–36 = 18944 bytes = 5 pages (0–4).
     for page in 1..5 {
         flash::erase(flash::FAT_OFFSET + page * flash::PAGE_SIZE as u32)
             .await
             .map_err(|_| FatError::FlashError)?;
     }
 
-    flash::write(fat1_addr, &fat).await.map_err(|_| FatError::FlashError)?;
-    flash::write(fat2_addr, &fat).await.map_err(|_| FatError::FlashError)?;
+    flash::write(fat1_addr, &fat)
+        .await
+        .map_err(|_| FatError::FlashError)?;
+    flash::write(fat2_addr, &fat)
+        .await
+        .map_err(|_| FatError::FlashError)?;
 
     // -- Root directory (sectors 5–36: 16384 bytes = 512 entries) ----------
     // Erased flash is 0xFF, but the FAT driver interprets 0xFF first-byte
@@ -547,7 +583,7 @@ pub async fn format() -> Result<(), FatError> {
 /// valid, this is a no-op (one 64-byte flash read).
 pub async fn format_if_needed() -> Result<(), FatError> {
     match read_params().await {
-        Ok(_) => Ok(()),  // already formatted
+        Ok(_) => Ok(()), // already formatted
         Err(FatError::NoFilesystem) => format().await,
         Err(e) => Err(e),
     }

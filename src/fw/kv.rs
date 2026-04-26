@@ -19,9 +19,9 @@
 //! let n = store.get("health", &mut buf).await?;
 //! ```
 
+use ekv::{Config, Database, MountError};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::once_lock::OnceLock;
-use ekv::{Config, Database, MountError};
 use static_cell::StaticCell;
 
 use super::storage::{KV_PAGE_COUNT, SharedFlash};
@@ -126,7 +126,11 @@ pub async fn init() {
 
     DB.init(db).ok();
 
-    defmt::info!("KV store ready ({} KiB, {} pages × 4 KiB)", KV_PAGE_COUNT * 4, KV_PAGE_COUNT);
+    defmt::info!(
+        "KV store ready ({} KiB, {} pages × 4 KiB)",
+        KV_PAGE_COUNT * 4,
+        KV_PAGE_COUNT
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +201,7 @@ impl KvNamespace {
     ///
     /// - `update: true`  — create if absent, overwrite if it exists.
     /// - `update: false` — create only; returns [`KvError::KeyExists`] if the
-    ///                     key is already present.
+    ///   key is already present.
     pub async fn set(&self, key: &str, data: &[u8], update: bool) -> Result<(), KvError> {
         let mut kbuf = [0u8; 64];
         let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
@@ -219,7 +223,8 @@ impl KvNamespace {
         Ok(())
     }
 
-    /// Delete the value for `key`.  Returns `Ok(())` even if the key did not exist.
+    /// Delete the value for `key`.  Returns `Ok(())` even if the key did not
+    /// exist.
     pub async fn delete(&self, key: &str) -> Result<(), KvError> {
         let mut kbuf = [0u8; 64];
         let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;

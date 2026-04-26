@@ -34,10 +34,10 @@ const COOLDOWN_TICKS: u32 = 30;
 /// applied this boot" — the wrapping subtraction in `try_consume`
 /// then yields a huge gap so the first tap always succeeds, even at
 /// `now_tick == 0`.
-static LAST_FOOD: AtomicU32    = AtomicU32::new(u32::MAX);
-static LAST_DRUGS: AtomicU32   = AtomicU32::new(u32::MAX);
+static LAST_FOOD: AtomicU32 = AtomicU32::new(u32::MAX);
+static LAST_DRUGS: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_INSPIRE: AtomicU32 = AtomicU32::new(u32::MAX);
-static LAST_REST: AtomicU32    = AtomicU32::new(u32::MAX);
+static LAST_REST: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Try to claim the cooldown slot.  Returns `Ok(())` and stamps the
 /// slot if the cooldown has elapsed; otherwise returns the remaining
@@ -72,7 +72,9 @@ pub fn apply(text: &[u8]) -> Option<Toast> {
     match key.as_slice() {
         b"more food" => station_step(&LAST_FOOD, Toast::StationFood, |s| s.hunger = 0),
         b"more drugs" => station_step(&LAST_DRUGS, Toast::StationDrugs, |s| s.sick = 0),
-        b"more inspiration" => station_step(&LAST_INSPIRE, Toast::StationInspire, |s| s.drained = 0),
+        b"more inspiration" => {
+            station_step(&LAST_INSPIRE, Toast::StationInspire, |s| s.drained = 0)
+        }
         b"sleep like a bear" => station_step(&LAST_REST, Toast::StationRest, |s| s.tired = 0),
         _ => None,
     }
@@ -87,7 +89,10 @@ fn station_step(
 ) -> Option<Toast> {
     match try_consume(slot) {
         Ok(()) => {
-            with_state(|s| { mutate(s); true });
+            with_state(|s| {
+                mutate(s);
+                true
+            });
             Some(success_toast)
         }
         Err(secs) => {

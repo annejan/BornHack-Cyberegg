@@ -5,11 +5,9 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embedded_graphics::{
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
 
 use super::stat_bar::draw_stat_bar;
 use crate::ui::{self, TEXT_BOLD_BLACK};
@@ -49,10 +47,7 @@ where
     let generation = super::lifecycle::pet_generation();
     let mut header: heapless::String<28> = heapless::String::new();
     if !name.is_empty() {
-        let _ = core::fmt::Write::write_fmt(
-            &mut header,
-            format_args!("{} ({})", name, kind_name),
-        );
+        let _ = core::fmt::Write::write_fmt(&mut header, format_args!("{} ({})", name, kind_name));
     } else {
         let _ = core::fmt::Write::write_fmt(
             &mut header,
@@ -72,19 +67,15 @@ where
     // 10 chars × 7 px = 70 px) clears the bar, and the bar extends close
     // to the right edge of the display now that the percentage lives
     // inside the bar rather than in a separate column.
-    const BAR_X:     i32 = 78;
+    const BAR_X: i32 = 78;
     const BAR_RIGHT: i32 = 148;
-    const BAR_W:     u32 = (BAR_RIGHT - BAR_X) as u32; // 70
-    const BAR_H:     u32 = 16;
-    const LABEL_X:   i32 = 4;
-    const ROW_H:     i32 = 22;
-    const ROWS_Y:    i32 = 50;
+    const BAR_W: u32 = (BAR_RIGHT - BAR_X) as u32; // 70
+    const BAR_H: u32 = 16;
+    const LABEL_X: i32 = 4;
+    const ROW_H: i32 = 22;
+    const ROWS_Y: i32 = 50;
 
-    let bars: [(&str, u16); 3] = [
-        ("Vitality",   vit),
-        ("Curiosity",  cur),
-        ("Resilience", res),
-    ];
+    let bars: [(&str, u16); 3] = [("Vitality", vit), ("Curiosity", cur), ("Resilience", res)];
 
     for (i, (label, value)) in bars.iter().enumerate() {
         let y = ROWS_Y + i as i32 * ROW_H;

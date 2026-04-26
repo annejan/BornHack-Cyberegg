@@ -8,8 +8,8 @@
 //! (0x100000–0x1FFFFF).  All flash access goes through [`crate::fw::flash`]
 //! which serializes with the ekv KV store on the first 1 MiB.
 
-use embassy_nrf::usb::vbus_detect::SoftwareVbusDetect;
 use embassy_nrf::usb::Driver;
+use embassy_nrf::usb::vbus_detect::SoftwareVbusDetect;
 use embassy_nrf::{Peri, bind_interrupts, peripherals, usb};
 use embassy_usb::Builder;
 use static_cell::StaticCell;
@@ -56,7 +56,10 @@ impl BlockDevice for FatBlockDevice {
         // a glance which badge is still receiving data during mass-flashing.
         // `BlinkOnce` auto-resets after ~50 ms, so a stream of writes shows
         // up as flicker without needing a "turn off when idle" timer.
-        crate::fw::led::set_led(&crate::fw::led::LED_BLUE, crate::fw::led::LedState::BlinkOnce);
+        crate::fw::led::set_led(
+            &crate::fw::led::LED_BLUE,
+            crate::fw::led::LedState::BlinkOnce,
+        );
 
         let addr = flash::FAT_OFFSET + lba * 512;
 
@@ -66,7 +69,9 @@ impl BlockDevice for FatBlockDevice {
         let offset_in_sector = (addr - sector_addr) as usize;
 
         let mut sector_buf = [0u8; flash::PAGE_SIZE];
-        flash::read(sector_addr, &mut sector_buf).await.map_err(|_| ())?;
+        flash::read(sector_addr, &mut sector_buf)
+            .await
+            .map_err(|_| ())?;
         sector_buf[offset_in_sector..offset_in_sector + 512].copy_from_slice(buf);
         flash::erase(sector_addr).await.map_err(|_| ())?;
         flash::write(sector_addr, &sector_buf).await.map_err(|_| ())

@@ -1,5 +1,7 @@
 use core::cell::RefCell;
-use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
+
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use heapless::String;
 
 #[derive(Copy, Clone)]
@@ -48,7 +50,11 @@ impl ButtonHealth {
     }
 
     pub fn char(&self, upper: char, lower: char) -> char {
-        if self.seen_high && self.seen_low { upper } else { lower }
+        if self.seen_high && self.seen_low {
+            upper
+        } else {
+            lower
+        }
     }
 }
 
@@ -83,12 +89,12 @@ impl ButtonsHealth {
         }
 
         let mut s: String<7> = String::new();
-        btn!(s, self.up,      'U');
-        btn!(s, self.down,    'D');
-        btn!(s, self.left,    'L');
-        btn!(s, self.right,   'R');
-        btn!(s, self.fire,    'F');
-        btn!(s, self.cancel,  'C');
+        btn!(s, self.up, 'U');
+        btn!(s, self.down, 'D');
+        btn!(s, self.left, 'L');
+        btn!(s, self.right, 'R');
+        btn!(s, self.fire, 'F');
+        btn!(s, self.cancel, 'C');
         btn!(s, self.execute, 'E');
         s
     }
@@ -129,7 +135,7 @@ pub static SYSTEM_HEALTH: Mutex<ThreadModeRawMutex, RefCell<SystemHealth>> =
 /// Usage: with_health!(|h| defmt::info!("lora ok: {}", h.lora.healthy))
 #[macro_export]
 macro_rules! with_health {
-    (|$h:ident| $body:expr) => {
+    (| $h:ident | $body:expr) => {
         $crate::fw::health::SYSTEM_HEALTH.lock(|cell| {
             let $h: &$crate::fw::health::SystemHealth = &cell.borrow();
             $body
@@ -143,7 +149,7 @@ macro_rules! with_health {
 /// Usage: update_health!(|h| h.buttons.up.seen_low = true)
 #[macro_export]
 macro_rules! update_health {
-    (|$h:ident| $body:expr) => {
+    (| $h:ident | $body:expr) => {
         $crate::fw::health::SYSTEM_HEALTH.lock(|cell| {
             let $h: &mut $crate::fw::health::SystemHealth = &mut cell.borrow_mut();
             $body

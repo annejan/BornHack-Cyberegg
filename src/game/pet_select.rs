@@ -5,15 +5,13 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use embedded_graphics::{
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-use crate::{BLACK, TriColor, WHITE};
 use super::engine::PetKind;
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_WHITE};
+use crate::{BLACK, TriColor, WHITE};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -75,7 +73,7 @@ pub fn confirm() {
 
     match mode {
         MODE_NEW_GAME => super::lifecycle::start_new_game(kind),
-        MODE_NEW_GEN  => super::lifecycle::new_generation(kind),
+        MODE_NEW_GEN => super::lifecycle::new_generation(kind),
         _ => {}
     }
 
@@ -120,9 +118,12 @@ where
             .draw(display)?;
         }
 
-        let f = if is_selected { TEXT_BOLD_WHITE } else { TEXT_BLACK };
-        Text::with_text_style(kind.name(), Point::new(76, y), f, centered)
-            .draw(display)?;
+        let f = if is_selected {
+            TEXT_BOLD_WHITE
+        } else {
+            TEXT_BLACK
+        };
+        Text::with_text_style(kind.name(), Point::new(76, y), f, centered).draw(display)?;
     }
 
     // Hint at bottom.
@@ -130,8 +131,13 @@ where
         .baseline(Baseline::Bottom)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style("Fire to confirm", Point::new(76, 148), TEXT_BLACK, hint_style)
-        .draw(display)?;
+    Text::with_text_style(
+        "Fire to confirm",
+        Point::new(76, 148),
+        TEXT_BLACK,
+        hint_style,
+    )
+    .draw(display)?;
 
     Ok(())
 }

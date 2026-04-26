@@ -8,17 +8,16 @@
 //! slideshow is only shown once. A menu option can clear the flag
 //! to replay it on the next boot.
 
-use embedded_graphics::{
-    mono_font::{ascii::FONT_7X13_BOLD, MonoTextStyle},
-    prelude::*,
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
 use embassy_time::Timer;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
 
 use super::epd::EpdGfx;
 use super::fat12;
-use ssd1675::UpdateMode;
 
 /// Maximum number of sponsor slides (filenames 020000–020009).
 const MAX_SPONSORS: usize = 10;
@@ -38,11 +37,17 @@ const HEX: &[u8; 16] = b"0123456789ABCDEF";
 /// Format: `0200FF  PCX` where FF is the hex frame index.
 fn sponsor_filename(index: u8) -> [u8; 11] {
     [
-        b'0', b'2',
-        b'0', b'0',
-        HEX[(index >> 4) as usize], HEX[(index & 0xF) as usize],
-        b' ', b' ',
-        b'P', b'C', b'X',
+        b'0',
+        b'2',
+        b'0',
+        b'0',
+        HEX[(index >> 4) as usize],
+        HEX[(index & 0xF) as usize],
+        b' ',
+        b' ',
+        b'P',
+        b'C',
+        b'X',
     ]
 }
 
@@ -72,8 +77,7 @@ pub async fn clear_flag() {
 
 /// Synchronous request to clear the flag (called from menu callback).
 /// The actual async clear happens on the next save cycle.
-static CLEAR_REQUESTED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static CLEAR_REQUESTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Request that the slideshow flag be cleared (sync, for menu callbacks).
 pub fn request_clear() {
@@ -122,30 +126,13 @@ pub async fn run(
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
 
-    let _ = Text::with_text_style(
-        "This badge has",
-        Point::new(76, 50),
-        font,
-        centered,
-    ).draw(display);
-    let _ = Text::with_text_style(
-        "been made possible",
-        Point::new(76, 66),
-        font,
-        centered,
-    ).draw(display);
-    let _ = Text::with_text_style(
-        "by our awesome",
-        Point::new(76, 82),
-        font,
-        centered,
-    ).draw(display);
-    let _ = Text::with_text_style(
-        "sponsors!",
-        Point::new(76, 98),
-        font,
-        centered,
-    ).draw(display);
+    let _ =
+        Text::with_text_style("This badge has", Point::new(76, 50), font, centered).draw(display);
+    let _ = Text::with_text_style("been made possible", Point::new(76, 66), font, centered)
+        .draw(display);
+    let _ =
+        Text::with_text_style("by our awesome", Point::new(76, 82), font, centered).draw(display);
+    let _ = Text::with_text_style("sponsors!", Point::new(76, 98), font, centered).draw(display);
 
     let _ = display.reset().await;
     let _ = display.update_bw(UpdateMode::Mode1).await;
@@ -207,30 +194,13 @@ async fn show_missing_assets_forever(display: &mut EpdGfx<'_>) {
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
 
-    let _ = Text::with_text_style(
-        "No assets found",
-        Point::new(76, 60),
-        font,
-        centered,
-    ).draw(display);
-    let _ = Text::with_text_style(
-        "in flash",
-        Point::new(76, 76),
-        font,
-        centered,
-    ).draw(display);
-    let _ = Text::with_text_style(
-        "Copy via USB,",
-        Point::new(76, 100),
-        font,
-        centered,
-    ).draw(display);
-    let _ = Text::with_text_style(
-        "then power cycle",
-        Point::new(76, 116),
-        font,
-        centered,
-    ).draw(display);
+    let _ =
+        Text::with_text_style("No assets found", Point::new(76, 60), font, centered).draw(display);
+    let _ = Text::with_text_style("in flash", Point::new(76, 76), font, centered).draw(display);
+    let _ =
+        Text::with_text_style("Copy via USB,", Point::new(76, 100), font, centered).draw(display);
+    let _ = Text::with_text_style("then power cycle", Point::new(76, 116), font, centered)
+        .draw(display);
 
     let _ = display.reset().await;
     let _ = display.update_bw(UpdateMode::Mode1).await;
@@ -253,10 +223,7 @@ async fn wait_or_button(
 ) {
     use embassy_futures::select::{Either, select};
 
-    match select(
-        Timer::after_secs(secs),
-        button_rcvr.changed(),
-    ).await {
+    match select(Timer::after_secs(secs), button_rcvr.changed()).await {
         Either::First(_) => {}
         Either::Second(_) => {}
     }

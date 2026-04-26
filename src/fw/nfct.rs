@@ -1,13 +1,12 @@
-use crate::update_health;
-
-use super::iso14443::iso14443_3;
-use super::iso14443::iso14443_4::{Card, IsoDep};
 use defmt::{todo, *};
-use embassy_nrf::nfct::NfcT;
-use embassy_nrf::nfct::{Config as NfcConfig, NfcId};
+use embassy_nrf::nfct::{Config as NfcConfig, NfcId, NfcT};
 use embassy_nrf::peripherals::NFCT;
 use embassy_nrf::{Peri, bind_interrupts, nfct};
 use {defmt_rtt as _, embassy_nrf as _, panic_probe as _};
+
+use super::iso14443::iso14443_3;
+use super::iso14443::iso14443_4::{Card, IsoDep};
+use crate::update_health;
 
 bind_interrupts!(struct Irqs {
     NFCT => nfct::InterruptHandler;

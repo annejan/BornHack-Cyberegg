@@ -7,15 +7,11 @@
 //! here exist purely to keep those sites a one-liner with consistent
 //! geometry and typography.
 
-use embedded_graphics::{
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_7X13, FONT_7X13_BOLD},
-    },
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::{FONT_7X13, FONT_7X13_BOLD};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, RED, TriColor, WHITE};
 
@@ -28,12 +24,10 @@ use crate::{BLACK, RED, TriColor, WHITE};
 // than re-creating the style at each call site.
 
 /// 7×13 regular weight, drawn in `BLACK` — body text on white.
-pub const TEXT_BLACK: MonoTextStyle<'static, TriColor> =
-    MonoTextStyle::new(&FONT_7X13, BLACK);
+pub const TEXT_BLACK: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13, BLACK);
 
 /// 7×13 regular weight, drawn in `WHITE` — body text on a black fill.
-pub const TEXT_WHITE: MonoTextStyle<'static, TriColor> =
-    MonoTextStyle::new(&FONT_7X13, WHITE);
+pub const TEXT_WHITE: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13, WHITE);
 
 /// 7×13 bold, drawn in `BLACK` — emphasised body text / footers.
 pub const TEXT_BOLD_BLACK: MonoTextStyle<'static, TriColor> =
@@ -45,8 +39,7 @@ pub const TEXT_BOLD_WHITE: MonoTextStyle<'static, TriColor> =
 
 /// 7×13 regular weight, drawn in `RED` — used for invalid-signature
 /// notices on the advert screen and any other "warning" body text.
-pub const TEXT_RED: MonoTextStyle<'static, TriColor> =
-    MonoTextStyle::new(&FONT_7X13, RED);
+pub const TEXT_RED: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13, RED);
 
 // ---------------------------------------------------------------------------
 // Title bar
@@ -79,7 +72,10 @@ where
         .build();
     Text::with_text_style(
         title,
-        Point::new(origin.x + width as i32 / 2, origin.y + TITLE_BAR_H as i32 / 2),
+        Point::new(
+            origin.x + width as i32 / 2,
+            origin.y + TITLE_BAR_H as i32 / 2,
+        ),
         TEXT_BOLD_WHITE,
         style,
     )
@@ -121,11 +117,7 @@ where
 /// Draw a single-line message centred on `pos` with regular black
 /// text.  Used by the empty-state placeholders ("No pet yet", "No
 /// past pets yet", "No private messages", "No adverts", …).
-pub fn draw_centered_message<D>(
-    display: &mut D,
-    text: &str,
-    pos: Point,
-) -> Result<(), D::Error>
+pub fn draw_centered_message<D>(display: &mut D, text: &str, pos: Point) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
@@ -133,7 +125,6 @@ where
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style(text, pos, TEXT_BLACK, style)
-        .draw(display)?;
+    Text::with_text_style(text, pos, TEXT_BLACK, style).draw(display)?;
     Ok(())
 }

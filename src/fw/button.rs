@@ -1,7 +1,9 @@
-use crate::{DISPLAY_STATE, update_health};
-use crate::menu::ButtonId;
 use embassy_nrf::gpio::Input;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::watch::{Sender, Watch};
+
+use crate::menu::ButtonId;
+use crate::{DISPLAY_STATE, update_health};
 
 macro_rules! update_button_health {
     ($pin:expr, $field:ident) => {
@@ -37,27 +39,32 @@ pub async fn run_buttons(
         ])
         .await;
 
-        let Some(btn) = ButtonId::from_index(index) else { continue };
+        let Some(btn) = ButtonId::from_index(index) else {
+            continue;
+        };
 
         // Only act on button-down (active low).
         let is_low = match btn {
-            ButtonId::Cancel  => btn_can.is_low(),
+            ButtonId::Cancel => btn_can.is_low(),
             ButtonId::Execute => btn_exe.is_low(),
-            ButtonId::Up      => joy_up.is_low(),
-            ButtonId::Down    => joy_down.is_low(),
-            ButtonId::Left    => joy_left.is_low(),
-            ButtonId::Right   => joy_right.is_low(),
-            ButtonId::Fire    => joy_fire.is_low(),
+            ButtonId::Up => joy_up.is_low(),
+            ButtonId::Down => joy_down.is_low(),
+            ButtonId::Left => joy_left.is_low(),
+            ButtonId::Right => joy_right.is_low(),
+            ButtonId::Fire => joy_fire.is_low(),
         };
 
         // Update health diagnostics on every edge.
-        update_health_for(btn, &btn_can, &btn_exe, &joy_up, &joy_down, &joy_left, &joy_right, &joy_fire);
+        update_health_for(
+            btn, &btn_can, &btn_exe, &joy_up, &joy_down, &joy_left, &joy_right, &joy_fire,
+        );
 
         if is_low {
             // Let the game handle the button first when its screen is active.
             #[cfg(feature = "game")]
             let consumed = {
-                let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
+                let on_game =
+                    DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
                 on_game && crate::game::input::dispatch(btn)
             };
             #[cfg(not(feature = "game"))]
@@ -74,17 +81,21 @@ pub async fn run_buttons(
 
 fn update_health_for(
     btn: ButtonId,
-    btn_can: &Input<'_>, btn_exe: &Input<'_>,
-    joy_up: &Input<'_>, joy_down: &Input<'_>,
-    joy_left: &Input<'_>, joy_right: &Input<'_>, joy_fire: &Input<'_>,
+    btn_can: &Input<'_>,
+    btn_exe: &Input<'_>,
+    joy_up: &Input<'_>,
+    joy_down: &Input<'_>,
+    joy_left: &Input<'_>,
+    joy_right: &Input<'_>,
+    joy_fire: &Input<'_>,
 ) {
     match btn {
-        ButtonId::Cancel  => update_button_health!(btn_can, cancel),
+        ButtonId::Cancel => update_button_health!(btn_can, cancel),
         ButtonId::Execute => update_button_health!(btn_exe, execute),
-        ButtonId::Up      => update_button_health!(joy_up, up),
-        ButtonId::Down    => update_button_health!(joy_down, down),
-        ButtonId::Left    => update_button_health!(joy_left, left),
-        ButtonId::Right   => update_button_health!(joy_right, right),
-        ButtonId::Fire    => update_button_health!(joy_fire, fire),
+        ButtonId::Up => update_button_health!(joy_up, up),
+        ButtonId::Down => update_button_health!(joy_down, down),
+        ButtonId::Left => update_button_health!(joy_left, left),
+        ButtonId::Right => update_button_health!(joy_right, right),
+        ButtonId::Fire => update_button_health!(joy_fire, fire),
     }
 }

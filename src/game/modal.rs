@@ -17,17 +17,16 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use embedded_graphics::{
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-use crate::{BLACK, TriColor, WHITE};
 use super::nav::Row;
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_WHITE};
+use crate::{BLACK, TriColor, WHITE};
 
-// ── Modal kind ────────────────────────────────────────────────────────────────
+// ── Modal kind
+// ────────────────────────────────────────────────────────────────
 
 /// Which in-game modal is currently open.  Stored as a `u8` in [`MODAL_KIND`].
 ///
@@ -37,17 +36,17 @@ use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_WHITE};
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ModalKind {
-    None       = 0,
+    None = 0,
     // Top row — info / meta.
-    Stats      = 1,   // top row, col 0
-    Hibernate  = 2,   // top row, col 1
+    Stats = 1,     // top row, col 0
+    Hibernate = 2, // top row, col 1
     // Bottom row — actions.
-    Feed       = 3,   // bot row, col 0
-    Heal       = 4,   // bot row, col 1
-    Play       = 5,   // bot row, col 2
-    Rest       = 6,   // bot row, col 3
+    Feed = 3, // bot row, col 0
+    Heal = 4, // bot row, col 1
+    Play = 5, // bot row, col 2
+    Rest = 6, // bot row, col 3
     // Sub-modal opened from Play.
-    Music      = 7,
+    Music = 7,
 }
 
 impl ModalKind {
@@ -66,27 +65,41 @@ impl ModalKind {
 
     fn title(self) -> &'static str {
         match self {
-            Self::None      => "",
-            Self::Stats     => "Stats",
+            Self::None => "",
+            Self::Stats => "Stats",
             Self::Hibernate => "Hibernate",
-            Self::Feed      => "Feed",
-            Self::Heal      => "Heal",
-            Self::Play      => "Play",
-            Self::Rest      => "Rest",
-            Self::Music     => "Music",
+            Self::Feed => "Feed",
+            Self::Heal => "Heal",
+            Self::Play => "Play",
+            Self::Rest => "Rest",
+            Self::Music => "Music",
         }
     }
 
     fn items(self) -> &'static [&'static str] {
         match self {
-            Self::Stats     => &["View stats",   "Rolled stats", "Cancel"],
-            Self::Hibernate => &["Hibernate",    "Wake up",     "Cancel"],
-            Self::Feed      => &["Feed now",     "Cancel"],
-            Self::Heal      => &["Give medicine",    "Cancel"],
-            Self::Play      => &["Play now",     "Tic Tac Toe", "Lights Out",  "Play music",  "Cancel"],
-            Self::Music     => &["Startup", "Rickroll", "Imp. March", "Sandstorm", "Pink Panther", "Trololo", "Cancel"],
-            Self::Rest      => &["Sleep",        "Relax",       "Cancel"],
-            Self::None      => &[],
+            Self::Stats => &["View stats", "Rolled stats", "Cancel"],
+            Self::Hibernate => &["Hibernate", "Wake up", "Cancel"],
+            Self::Feed => &["Feed now", "Cancel"],
+            Self::Heal => &["Give medicine", "Cancel"],
+            Self::Play => &[
+                "Play now",
+                "Tic Tac Toe",
+                "Lights Out",
+                "Play music",
+                "Cancel",
+            ],
+            Self::Music => &[
+                "Startup",
+                "Rickroll",
+                "Imp. March",
+                "Sandstorm",
+                "Pink Panther",
+                "Trololo",
+                "Cancel",
+            ],
+            Self::Rest => &["Sleep", "Relax", "Cancel"],
+            Self::None => &[],
         }
     }
 }
@@ -102,17 +115,17 @@ fn is_item_available(label: &str) -> bool {
     };
 
     match label {
-        "Feed now"   => stats.can_feed,
-        "Give medicine"  => stats.can_heal,
-        "Sleep"      => stats.can_sleep,
-        "Relax"      => stats.can_relax,
-        "Play now"   => stats.can_play,
+        "Feed now" => stats.can_feed,
+        "Give medicine" => stats.can_heal,
+        "Sleep" => stats.can_sleep,
+        "Relax" => stats.can_relax,
+        "Play now" => stats.can_play,
         "Play music" => true,
         "Tic Tac Toe" | "Lights Out" => stats.can_play_minigame,
         "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" | "Trololo" => true,
-        "Hibernate"  => !stats.hibernating,
-        "Wake up"    => stats.hibernating,
-        _            => true, // Cancel, View stats, etc.
+        "Hibernate" => !stats.hibernating,
+        "Wake up" => stats.hibernating,
+        _ => true, // Cancel, View stats, etc.
     }
 }
 
@@ -120,23 +133,24 @@ fn is_item_available(label: &str) -> bool {
 pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
     match (row, col) {
         // Top row: info / meta.
-        (Row::Top,    0) => ModalKind::Stats,
-        (Row::Top,    1) => ModalKind::Hibernate,
+        (Row::Top, 0) => ModalKind::Stats,
+        (Row::Top, 1) => ModalKind::Hibernate,
         // Top row cols 2-3: empty (no modal).
-        (Row::Top,    _) => ModalKind::None,
+        (Row::Top, _) => ModalKind::None,
         // Bottom row: actions.
         (Row::Bottom, 0) => ModalKind::Feed,
         (Row::Bottom, 1) => ModalKind::Heal,
         (Row::Bottom, 2) => ModalKind::Play,
         (Row::Bottom, 3) => ModalKind::Rest,
-        _                => ModalKind::None,
+        _ => ModalKind::None,
     }
 }
 
-// ── Global state ──────────────────────────────────────────────────────────────
+// ── Global state
+// ──────────────────────────────────────────────────────────────
 
 static MODAL_KIND: AtomicU8 = AtomicU8::new(0);
-static MODAL_POS:  AtomicU8 = AtomicU8::new(0);
+static MODAL_POS: AtomicU8 = AtomicU8::new(0);
 /// When true, the Stats modal shows stat bars instead of the menu list.
 static STATS_VIEW: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -155,7 +169,8 @@ pub fn is_open() -> bool {
     MODAL_KIND.load(Ordering::Relaxed) != 0
 }
 
-// ── Cursor navigation ─────────────────────────────────────────────────────────
+// ── Cursor navigation
+// ─────────────────────────────────────────────────────────
 
 pub fn cursor_up() {
     let pos = MODAL_POS.load(Ordering::Relaxed);
@@ -185,9 +200,11 @@ pub fn activate() {
     }
 
     let kind = ModalKind::from_u8(MODAL_KIND.load(Ordering::Relaxed));
-    let pos  = MODAL_POS.load(Ordering::Relaxed) as usize;
+    let pos = MODAL_POS.load(Ordering::Relaxed) as usize;
     let items = kind.items();
-    let Some(&label) = items.get(pos) else { return; };
+    let Some(&label) = items.get(pos) else {
+        return;
+    };
 
     if label == "Cancel" {
         close();
@@ -202,26 +219,77 @@ pub fn activate() {
     use super::lifecycle;
 
     match label {
-        "View stats"  => { STATS_VIEW.store(true, Ordering::Relaxed); }
-        "Rolled stats" => { super::traits_view::open(); close(); }
-        "Feed now"    => { lifecycle::feed(); super::show_toast(super::Toast::Feed); close(); }
-        "Give medicine"   => { lifecycle::heal(); super::show_toast(super::Toast::Heal); close(); }
-        "Sleep"       => { lifecycle::sleep(); super::show_toast(super::Toast::Sleep); close(); }
-        "Relax"       => { lifecycle::relax(); super::show_toast(super::Toast::Relax); close(); }
-        "Play now"    => { lifecycle::play(); super::show_toast(super::Toast::Play); close(); }
-        "Tic Tac Toe" => { super::tictactoe::open(); close(); }
-        "Lights Out"  => { super::lightsout::open(); close(); }
-        "Play music"  => {
+        "View stats" => {
+            STATS_VIEW.store(true, Ordering::Relaxed);
+        }
+        "Rolled stats" => {
+            super::traits_view::open();
+            close();
+        }
+        "Feed now" => {
+            lifecycle::feed();
+            super::show_toast(super::Toast::Feed);
+            close();
+        }
+        "Give medicine" => {
+            lifecycle::heal();
+            super::show_toast(super::Toast::Heal);
+            close();
+        }
+        "Sleep" => {
+            lifecycle::sleep();
+            super::show_toast(super::Toast::Sleep);
+            close();
+        }
+        "Relax" => {
+            lifecycle::relax();
+            super::show_toast(super::Toast::Relax);
+            close();
+        }
+        "Play now" => {
+            lifecycle::play();
+            super::show_toast(super::Toast::Play);
+            close();
+        }
+        "Tic Tac Toe" => {
+            super::tictactoe::open();
+            close();
+        }
+        "Lights Out" => {
+            super::lightsout::open();
+            close();
+        }
+        "Play music" => {
             open(ModalKind::Music);
         }
-        "Startup"     => { play_song(0); }
-        "Rickroll"    => { play_song(1); }
-        "Imp. March"  => { play_song(2); }
-        "Sandstorm"   => { play_song(3); }
-        "Pink Panther" => { play_song(4); }
-        "Trololo"     => { play_song(5); }
-        "Hibernate"   => { lifecycle::hibernate(); super::show_toast(super::Toast::Hibernate); close(); }
-        "Wake up"     => { lifecycle::wake_from_hibernation(); super::show_toast(super::Toast::Wake); close(); }
+        "Startup" => {
+            play_song(0);
+        }
+        "Rickroll" => {
+            play_song(1);
+        }
+        "Imp. March" => {
+            play_song(2);
+        }
+        "Sandstorm" => {
+            play_song(3);
+        }
+        "Pink Panther" => {
+            play_song(4);
+        }
+        "Trololo" => {
+            play_song(5);
+        }
+        "Hibernate" => {
+            lifecycle::hibernate();
+            super::show_toast(super::Toast::Hibernate);
+            close();
+        }
+        "Wake up" => {
+            lifecycle::wake_from_hibernation();
+            super::show_toast(super::Toast::Wake);
+            close();
+        }
         _ => {}
     }
 }
@@ -232,14 +300,15 @@ fn play_song(_index: usize) {
     close();
 }
 
-// ── Drawing ───────────────────────────────────────────────────────────────────
+// ── Drawing
+// ───────────────────────────────────────────────────────────────────
 
-const MARGIN:   i32 = 10;
-const MODAL_W:  u32 = 132;  // 152 - 2 × MARGIN
-const MODAL_H:  u32 = 132;
-const BORDER:   u32 = 2;
-const TITLE_H:  i32 = 18;
-const ITEM_H:   i32 = 16;
+const MARGIN: i32 = 10;
+const MODAL_W: u32 = 132; // 152 - 2 × MARGIN
+const MODAL_H: u32 = 132;
+const BORDER: u32 = 2;
+const TITLE_H: i32 = 18;
+const ITEM_H: i32 = 16;
 
 /// Draw the modal overlay.  Call this after [`draw_screen_game`] so it renders
 /// on top.  Does nothing when no modal is open.
@@ -257,7 +326,7 @@ where
         return draw_stats_view(display);
     }
 
-    let pos   = MODAL_POS.load(Ordering::Relaxed) as usize;
+    let pos = MODAL_POS.load(Ordering::Relaxed) as usize;
     let items = kind.items();
 
     // White popover frame with 2 px black border.
@@ -302,9 +371,12 @@ where
 
         if i == pos && available {
             // Selected and available: inverted row.
-            Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
-                .into_styled(PrimitiveStyle::with_fill(BLACK))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(inner_x, row_top),
+                Size::new(inner_w, ITEM_H as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
@@ -316,9 +388,12 @@ where
             // Selected but on cooldown: outline only, black text on
             // white.  The dim pass below halftones both into grey so
             // the row reads as "selected but locked out".
-            Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
-                .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(inner_x, row_top),
+                Size::new(inner_w, ITEM_H as u32),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+            .draw(display)?;
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
@@ -398,9 +473,9 @@ fn draw_stats_view<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use crate::RED;
     use super::lifecycle;
     use super::stat_bar::draw_stat_bar;
+    use crate::RED;
 
     // Get fresh stats (triggers an update if needed).
     let stats = match lifecycle::cycle() {
@@ -424,17 +499,17 @@ where
 
     // Stat bars.
     let bars: [(&str, u8); 5] = [
-        ("Hunger",   stats.hunger),
-        ("Rested",   stats.tired),
+        ("Hunger", stats.hunger),
+        ("Rested", stats.tired),
         ("Inspired", stats.inspired),
-        ("Healthy",  stats.healthy),
-        ("Happy",    stats.happy),
+        ("Healthy", stats.healthy),
+        ("Happy", stats.happy),
     ];
 
     // Layout: label at left margin, bar to the right of the longest
     // label ("Inspired" = 8 chars × 7 px = 56 px from `label_x`).
     let label_x = inner_x + 4;
-    let bar_x   = label_x + 60; // 4 px clearance after the longest label
+    let bar_x = label_x + 60; // 4 px clearance after the longest label
 
     for (i, (label, value)) in bars.iter().enumerate() {
         let y = inner_y + TITLE_H + 4 + i as i32 * BAR_SPACING;
@@ -470,7 +545,12 @@ where
     } else {
         let _ = core::fmt::Write::write_fmt(
             &mut footer,
-            format_args!("Gen {} | {}d {}h", stats.generation, age_days, age_hours % 24),
+            format_args!(
+                "Gen {} | {}d {}h",
+                stats.generation,
+                age_days,
+                age_hours % 24
+            ),
         );
     }
     Text::with_text_style(

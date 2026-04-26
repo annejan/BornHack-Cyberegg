@@ -33,15 +33,14 @@ impl RngCore for TrngSeed {
 }
 impl CryptoRng for TrngSeed {}
 
-use meshcore;
-use meshcore_companion as companion;
-
 use embassy_executor::Spawner;
-use embassy_nrf::{Peri, bind_interrupts, mode::Blocking, peripherals, rng};
+use embassy_nrf::mode::Blocking;
+use embassy_nrf::{Peri, bind_interrupts, peripherals, rng};
 use nrf_mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, SoftdeviceController};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
+use {meshcore, meshcore_companion as companion};
 
 use super::bonds::{BOND_CMD_CHANNEL, BondCmd, INITIAL_BONDS};
 use super::{channels, contacts, msg_queue, settings};
@@ -70,9 +69,10 @@ const L2CAP_RXQ: u8 = 3;
 
 /// SDC heap size in bytes.
 ///
-/// Sized for one peripheral link with `buffer_cfg(MTU=251, MTU=251, TXQ=3, RXQ=3)`.
-/// Matches the official embassy-rs/trouble nrf52 examples (`Mem::<4720>`).
-/// All callers must use this constant so the value stays in sync with `buffer_cfg`.
+/// Sized for one peripheral link with `buffer_cfg(MTU=251, MTU=251, TXQ=3,
+/// RXQ=3)`. Matches the official embassy-rs/trouble nrf52 examples
+/// (`Mem::<4720>`). All callers must use this constant so the value stays in
+/// sync with `buffer_cfg`.
 pub const SDC_MEM_SIZE: usize = 4720;
 
 // ---------------------------------------------------------------------------
@@ -140,9 +140,10 @@ pub fn init_ble(
         ppi_ch27, ppi_ch28, ppi_ch29,
     );
 
-    // nrf-sdc 0.4: build() takes `rng: &'static mut Rng` and stores a raw pointer to it
-    // in a global for use by the SDC's random callback.  StaticCell gives us the 'static
-    // storage; the peripheral token is already 'static so no unsafe is needed.
+    // nrf-sdc 0.4: build() takes `rng: &'static mut Rng` and stores a raw pointer
+    // to it in a global for use by the SDC's random callback.  StaticCell gives
+    // us the 'static storage; the peripheral token is already 'static so no
+    // unsafe is needed.
     static RNG_STORAGE: StaticCell<rng::Rng<'static, Blocking>> = StaticCell::new();
     let rng_ref = RNG_STORAGE.init(rng::Rng::new_blocking(rng_periph));
 
@@ -318,9 +319,7 @@ async fn wait_push_event() -> PushEvent {
         Either::First(Either::Second(Either::Second(tr))) => PushEvent::TraceResult(tr),
         Either::Second(Either::First(Either::First(lg))) => PushEvent::LoginResult(lg),
         Either::Second(Either::First(Either::Second(st))) => PushEvent::StatusResult(st),
-        Either::Second(Either::Second(Either::First(Either::First(ak)))) => {
-            PushEvent::AckEvent(ak)
-        }
+        Either::Second(Either::Second(Either::First(Either::First(ak)))) => PushEvent::AckEvent(ak),
         Either::Second(Either::Second(Either::First(Either::Second(tm)))) => {
             PushEvent::TelemResult(tm)
         }
@@ -365,8 +364,9 @@ pub async fn run_ble_peripheral(
         .set_random_address(Address::random(crate::fw::device_id::get_ble_addr()))
         .set_random_generator_seed(&mut prng);
 
-    // DisplayOnly: badge shows a 6-digit passkey on screen; the phone user enters it.
-    // This matches MeshCore's setIOCaps(true, false, false) and enables MITM protection.
+    // DisplayOnly: badge shows a 6-digit passkey on screen; the phone user enters
+    // it. This matches MeshCore's setIOCaps(true, false, false) and enables
+    // MITM protection.
     stack.set_io_capabilities(IoCapabilities::DisplayOnly);
 
     // Restore bonds loaded from flash by flash_task.
@@ -436,10 +436,11 @@ async fn nus_peripheral_loop<C>(
 ) where
     C: Controller,
 {
-    // Build the device name: "Cyber Ægg XXYY" where XXYY is the two-byte device ID in hex.
-    // Flags (3 B) + name (16 B) = 19 B — fits within the 31-byte adv packet limit.
-    // The 128-bit NUS UUID (18 B) goes into scan_data so the total doesn't overflow.
-    // "Cyber Ægg XXYY" — Æ (U+00C6) is 0xC3 0x86 in UTF-8, total 15 bytes.
+    // Build the device name: "Cyber Ægg XXYY" where XXYY is the two-byte device ID
+    // in hex. Flags (3 B) + name (16 B) = 19 B — fits within the 31-byte adv
+    // packet limit. The 128-bit NUS UUID (18 B) goes into scan_data so the
+    // total doesn't overflow. "Cyber Ægg XXYY" — Æ (U+00C6) is 0xC3 0x86 in
+    // UTF-8, total 15 bytes.
     let id = crate::fw::device_id::get_bytes();
     let name: [u8; 15] = [
         b'C', b'y', b'b', b'e', b'r', b' ', 0xC3, 0x86, b'g', b'g', b' ', id[0], id[1], id[2],
@@ -531,18 +532,22 @@ async fn nus_peripheral_loop<C>(
         // these locals at the top of this same loop too.
         {
             use core::sync::atomic::Ordering::Relaxed;
-            radio_params.freq_hz       = crate::LORA_FREQ_HZ.load(Relaxed);
-            radio_params.bw_hz         = crate::LORA_BW_HZ.load(Relaxed);
-            radio_params.sf            = crate::LORA_SF.load(Relaxed);
-            radio_params.cr            = crate::LORA_CR.load(Relaxed);
-            radio_params.tx_power      = crate::LORA_TX_POWER.load(Relaxed);
+            radio_params.freq_hz = crate::LORA_FREQ_HZ.load(Relaxed);
+            radio_params.bw_hz = crate::LORA_BW_HZ.load(Relaxed);
+            radio_params.sf = crate::LORA_SF.load(Relaxed);
+            radio_params.cr = crate::LORA_CR.load(Relaxed);
+            radio_params.tx_power = crate::LORA_TX_POWER.load(Relaxed);
             radio_params.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
             other_params.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
-            other_params.multi_acks        = crate::MULTI_ACKS.load(Relaxed);
-            let mode: u8 = if crate::TELEMETRY_SHARE.load(Relaxed) { 2 } else { 0 };
+            other_params.multi_acks = crate::MULTI_ACKS.load(Relaxed);
+            let mode: u8 = if crate::TELEMETRY_SHARE.load(Relaxed) {
+                2
+            } else {
+                0
+            };
             other_params.telemetry_mode_base = mode;
-            other_params.telemetry_mode_loc  = mode;
-            other_params.telemetry_mode_env  = mode;
+            other_params.telemetry_mode_loc = mode;
+            other_params.telemetry_mode_env = mode;
         }
 
         // When BLE is disabled, stop advertising and wait until re-enabled.
@@ -631,10 +636,17 @@ async fn nus_peripheral_loop<C>(
             // outbox is full we simply skip this iteration and let the
             // select drain a notification first.
             // ---------------------------------------------------------------
-            if let Some((ref mut slot, ref mut remaining, ref mut most_recent_lastmod)) = contacts_stream {
+            if let Some((ref mut slot, ref mut remaining, ref mut most_recent_lastmod)) =
+                contacts_stream
+            {
                 if outbox.is_empty() {
                     if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
-                        outbox_push(outbox, &companion::Response::ContactEnd { lastmod: *most_recent_lastmod });
+                        outbox_push(
+                            outbox,
+                            &companion::Response::ContactEnd {
+                                lastmod: *most_recent_lastmod,
+                            },
+                        );
                         defmt::debug!("companion: GET_CONTACTS complete");
                         contacts_stream = None;
                     } else {
@@ -644,8 +656,7 @@ async fn nus_peripheral_loop<C>(
                             if c.lastmod > *most_recent_lastmod {
                                 *most_recent_lastmod = c.lastmod;
                             }
-                            let name_end =
-                                c.name.iter().position(|&b| b == 0).unwrap_or(32);
+                            let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
                             outbox_push(
                                 outbox,
                                 &companion::Response::ContactDetails(
@@ -787,8 +798,7 @@ async fn nus_peripheral_loop<C>(
                             // the firmware to process each command twice.
                             let mut cmd_buf = [0u8; 244];
                             let cmd_len = write.data().len().min(244);
-                            cmd_buf[..cmd_len]
-                                .copy_from_slice(&write.data()[..cmd_len]);
+                            cmd_buf[..cmd_len].copy_from_slice(&write.data()[..cmd_len]);
                             match write.accept() {
                                 Ok(reply) => reply.send().await,
                                 Err(e) => {
@@ -921,21 +931,21 @@ async fn nus_peripheral_loop<C>(
                                         }
                                         match msg.kind {
                                             msg_queue::MsgKind::Private => {
-                                                // For signed/room posts (text_type == 2), the stored
+                                                // For signed/room posts (text_type == 2), the
+                                                // stored
                                                 // text buffer is `[author_prefix:4][text:N]`.
                                                 // Split the 4-byte author prefix into the
                                                 // `signature` field the companion protocol expects.
                                                 // For plain/CLI messages the buffer is just text,
                                                 // and `signature` stays None.
-                                                let (sig, text_slice) = if msg.text_type == 2
-                                                    && msg.text.len() >= 4
-                                                {
-                                                    let mut s = [0u8; 4];
-                                                    s.copy_from_slice(&msg.text[..4]);
-                                                    (Some(s), &msg.text[4..])
-                                                } else {
-                                                    (None, &msg.text[..])
-                                                };
+                                                let (sig, text_slice) =
+                                                    if msg.text_type == 2 && msg.text.len() >= 4 {
+                                                        let mut s = [0u8; 4];
+                                                        s.copy_from_slice(&msg.text[..4]);
+                                                        (Some(s), &msg.text[4..])
+                                                    } else {
+                                                        (None, &msg.text[..])
+                                                    };
                                                 defmt::debug!(
                                                     "companion: SYNC_NEXT_MESSAGE → private from={=[u8]:02x} ts={=u32} rssi={=i16} type={=u8} ({=u16} remaining)",
                                                     msg.sender_prefix,
@@ -986,7 +996,9 @@ async fn nus_peripheral_loop<C>(
                                         }
                                     }
                                     None => {
-                                        defmt::debug!("companion: SYNC_NEXT_MESSAGE → NO_MORE_MSGS");
+                                        defmt::debug!(
+                                            "companion: SYNC_NEXT_MESSAGE → NO_MORE_MSGS"
+                                        );
                                         companion::Response::NoMoreMsgs
                                     }
                                 },
@@ -994,7 +1006,9 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::GetContacts) => {
                                     if contacts_count > 0 {
                                         contacts_stream = Some((0, contacts_count, 0u32));
-                                        companion::Response::ContactStart { count: contacts_count as u32 }
+                                        companion::Response::ContactStart {
+                                            count: contacts_count as u32,
+                                        }
                                     } else {
                                         companion::Response::NoMoreMsgs
                                     }
@@ -1075,8 +1089,7 @@ async fn nus_peripheral_loop<C>(
                                             if changed {
                                                 // Let the phone know the contact's
                                                 // path went back to OUT_PATH_UNKNOWN.
-                                                let _ = crate::PATH_UPDATED_CHANNEL
-                                                    .try_send(*key);
+                                                let _ = crate::PATH_UPDATED_CHANNEL.try_send(*key);
                                             }
                                             companion::Response::Ok
                                         }
@@ -1203,17 +1216,19 @@ async fn nus_peripheral_loop<C>(
                                             );
                                             let is_flood =
                                                 c.out_path_len == contacts::OUT_PATH_UNKNOWN;
-                                            match crate::tx_send(
-                                                crate::TxRequest::PrivateMsg(crate::TxPrivateMsg {
+                                            match crate::tx_send(crate::TxRequest::PrivateMsg(
+                                                crate::TxPrivateMsg {
                                                     recipient_pub_key: c.pub_key,
                                                     timestamp,
                                                     text: v,
                                                     txt_type,
                                                     attempt,
-                                                }),
-                                            ) {
+                                                },
+                                            )) {
                                                 Ok(()) => {
-                                                    // Compute expected_ack = SHA-256([ts:4][flags:1][text] || sender_pk)[0..4]
+                                                    // Compute expected_ack =
+                                                    // SHA-256([ts:4][flags:1][text] ||
+                                                    // sender_pk)[0..4]
                                                     let flags = (attempt & 3) | (txt_type << 2);
                                                     let text_len = text.len().min(meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE);
                                                     let mut pfx = [0u8; 5 + meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE];
@@ -1266,13 +1281,13 @@ async fn nus_peripheral_loop<C>(
                                     let _ = v.extend_from_slice(
                                         &text[..text.len().min(msg_queue::MAX_TEXT)],
                                     );
-                                    match crate::tx_send(
-                                        crate::TxRequest::ChannelMsg(crate::TxChannelMsg {
+                                    match crate::tx_send(crate::TxRequest::ChannelMsg(
+                                        crate::TxChannelMsg {
                                             channel_idx: channel,
                                             timestamp,
                                             text: v,
-                                        }),
-                                    ) {
+                                        },
+                                    )) {
                                         Ok(()) => {
                                             defmt::info!(
                                                 "companion: SEND_CHANNEL_MSG ch={=u8} → queued for TX",
@@ -1403,8 +1418,10 @@ async fn nus_peripheral_loop<C>(
                                             Ok(()) => {
                                                 // Refresh the RAM cache so the next flood
                                                 // TX picks up the new setting immediately.
-                                                crate::PATH_HASH_MODE
-                                                    .store(mode, core::sync::atomic::Ordering::Relaxed);
+                                                crate::PATH_HASH_MODE.store(
+                                                    mode,
+                                                    core::sync::atomic::Ordering::Relaxed,
+                                                );
                                                 companion::Response::Ok
                                             }
                                             Err(e) => {
@@ -1429,7 +1446,8 @@ async fn nus_peripheral_loop<C>(
                                     let clamped = max_hops.min(64);
                                     defmt::info!(
                                         "companion: SET_AUTOADD_CONFIG config={=u8:#04x} max_hops={=u8}",
-                                        config, clamped,
+                                        config,
+                                        clamped,
                                     );
                                     match settings::set_autoadd_config(config, clamped).await {
                                         Ok(()) => companion::Response::Ok,
@@ -1449,7 +1467,8 @@ async fn nus_peripheral_loop<C>(
                                     let (config, max_hops) = settings::get_autoadd_config().await;
                                     defmt::info!(
                                         "companion: GET_AUTOADD_CONFIG config={=u8:#04x} max_hops={=u8}",
-                                        config, max_hops,
+                                        config,
+                                        max_hops,
                                     );
                                     companion::Response::AutoaddConfig { config, max_hops }
                                 }
@@ -1535,14 +1554,14 @@ async fn nus_peripheral_loop<C>(
                                         tag,
                                         path_vec.len(),
                                     );
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::Trace(crate::TxTracePath {
+                                    let _ = crate::tx_send(crate::TxRequest::Trace(
+                                        crate::TxTracePath {
                                             tag,
                                             auth,
                                             flags,
                                             path: path_vec,
-                                        }),
-                                    );
+                                        },
+                                    ));
                                     let sent_resp = companion::Response::SentWithTag {
                                         is_flood: false,
                                         tag,
@@ -1558,15 +1577,19 @@ async fn nus_peripheral_loop<C>(
                                     sent_resp
                                 }
 
-                                Ok(companion::cmd::Command::SendBinaryReq { pub_key, req_data }) => {
+                                Ok(companion::cmd::Command::SendBinaryReq {
+                                    pub_key,
+                                    req_data,
+                                }) => {
                                     let tag = crate::unix_now().unwrap_or(0);
-                                    let mut rd: heapless::Vec<u8, { crate::MAX_BINARY_REQ_PARAMS }> =
-                                        heapless::Vec::new();
+                                    let mut rd: heapless::Vec<
+                                        u8,
+                                        { crate::MAX_BINARY_REQ_PARAMS },
+                                    > = heapless::Vec::new();
                                     let copy = req_data.len().min(crate::MAX_BINARY_REQ_PARAMS);
                                     let _ = rd.extend_from_slice(&req_data[..copy]);
-                                    let contact = contacts::ContactStore::new()
-                                        .find_by_key(pub_key)
-                                        .await;
+                                    let contact =
+                                        contacts::ContactStore::new().find_by_key(pub_key).await;
                                     let is_flood = contact
                                         .as_ref()
                                         .map(|c| c.out_path_len == contacts::OUT_PATH_UNKNOWN)
@@ -1575,17 +1598,18 @@ async fn nus_peripheral_loop<C>(
                                         if is_flood { 30_000u32 } else { 15_000u32 };
                                     defmt::info!(
                                         "companion: SEND_BINARY_REQ key={=[u8]:02x} tag={=u32:#010x} req_type={=u8:#04x} ({=usize}B)",
-                                        &pub_key[..6], tag,
+                                        &pub_key[..6],
+                                        tag,
                                         rd.first().copied().unwrap_or(0),
                                         rd.len(),
                                     );
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::BinaryReq(crate::TxBinaryReq {
+                                    let _ = crate::tx_send(crate::TxRequest::BinaryReq(
+                                        crate::TxBinaryReq {
                                             pub_key: *pub_key,
                                             tag,
                                             req_data: rd,
-                                        }),
-                                    );
+                                        },
+                                    ));
                                     companion::Response::SentWithTag {
                                         is_flood,
                                         tag,
@@ -1600,14 +1624,15 @@ async fn nus_peripheral_loop<C>(
                                     let tag = crate::unix_now().unwrap_or(0);
                                     defmt::info!(
                                         "companion: SEND_STATUS_REQUEST key={=[u8]:02x} tag={=u32:#010x} (admin path)",
-                                        &pub_key[..6], tag,
+                                        &pub_key[..6],
+                                        tag,
                                     );
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::AdminStatusReq(crate::TxAdminStatusReq {
+                                    let _ = crate::tx_send(crate::TxRequest::AdminStatusReq(
+                                        crate::TxAdminStatusReq {
                                             pub_key: *pub_key,
                                             tag,
-                                        }),
-                                    );
+                                        },
+                                    ));
                                     companion::Response::Ok
                                 }
 
@@ -1626,12 +1651,11 @@ async fn nus_peripheral_loop<C>(
                                         password.len(),
                                         password,
                                     );
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::Login(crate::TxLogin {
+                                    let _ =
+                                        crate::tx_send(crate::TxRequest::Login(crate::TxLogin {
                                             pub_key: *pub_key,
                                             password: pw_vec,
-                                        }),
-                                    );
+                                        }));
                                     companion::Response::SentWithTag {
                                         is_flood: false,
                                         tag,
@@ -1727,9 +1751,9 @@ async fn nus_peripheral_loop<C>(
                                         tag,
                                         is_flood,
                                     );
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::TelemReq(crate::TxTelemReq { pub_key: key, tag }),
-                                    );
+                                    let _ = crate::tx_send(crate::TxRequest::TelemReq(
+                                        crate::TxTelemReq { pub_key: key, tag },
+                                    ));
                                     companion::Response::SentWithTag {
                                         is_flood,
                                         tag,
@@ -1741,7 +1765,8 @@ async fn nus_peripheral_loop<C>(
                                     pub_key: None,
                                 }) => {
                                     // Self-telemetry: CayenneLPP battery voltage + die temperature.
-                                    // LPP_VOLTAGE (0x74): [ch=1][0x74][val:2 BE unsigned], 0.01V resolution.
+                                    // LPP_VOLTAGE (0x74): [ch=1][0x74][val:2 BE unsigned], 0.01V
+                                    // resolution.
                                     let mv = crate::fw::battery::read_mv() as u32;
                                     let v_val = ((mv + 5) / 10) as u16; // mV → cV
                                     self_telem_lpp[0] = 1;
@@ -1750,7 +1775,8 @@ async fn nus_peripheral_loop<C>(
                                     self_telem_lpp[3] = v_val as u8;
                                     self_telem_lpp_len = 4;
 
-                                    // CayenneLPP temperature: [ch=1][0x67][val:2 BE signed], 0.1°C resolution.
+                                    // CayenneLPP temperature: [ch=1][0x67][val:2 BE signed], 0.1°C
+                                    // resolution.
                                     let t_c10 = crate::fw::temperature::last_c10();
                                     if t_c10 != i16::MIN {
                                         let t_bytes = t_c10.to_be_bytes();
@@ -1783,9 +1809,9 @@ async fn nus_peripheral_loop<C>(
                                         &key[..6],
                                         tag,
                                     );
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::DiscoveryReq(crate::TxDiscoveryReq { pub_key: key, tag }),
-                                    );
+                                    let _ = crate::tx_send(crate::TxRequest::DiscoveryReq(
+                                        crate::TxDiscoveryReq { pub_key: key, tag },
+                                    ));
                                     // Discovery always floods; use a generous timeout.
                                     companion::Response::SentWithTag {
                                         is_flood: true,
@@ -1800,11 +1826,13 @@ async fn nus_peripheral_loop<C>(
                                             let s = crate::RADIO_STATS.lock(|c| c.get());
                                             defmt::info!(
                                                 "companion: GET_STATS RADIO noise={=i16}dBm rssi={=i8}dBm snr_x4={=i8}",
-                                                s.noise_floor, s.last_rssi, s.last_snr_x4,
+                                                s.noise_floor,
+                                                s.last_rssi,
+                                                s.last_snr_x4,
                                             );
                                             companion::Response::StatsRadio {
                                                 noise_floor: s.noise_floor,
-                                                last_rssi:   s.last_rssi,
+                                                last_rssi: s.last_rssi,
                                                 last_snr_x4: s.last_snr_x4,
                                                 tx_air_secs: s.tx_air_secs,
                                                 rx_air_secs: s.rx_air_secs,
@@ -1815,7 +1843,9 @@ async fn nus_peripheral_loop<C>(
                                                 "companion: GET_STATS unsupported type={=u8:#04x}",
                                                 other
                                             );
-                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                            companion::Response::Error(
+                                                companion::ErrorCode::InvalidParameter,
+                                            )
                                         }
                                     }
                                 }
@@ -1828,9 +1858,9 @@ async fn nus_peripheral_loop<C>(
                                     );
                                     let mut v = heapless::Vec::new();
                                     let _ = v.extend_from_slice(payload);
-                                    let _ = crate::tx_send(
-                                        crate::TxRequest::ControlData(crate::TxControlData { payload: v }),
-                                    );
+                                    let _ = crate::tx_send(crate::TxRequest::ControlData(
+                                        crate::TxControlData { payload: v },
+                                    ));
                                     companion::Response::Ok
                                 }
 
@@ -1970,7 +2000,10 @@ async fn nus_peripheral_loop<C>(
                                         prefix.copy_from_slice(&contact.pub_key[..6]);
                                         let name_end =
                                             contact.name.iter().position(|&b| b == 0).unwrap_or(32);
-                                        outbox_push(outbox, &companion::Response::ContactStart { count: 1 });
+                                        outbox_push(
+                                            outbox,
+                                            &companion::Response::ContactStart { count: 1 },
+                                        );
                                         outbox_push(
                                             outbox,
                                             &companion::Response::Contact(
@@ -1982,7 +2015,12 @@ async fn nus_peripheral_loop<C>(
                                                 },
                                             ),
                                         );
-                                        outbox_push(outbox, &companion::Response::ContactEnd { lastmod: contact.lastmod });
+                                        outbox_push(
+                                            outbox,
+                                            &companion::Response::ContactEnd {
+                                                lastmod: contact.lastmod,
+                                            },
+                                        );
                                     }
                                     Err(e) => defmt::warn!(
                                         "companion: ADD_UPDATE_CONTACT store failed: {:?}",
@@ -2134,7 +2172,7 @@ async fn nus_peripheral_loop<C>(
                         outbox_push(
                             outbox,
                             &companion::Response::BinaryResponse {
-                                tag:  result.tag,
+                                tag: result.tag,
                                 body: &result.body,
                             },
                         );

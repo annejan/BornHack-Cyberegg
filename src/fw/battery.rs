@@ -1,7 +1,8 @@
 //! Battery voltage measurement via SAADC.
 //!
-//! P0_31 (AIN7) is connected to a 1/3 voltage divider enabled by P0_07 (vbat_rd).
-//! Pull vbat_rd low to enable the divider, sample, then pull high to save power.
+//! P0_31 (AIN7) is connected to a 1/3 voltage divider enabled by P0_07
+//! (vbat_rd). Pull vbat_rd low to enable the divider, sample, then pull high to
+//! save power.
 //!
 //! The SAADC is configured with:
 //!   - Gain 1/6, reference 0.6 V  →  full-scale input = 3.6 V
@@ -21,17 +22,14 @@
 //! From any task (sync, no await needed):
 //! ```
 //! let pct = battery::read_pct();
-//! let mv  = battery::read_mv();
+//! let mv = battery::read_mv();
 //! ```
 
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
-use embassy_nrf::{
-    Peri,
-    gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull},
-    peripherals,
-    saadc::{self, Config, Saadc},
-};
+use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::saadc::{self, Config, Saadc};
+use embassy_nrf::{Peri, peripherals};
 use embassy_time::{Duration, Timer};
 
 embassy_nrf::bind_interrupts!(pub struct BatteryIrqs {
@@ -127,10 +125,10 @@ impl BatteryMonitor {
 /// The display shows "Battery voltage critical" when init errors.
 const VBAT_MIN_MV: u16 = 3000; // trickle-charge threshold
 const VBAT_MAX_MV: u16 = 4400; // above this is treated as critical — a real
-                               // overcharge or a broken divider, not just a
-                               // CV-peak overshoot.  Readings between the
-                               // curve's top (4250 mV = 100%) and this limit
-                               // are clamped to 100% by `mv_to_pct`.
+// overcharge or a broken divider, not just a
+// CV-peak overshoot.  Readings between the
+// curve's top (4250 mV = 100%) and this limit
+// are clamped to 100% by `mv_to_pct`.
 
 /// (millivolts, percent) pairs, sorted ascending by voltage.
 /// Edit this table to recalibrate for a different cell chemistry or pack.
@@ -185,9 +183,11 @@ fn mv_to_pct(mv: u16) -> u8 {
 /// Voltage is outside the expected range for a single Li-ion cell.
 #[derive(Debug, defmt::Format)]
 pub enum BatteryError {
-    /// Measured voltage is below 3000 mV — cell may be dead, missing, or shorted.
+    /// Measured voltage is below 3000 mV — cell may be dead, missing, or
+    /// shorted.
     TooLow(u16),
-    /// Measured voltage is above 4300 mV — cell may be overcharged or reading is wrong.
+    /// Measured voltage is above 4300 mV — cell may be overcharged or reading
+    /// is wrong.
     TooHigh(u16),
 }
 

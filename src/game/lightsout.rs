@@ -10,12 +10,13 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
-use embedded_graphics::{
-    mono_font::{ascii::FONT_7X13_BOLD, MonoTextStyle},
-    prelude::*,
-    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{
+    PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment,
 };
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, TriColor, WHITE};
 
@@ -83,22 +84,30 @@ pub fn close() {
 
 pub fn cursor_up() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c >= GRID as u8 { CURSOR.store(c - GRID as u8, Ordering::Relaxed); }
+    if c >= GRID as u8 {
+        CURSOR.store(c - GRID as u8, Ordering::Relaxed);
+    }
 }
 
 pub fn cursor_down() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c + GRID as u8 <= 24 { CURSOR.store(c + GRID as u8, Ordering::Relaxed); }
+    if c + GRID as u8 <= 24 {
+        CURSOR.store(c + GRID as u8, Ordering::Relaxed);
+    }
 }
 
 pub fn cursor_left() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c % (GRID as u8) > 0 { CURSOR.store(c - 1, Ordering::Relaxed); }
+    if c % (GRID as u8) > 0 {
+        CURSOR.store(c - 1, Ordering::Relaxed);
+    }
 }
 
 pub fn cursor_right() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c % (GRID as u8) < (GRID as u8 - 1) { CURSOR.store(c + 1, Ordering::Relaxed); }
+    if c % (GRID as u8) < (GRID as u8 - 1) {
+        CURSOR.store(c + 1, Ordering::Relaxed);
+    }
 }
 
 /// Toggle the cell under the cursor (+ neighbours).
@@ -112,7 +121,9 @@ pub fn activate() {
     }
 
     let pos = CURSOR.load(Ordering::Relaxed) as usize;
-    if pos >= 25 { return; }
+    if pos >= 25 {
+        return;
+    }
 
     let board = toggle(BOARD.load(Ordering::Relaxed), pos);
     BOARD.store(board, Ordering::Relaxed);
@@ -132,10 +143,18 @@ fn toggle(mut board: u32, pos: usize) -> u32 {
     board ^= 1 << pos;
     let row = pos / GRID;
     let col = pos % GRID;
-    if row > 0         { board ^= 1 << (pos - GRID); }
-    if row < GRID - 1  { board ^= 1 << (pos + GRID); }
-    if col > 0         { board ^= 1 << (pos - 1); }
-    if col < GRID - 1  { board ^= 1 << (pos + 1); }
+    if row > 0 {
+        board ^= 1 << (pos - GRID);
+    }
+    if row < GRID - 1 {
+        board ^= 1 << (pos + GRID);
+    }
+    if col > 0 {
+        board ^= 1 << (pos - 1);
+    }
+    if col < GRID - 1 {
+        board ^= 1 << (pos + 1);
+    }
     board
 }
 
@@ -150,9 +169,13 @@ fn xorshift(mut x: u32) -> u32 {
 /// Seed from embassy uptime or a fallback.
 fn seed() -> u32 {
     #[cfg(feature = "embassy-base")]
-    { embassy_time::Instant::now().as_ticks() as u32 }
+    {
+        embassy_time::Instant::now().as_ticks() as u32
+    }
     #[cfg(not(feature = "embassy-base"))]
-    { 0xCAFE_BABE }
+    {
+        0xCAFE_BABE
+    }
 }
 
 // ── Drawing ──────────────────────────────────────────────────────────────────
@@ -222,13 +245,11 @@ where
     if solved {
         let mut buf: heapless::String<32> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Solved in {} moves!", moves));
-        Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered)
-            .draw(display)?;
+        Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered).draw(display)?;
     } else {
         let mut buf: heapless::String<24> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Moves: {}", moves));
-        Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered)
-            .draw(display)?;
+        Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered).draw(display)?;
     }
 
     Ok(())

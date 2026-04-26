@@ -4,8 +4,9 @@
 //! peripheral behind an async mutex.  The ekv partition starts at
 //! [`crate::fw::flash::KV_OFFSET`].
 
-use crate::fw::flash;
 use ekv::flash::PageID;
+
+use crate::fw::flash;
 
 /// Number of 4 KiB pages available to ekv.
 pub const KV_PAGE_COUNT: usize = flash::KV_PAGES;

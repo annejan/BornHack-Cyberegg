@@ -46,7 +46,10 @@ fn main() {
         // would shadow the OUT_DIR copy and every variant would link
         // with the same memory map.
         let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
-        File::create(out.join("memory.x")).unwrap().write_all(script).unwrap();
+        File::create(out.join("memory.x"))
+            .unwrap()
+            .write_all(script)
+            .unwrap();
         println!("cargo:rustc-link-search={}", out.display());
 
         // Re-run when either memory layout changes.

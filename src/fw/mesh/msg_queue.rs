@@ -35,7 +35,8 @@
 
 use core::cell::RefCell;
 
-use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use crate::fw::kv;
 
@@ -67,15 +68,15 @@ pub enum MsgKind {
 
 /// A single dequeued message, either channel or private.
 pub struct ReceivedMsg {
-    pub kind:        MsgKind,
+    pub kind: MsgKind,
     /// First 6 bytes of the sender's pub_key (zeros for channel messages).
     pub sender_prefix: [u8; 6],
     pub channel_idx: u8,
-    pub path_len:    u8,
-    pub text_type:   u8,
-    pub timestamp:   u32,
-    pub rssi:        i16,
-    pub text:        heapless::Vec<u8, MAX_TEXT>,
+    pub path_len: u8,
+    pub text_type: u8,
+    pub timestamp: u32,
+    pub rssi: i16,
+    pub text: heapless::Vec<u8, MAX_TEXT>,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,11 +87,14 @@ struct QueueState {
     /// Next slot to write into.  Always in `[0, NUM_SLOTS)`.
     write_idx: u16,
     /// Next slot to read from.  Always in `[0, NUM_SLOTS)`.
-    read_idx:  u16,
+    read_idx: u16,
 }
 
 static STATE: Mutex<CriticalSectionRawMutex, RefCell<QueueState>> =
-    Mutex::new(RefCell::new(QueueState { write_idx: 0, read_idx: 0 }));
+    Mutex::new(RefCell::new(QueueState {
+        write_idx: 0,
+        read_idx: 0,
+    }));
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -103,9 +107,7 @@ fn advance(idx: u16) -> u16 {
 /// Format a slot index as a 2-character lowercase hex string.
 fn slot_key(idx: u16) -> heapless::String<2> {
     let slot = idx as u8; // idx is always < 256
-    let nibble = |n: u8| -> char {
-        (if n < 10 { b'0' + n } else { b'a' + n - 10 }) as char
-    };
+    let nibble = |n: u8| -> char { (if n < 10 { b'0' + n } else { b'a' + n - 10 }) as char };
     let mut s = heapless::String::<2>::new();
     s.push(nibble(slot >> 4)).ok();
     s.push(nibble(slot & 0xf)).ok();
@@ -117,11 +119,14 @@ fn slot_key(idx: u16) -> heapless::String<2> {
 // ---------------------------------------------------------------------------
 
 fn serialize(msg: &ReceivedMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
-    buf[0] = match msg.kind { MsgKind::Channel => 0x01, MsgKind::Private => 0x02 };
+    buf[0] = match msg.kind {
+        MsgKind::Channel => 0x01,
+        MsgKind::Private => 0x02,
+    };
     buf[1..7].copy_from_slice(&msg.sender_prefix);
-    buf[7]  = msg.channel_idx;
-    buf[8]  = msg.path_len;
-    buf[9]  = msg.text_type;
+    buf[7] = msg.channel_idx;
+    buf[8] = msg.path_len;
+    buf[9] = msg.text_type;
     buf[10..14].copy_from_slice(&msg.timestamp.to_le_bytes());
     buf[14..16].copy_from_slice(&msg.rssi.to_le_bytes());
     let text_len = msg.text.len().min(MAX_TEXT) as u8;
@@ -137,21 +142,31 @@ fn deserialize(buf: &[u8]) -> Option<ReceivedMsg> {
     let kind = match buf[0] {
         0x01 => MsgKind::Channel,
         0x02 => MsgKind::Private,
-        _    => return None,
+        _ => return None,
     };
     let sender_prefix: [u8; 6] = buf[1..7].try_into().ok()?;
     let channel_idx = buf[7];
-    let path_len    = buf[8];
-    let text_type   = buf[9];
-    let timestamp   = u32::from_le_bytes(buf[10..14].try_into().ok()?);
-    let rssi        = i16::from_le_bytes(buf[14..16].try_into().ok()?);
-    let text_len    = buf[16] as usize;
+    let path_len = buf[8];
+    let text_type = buf[9];
+    let timestamp = u32::from_le_bytes(buf[10..14].try_into().ok()?);
+    let rssi = i16::from_le_bytes(buf[14..16].try_into().ok()?);
+    let text_len = buf[16] as usize;
     if buf.len() < HEADER + text_len || text_len > MAX_TEXT {
         return None;
     }
     let mut text = heapless::Vec::<u8, MAX_TEXT>::new();
-    text.extend_from_slice(&buf[HEADER..HEADER + text_len]).ok()?;
-    Some(ReceivedMsg { kind, sender_prefix, channel_idx, path_len, text_type, timestamp, rssi, text })
+    text.extend_from_slice(&buf[HEADER..HEADER + text_len])
+        .ok()?;
+    Some(ReceivedMsg {
+        kind,
+        sender_prefix,
+        channel_idx,
+        path_len,
+        text_type,
+        timestamp,
+        rssi,
+        text,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +213,10 @@ pub async fn push(msg: &ReceivedMsg) {
     let mut buf = [0u8; MAX_RECORD];
     let len = serialize(msg, &mut buf);
 
-    if let Err(e) = kv::namespace("mq").set(key.as_str(), &buf[..len], true).await {
+    if let Err(e) = kv::namespace("mq")
+        .set(key.as_str(), &buf[..len], true)
+        .await
+    {
         defmt::warn!("msg_queue: push KV write failed: {:?}", e);
     }
 }
@@ -229,7 +247,11 @@ pub async fn pop() -> Option<ReceivedMsg> {
             }
         }
         Err(e) => {
-            defmt::warn!("msg_queue: KV read failed for slot {:?}: {:?}", key.as_str(), e);
+            defmt::warn!(
+                "msg_queue: KV read failed for slot {:?}: {:?}",
+                key.as_str(),
+                e
+            );
             None
         }
     }

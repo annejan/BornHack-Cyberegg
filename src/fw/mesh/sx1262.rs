@@ -2,19 +2,11 @@ use core::convert::Infallible;
 use core::fmt::Debug;
 use core::sync::atomic::Ordering;
 
-use defmt_rtt as _;
-use panic_probe as _;
-
-use embassy_nrf::{
-    Peri, bind_interrupts,
-    gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull},
-    peripherals,
-    spim::{self, Frequency, InterruptHandler, Spim},
-};
-use embassy_time::Delay;
-use embassy_time::Timer;
+use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::spim::{self, Frequency, InterruptHandler, Spim};
+use embassy_nrf::{Peri, bind_interrupts, peripherals};
+use embassy_time::{Delay, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
-
 use sx126x::SX126x;
 use sx126x::conf::Config as LoRaConfig;
 use sx126x::op::PacketType::LoRa;
@@ -24,6 +16,7 @@ use sx126x::op::status::ChipMode;
 use sx126x::op::tcxo::{TcxoDelay, TcxoVoltage};
 use sx126x::op::*;
 use sx126x::reg::Register;
+use {defmt_rtt as _, panic_probe as _};
 
 // ---------------------------------------------------------------------------
 // MeshCore LoRa configuration
@@ -41,7 +34,8 @@ pub struct MeshCoreConfig {
     pub tx_power_dbm: i8,
     pub preamble_len: u16,
     /// TCXO voltage and startup delay for modules that power the TCXO via DIO3
-    /// (e.g. eByte E22). Set to None if the module uses a plain crystal instead.
+    /// (e.g. eByte E22). Set to None if the module uses a plain crystal
+    /// instead.
     pub tcxo: Option<(TcxoVoltage, TcxoDelay)>,
     /// Spreading factor 5–12 (numeric, used for airtime estimation).
     pub sf_num: u8,
@@ -52,12 +46,14 @@ pub struct MeshCoreConfig {
 }
 
 impl MeshCoreConfig {
-    /// MeshCore EU/UK narrow band preset — matches the meshcore-dev/MeshCore firmware defaults.
+    /// MeshCore EU/UK narrow band preset — matches the meshcore-dev/MeshCore
+    /// firmware defaults.
     ///
-    /// 869.618 MHz · BW 62.5 kHz · SF8 · CR 4/5 · sync word 0x1424 (private LoRa)
+    /// 869.618 MHz · BW 62.5 kHz · SF8 · CR 4/5 · sync word 0x1424 (private
+    /// LoRa)
     ///
-    /// TCXO: 1.8 V / 5 ms startup — typical for eByte E22-900M22S and similar modules.
-    /// If the board uses a plain crystal, set `tcxo: None`.
+    /// TCXO: 1.8 V / 5 ms startup — typical for eByte E22-900M22S and similar
+    /// modules. If the board uses a plain crystal, set `tcxo: None`.
     ///
     /// See <https://www.m7spi.co.uk/switching-to-uk-narrow-band-a-guide-for-meshcore-users/>
     pub const UK_NARROW_BAND: Self = Self {
@@ -69,18 +65,21 @@ impl MeshCoreConfig {
         tx_power_dbm: 22,
         preamble_len: 8,
         tcxo: None, // External 32 MHz crystal on XTA/XTB — no DIO3 TCXO control needed
-        sf_num:    8,
+        sf_num: 8,
         bw_hz_num: 62_500,
-        cr_num:    5,
+        cr_num: 5,
     };
 
-    /// Build a [`MeshCoreConfig`] from user-configurable [`settings::RadioParams`].
+    /// Build a [`MeshCoreConfig`] from user-configurable
+    /// [`settings::RadioParams`].
     ///
-    /// Hardware-fixed fields (`sync_word`, `preamble_len`, `tcxo`) are inherited
-    /// from [`UK_NARROW_BAND`] and are never user-configurable via the companion app.
+    /// Hardware-fixed fields (`sync_word`, `preamble_len`, `tcxo`) are
+    /// inherited from [`UK_NARROW_BAND`] and are never user-configurable
+    /// via the companion app.
     ///
-    /// `settings::RadioParams.cr` uses **MeshCore protocol encoding** (5 = CR 4/5,
-    /// 6 = CR 4/6, …).  The sx126x hardware encoding (CR4_5 = 1, …) is handled here.
+    /// `settings::RadioParams.cr` uses **MeshCore protocol encoding** (5 = CR
+    /// 4/5, 6 = CR 4/6, …).  The sx126x hardware encoding (CR4_5 = 1, …) is
+    /// handled here.
     pub fn from_radio_params(p: &super::settings::RadioParams) -> Self {
         Self {
             frequency_hz: p.freq_hz,
@@ -112,13 +111,13 @@ impl MeshCoreConfig {
                 8 => LoraCodingRate::CR4_8,
                 _ => LoraCodingRate::CR4_5, // protocol cr=5 → CR 4/5
             },
-            sync_word:    Self::UK_NARROW_BAND.sync_word,
+            sync_word: Self::UK_NARROW_BAND.sync_word,
             tx_power_dbm: p.tx_power,
             preamble_len: Self::UK_NARROW_BAND.preamble_len,
-            tcxo:         Self::UK_NARROW_BAND.tcxo,
-            sf_num:       p.sf,
-            bw_hz_num:    p.bw_hz,
-            cr_num:       p.cr,
+            tcxo: Self::UK_NARROW_BAND.tcxo,
+            sf_num: p.sf,
+            bw_hz_num: p.bw_hz,
+            cr_num: p.cr,
         }
     }
 }
@@ -128,8 +127,8 @@ impl MeshCoreConfig {
 const F_XTAL: u32 = 32_000_000; // 32 MHz crystal
 
 // Extension trait that adds RF-switch helpers directly to the SX126x type used
-// in this module, so callers don't need to remember which set_ant_enabled() value
-// means RX vs TX.
+// in this module, so callers don't need to remember which set_ant_enabled()
+// value means RX vs TX.
 trait RfSwitch {
     fn rf_switch_rx(&mut self);
     fn rf_switch_tx(&mut self);
@@ -192,18 +191,19 @@ pub fn lora_airtime_ms(payload_len: usize, sf: u8, bw_hz: u32, cr_proto: u8, pre
     let cr: i64 = cr_proto.saturating_sub(4) as i64;
 
     // Payload symbol count — explicit header (IH=0), CRC=1 → constant 44
-    let n      = payload_len as i64;
-    let sf_i   = sf as i64;
-    let num    = 8 * n - 4 * sf_i + 44;    // 44 = 28 + 16*CRC - 20*IH
-    let denom  = 4 * (sf_i - 2 * de);
-    let extra  = if num > 0 && denom > 0 {
-        ((num + denom - 1) / denom) * (cr + 4)  // ceil(num/denom) * (CR+4)
+    let n = payload_len as i64;
+    let sf_i = sf as i64;
+    let num = 8 * n - 4 * sf_i + 44; // 44 = 28 + 16*CRC - 20*IH
+    let denom = 4 * (sf_i - 2 * de);
+    let extra = if num > 0 && denom > 0 {
+        ((num + denom - 1) / denom) * (cr + 4) // ceil(num/denom) * (CR+4)
     } else {
         0
     };
     let payload_syms = 8 + extra;
 
-    // Total = (preamble + 4.25) + N_payload  →  (preamble + 4) + N_payload (integer)
+    // Total = (preamble + 4.25) + N_payload  →  (preamble + 4) + N_payload
+    // (integer)
     let total_syms = preamble as i64 + 4 + payload_syms;
     let t_us = total_syms as u64 * sym_us;
 
@@ -229,9 +229,9 @@ pub struct TxBudget {
 }
 
 impl TxBudget {
-    const WINDOW_MS:      u32 = 3_600_000; // 1 hour in ms
-    const MIN_RESERVE_MS: u32 = 100;       // min budget before blocking TX
-    const MIN_TX_DIV:     u32 = 2;         // require est_airtime / N as budget
+    const WINDOW_MS: u32 = 3_600_000; // 1 hour in ms
+    const MIN_RESERVE_MS: u32 = 100; // min budget before blocking TX
+    const MIN_TX_DIV: u32 = 2; // require est_airtime / N as budget
 
     pub fn new(af_x1000: u32) -> Self {
         let denom = 1_000 + af_x1000;
@@ -256,20 +256,22 @@ impl TxBudget {
 
     /// Refill the budget based on time elapsed since the last update.
     fn refill(&mut self) {
-        let now      = embassy_time::Instant::now();
-        let elapsed  = (now - self.last_update).as_millis() as u32;
-        let denom    = 1_000 + self.af_x1000;
-        let max_bud  = (Self::WINDOW_MS as u64 * 1_000 / denom as u64) as u32;
-        let refill   = (elapsed as u64 * 1_000 / denom as u64) as u32;
+        let now = embassy_time::Instant::now();
+        let elapsed = (now - self.last_update).as_millis() as u32;
+        let denom = 1_000 + self.af_x1000;
+        let max_bud = (Self::WINDOW_MS as u64 * 1_000 / denom as u64) as u32;
+        let refill = (elapsed as u64 * 1_000 / denom as u64) as u32;
         if refill > 0 {
             self.budget_ms = self.budget_ms.saturating_add(refill).min(max_bud);
             self.last_update = now;
         }
     }
 
-    /// Returns `true` if TX is allowed for a packet with estimated airtime `est_ms`.
+    /// Returns `true` if TX is allowed for a packet with estimated airtime
+    /// `est_ms`.
     ///
-    /// Requires `budget_ms >= est_ms / MIN_TX_DIV` (same guard as C++ Dispatcher).
+    /// Requires `budget_ms >= est_ms / MIN_TX_DIV` (same guard as C++
+    /// Dispatcher).
     pub fn can_tx(&mut self, est_ms: u32) -> bool {
         self.refill();
         self.budget_ms >= est_ms / Self::MIN_TX_DIV
@@ -312,11 +314,13 @@ pub struct SimpleLoRa<'a> {
     pub last_snr_x4: i8,
     /// Accumulated TX airtime in milliseconds (sum of measured TX durations).
     pub tx_air_ms: u32,
-    /// Accumulated RX airtime in milliseconds (sum of per-packet on-air durations).
+    /// Accumulated RX airtime in milliseconds (sum of per-packet on-air
+    /// durations).
     pub rx_air_ms: u32,
-    /// Set between PreambleDetected and RxDone/CrcErr to signal an in-flight reception.
-    /// When the TX path pre-empts receive_packet() via select(), this flag remains set,
-    /// allowing send_message() to detect and defer the transmission immediately.
+    /// Set between PreambleDetected and RxDone/CrcErr to signal an in-flight
+    /// reception. When the TX path pre-empts receive_packet() via select(),
+    /// this flag remains set, allowing send_message() to detect and defer
+    /// the transmission immediately.
     rx_in_progress: bool,
 }
 
@@ -366,14 +370,14 @@ impl<'a> SimpleLoRa<'a> {
             crc_type: LoRaCrcType::CrcOn,
             preamble_len: config.preamble_len,
             dio1,
-            sf:        config.sf_num,
-            bw_hz:     config.bw_hz_num,
-            cr_proto:  config.cr_num,
+            sf: config.sf_num,
+            bw_hz: config.bw_hz_num,
+            cr_proto: config.cr_num,
             tx_budget: None,
-            last_rssi:      0,
-            last_snr_x4:    0,
-            tx_air_ms:      0,
-            rx_air_ms:      0,
+            last_rssi: 0,
+            last_snr_x4: 0,
+            tx_air_ms: 0,
+            rx_air_ms: 0,
             rx_in_progress: false,
         };
         radio.apply_rx_gain();
@@ -404,7 +408,9 @@ impl<'a> SimpleLoRa<'a> {
     /// Put the radio into standby mode (STDBY_RC, ~600 µA).
     pub fn standby(&mut self) {
         self.lora.wait_on_busy().ok();
-        self.lora.set_standby(sx126x::op::StandbyConfig::StbyRc).ok();
+        self.lora
+            .set_standby(sx126x::op::StandbyConfig::StbyRc)
+            .ok();
     }
 
     /// Resume continuous RX after standby.
@@ -415,8 +421,8 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.rf_switch_rx();
     }
 
-    /// Wait for the chip to enter RX mode, polling every 50 ms for up to 500 ms.
-    /// Returns true if RX mode is confirmed.
+    /// Wait for the chip to enter RX mode, polling every 50 ms for up to 500
+    /// ms. Returns true if RX mode is confirmed.
     pub async fn ensure_rx(&mut self) -> bool {
         self.lora.wait_on_busy().ok();
         self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
@@ -441,7 +447,8 @@ impl<'a> SimpleLoRa<'a> {
     /// `RxDone`/`CrcErr`/`Timeout`.
     ///
     /// If `select()` cancels between phases, `rx_in_progress` remains `true` so
-    /// `send_message()` defers TX (CANL: collision avoidance by neighbor listening).
+    /// `send_message()` defers TX (CANL: collision avoidance by neighbor
+    /// listening).
     pub async fn receive_packet(
         &mut self,
         buf: &mut [u8],
@@ -498,7 +505,11 @@ impl<'a> SimpleLoRa<'a> {
             let offset = buf_status.rx_start_buffer_pointer();
 
             if len > buf.len() {
-                defmt::warn!("LoRa RX buffer too small: pkt={=usize} buf={=usize}", len, buf.len());
+                defmt::warn!(
+                    "LoRa RX buffer too small: pkt={=usize} buf={=usize}",
+                    len,
+                    buf.len()
+                );
                 None
             } else if self.lora.read_buffer(offset, &mut buf[..len]).is_err() {
                 None
@@ -509,9 +520,10 @@ impl<'a> SimpleLoRa<'a> {
                     .map(|s| (s.rssi_pkt() as i16, (s.snr_pkt() * 4.0) as i8))
                     .unwrap_or((0, 0));
 
-                self.last_rssi   = rssi;
+                self.last_rssi = rssi;
                 self.last_snr_x4 = snr_x4;
-                let pkt_air_ms = lora_airtime_ms(len, self.sf, self.bw_hz, self.cr_proto, self.preamble_len);
+                let pkt_air_ms =
+                    lora_airtime_ms(len, self.sf, self.bw_hz, self.cr_proto, self.preamble_len);
                 self.rx_air_ms = self.rx_air_ms.saturating_add(pkt_air_ms);
 
                 Some((len, rssi, snr_x4))
@@ -550,7 +562,7 @@ impl<'a> SimpleLoRa<'a> {
         // detected (rx_in_progress), we wait for the packet to finish plus a
         // random backoff before transmitting.
         const INITIAL_WINDOW_MS: u64 = 200;
-        const MAX_WAIT_MS:       u64 = 4_000;
+        const MAX_WAIT_MS: u64 = 4_000;
         let window_ms = INITIAL_WINDOW_MS;
 
         // Random pre-TX jitter: prevents all nodes transmitting simultaneously
@@ -565,7 +577,9 @@ impl<'a> SimpleLoRa<'a> {
             embassy_time::with_timeout(
                 embassy_time::Duration::from_millis(MAX_WAIT_MS),
                 self.dio1.wait_for_rising_edge(),
-            ).await.ok(); // ignore timeout — force TX either way
+            )
+            .await
+            .ok(); // ignore timeout — force TX either way
             self.lora.wait_on_busy().ok();
             self.lora.clear_irq_status(IrqMask::all()).ok();
             self.rx_in_progress = false;
@@ -579,11 +593,18 @@ impl<'a> SimpleLoRa<'a> {
 
         // ── Duty-cycle budget ─────────────────────────────────────────────────
         if let Some(ref mut budget) = self.tx_budget {
-            let est_ms = lora_airtime_ms(message.len(), self.sf, self.bw_hz, self.cr_proto, self.preamble_len);
+            let est_ms = lora_airtime_ms(
+                message.len(),
+                self.sf,
+                self.bw_hz,
+                self.cr_proto,
+                self.preamble_len,
+            );
             if !budget.can_tx(est_ms) {
                 defmt::warn!(
                     "TX duty-cycle limit: est={=u32}ms budget={=u32}ms — packet dropped",
-                    est_ms, budget.budget_ms,
+                    est_ms,
+                    budget.budget_ms,
                 );
                 return Err(LoraError::DutyCycle);
             }
@@ -619,7 +640,11 @@ impl<'a> SimpleLoRa<'a> {
         // Deduct measured airtime from budget.
         if let Some(ref mut budget) = self.tx_budget {
             budget.deduct(actual_ms);
-            defmt::debug!("TX done: actual={=u32}ms budget_remaining={=u32}ms", actual_ms, budget.budget_ms);
+            defmt::debug!(
+                "TX done: actual={=u32}ms budget_remaining={=u32}ms",
+                actual_ms,
+                budget.budget_ms
+            );
         }
 
         // Re-arm continuous RX so receive_packet() finds the chip in RX mode.
@@ -645,8 +670,9 @@ impl<'a> SimpleLoRa<'a> {
 fn random_backoff_ms(window_ms: u64) -> u64 {
     let ticks = embassy_time::Instant::now().as_ticks();
     // Knuth multiplicative hash (LCG constant from Numerical Recipes).
-    let mixed = ticks.wrapping_mul(0x5851_F42D_4C95_7F2D)
-                     .wrapping_add(0x1405_7B7E_F767_814F);
+    let mixed = ticks
+        .wrapping_mul(0x5851_F42D_4C95_7F2D)
+        .wrapping_add(0x1405_7B7E_F767_814F);
     mixed % window_ms.max(1)
 }
 

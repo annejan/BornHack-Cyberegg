@@ -175,12 +175,20 @@ fn concurrent_kv_and_fat_full_writes() {
 
     let snap = flash.snapshot();
     for i in 0..KV_BYTES {
-        assert_eq!(snap[KV_OFFSET as usize + i], 0x11,
-            "KV corruption at offset 0x{:X}", i);
+        assert_eq!(
+            snap[KV_OFFSET as usize + i],
+            0x11,
+            "KV corruption at offset 0x{:X}",
+            i
+        );
     }
     for i in 0..FAT_BYTES {
-        assert_eq!(snap[FAT_OFFSET as usize + i], 0xAA,
-            "FAT corruption at offset 0x{:X}", i);
+        assert_eq!(
+            snap[FAT_OFFSET as usize + i],
+            0xAA,
+            "FAT corruption at offset 0x{:X}",
+            i
+        );
     }
 }
 
@@ -210,8 +218,11 @@ fn reads_stable_while_other_partition_writes() {
                 let addr = FAT_OFFSET + (page * PAGE_SIZE) as u32;
                 flash_reader.read(addr, &mut buf);
                 let expected = (page & 0xFF) as u8;
-                assert!(buf.iter().all(|&b| b == expected),
-                    "FAT read corruption at page {} during concurrent KV write", page);
+                assert!(
+                    buf.iter().all(|&b| b == expected),
+                    "FAT read corruption at page {} during concurrent KV write",
+                    page
+                );
             }
         }
     });
@@ -240,28 +251,37 @@ fn many_writers_non_overlapping_regions() {
     let region_size = FAT_BYTES / num_threads as usize;
     let region_pages = region_size / PAGE_SIZE;
 
-    let handles: Vec<_> = (0..num_threads).map(|tid| {
-        let flash = flash.clone();
-        thread::spawn(move || {
-            let base = FAT_OFFSET + (tid as u32 * region_size as u32);
-            let pattern = [tid.wrapping_mul(17).wrapping_add(1); PAGE_SIZE];
-            for page in 0..region_pages {
-                let addr = base + (page * PAGE_SIZE) as u32;
-                flash.erase(addr);
-                flash.write(addr, &pattern);
-            }
+    let handles: Vec<_> = (0..num_threads)
+        .map(|tid| {
+            let flash = flash.clone();
+            thread::spawn(move || {
+                let base = FAT_OFFSET + (tid as u32 * region_size as u32);
+                let pattern = [tid.wrapping_mul(17).wrapping_add(1); PAGE_SIZE];
+                for page in 0..region_pages {
+                    let addr = base + (page * PAGE_SIZE) as u32;
+                    flash.erase(addr);
+                    flash.write(addr, &pattern);
+                }
+            })
         })
-    }).collect();
+        .collect();
 
-    for h in handles { h.join().unwrap(); }
+    for h in handles {
+        h.join().unwrap();
+    }
 
     let snap = flash.snapshot();
     for tid in 0..num_threads {
         let base = FAT_OFFSET as usize + tid as usize * region_size;
         let expected = tid.wrapping_mul(17).wrapping_add(1);
         for i in 0..region_size {
-            assert_eq!(snap[base + i], expected,
-                "Thread {} corruption at offset 0x{:X}", tid, i);
+            assert_eq!(
+                snap[base + i],
+                expected,
+                "Thread {} corruption at offset 0x{:X}",
+                tid,
+                i
+            );
         }
     }
 }
@@ -287,8 +307,12 @@ fn interleaved_erase_write_read_both_partitions() {
                 let pattern = [val; PAGE_SIZE];
                 flash_a.write(addr, &pattern);
                 flash_a.read(addr, &mut buf);
-                assert!(buf.iter().all(|&b| b == val),
-                    "KV verify failed: round={} page={}", round, page);
+                assert!(
+                    buf.iter().all(|&b| b == val),
+                    "KV verify failed: round={} page={}",
+                    round,
+                    page
+                );
             }
         }
     });
@@ -304,8 +328,12 @@ fn interleaved_erase_write_read_both_partitions() {
                 let pattern = [val; PAGE_SIZE];
                 flash_b.write(addr, &pattern);
                 flash_b.read(addr, &mut buf);
-                assert!(buf.iter().all(|&b| b == val),
-                    "FAT verify failed: round={} page={}", round, page);
+                assert!(
+                    buf.iter().all(|&b| b == val),
+                    "FAT verify failed: round={} page={}",
+                    round,
+                    page
+                );
             }
         }
     });
@@ -342,8 +370,10 @@ fn stress_mixed_operations() {
             for page in 0..KV_PAGES {
                 let addr = KV_OFFSET + (page * PAGE_SIZE) as u32;
                 f.read(addr, &mut buf);
-                assert!(buf.iter().all(|&b| b == 0x11),
-                    "KV read corruption during stress");
+                assert!(
+                    buf.iter().all(|&b| b == 0x11),
+                    "KV read corruption during stress"
+                );
             }
         }));
     }
@@ -356,11 +386,15 @@ fn stress_mixed_operations() {
             for page in 0..FAT_PAGES {
                 let addr = FAT_OFFSET + (page * PAGE_SIZE) as u32;
                 f.read(addr, &mut buf);
-                assert!(buf.iter().all(|&b| b == 0xAA),
-                    "FAT read corruption during stress");
+                assert!(
+                    buf.iter().all(|&b| b == 0xAA),
+                    "FAT read corruption during stress"
+                );
             }
         }));
     }
 
-    for h in handles { h.join().unwrap(); }
+    for h in handles {
+        h.join().unwrap();
+    }
 }

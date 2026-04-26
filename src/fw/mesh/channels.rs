@@ -67,7 +67,8 @@ async fn kv_write(i: usize, slot: &[u8; SLOT_LEN]) {
 ///
 /// Any missing key is created as an all-zero (empty) slot.
 /// If no keys were found at all (first boot), slot 0 is seeded with the
-/// public channel (`"public"` / well-known key `8b3387e9c5cdea6ac9e5edbaa115cd72`).
+/// public channel (`"public"` / well-known key
+/// `8b3387e9c5cdea6ac9e5edbaa115cd72`).
 pub async fn init() {
     let kv = kv::namespace("ch");
     let mut found = 0usize;
@@ -89,7 +90,10 @@ pub async fn init() {
 async fn seed_defaults() {
     let defaults: [(&[u8], &[u8; KEY_LEN]); 3] = [
         (b"public", &PUBLIC_CHANNEL_KEY),
-        (b"#bornhack", &meshcore::channel::key_from_hashtag("#bornhack")),
+        (
+            b"#bornhack",
+            &meshcore::channel::key_from_hashtag("#bornhack"),
+        ),
         (b"#test", &meshcore::channel::key_from_hashtag("#test")),
     ];
     for (i, (name, key)) in defaults.iter().enumerate() {

@@ -45,11 +45,11 @@ pub const TIRED_PASSIVE_RECOVERY: u16 = 655; // 1 unit
 pub const TIRED_PASSIVE_INTERVAL: u32 = 120;
 
 /// Sleep recovery tiers (per tick):
-pub const SLEEP_RECOVERY_SLOW: u16 = 3275;   // tired ≥ 76%
-pub const SLEEP_RECOVERY_MEDIUM: u16 = 6550;  // tired ≥ 46%
-pub const SLEEP_RECOVERY_FAST: u16 = 9825;    // tired < 46%
+pub const SLEEP_RECOVERY_SLOW: u16 = 3275; // tired ≥ 76%
+pub const SLEEP_RECOVERY_MEDIUM: u16 = 6550; // tired ≥ 46%
+pub const SLEEP_RECOVERY_FAST: u16 = 9825; // tired < 46%
 /// Tired threshold for slow sleep recovery.
-pub const SLEEP_TIER_SLOW: u16 = 49807;  // 76%
+pub const SLEEP_TIER_SLOW: u16 = 49807; // 76%
 /// Tired threshold for medium sleep recovery.
 pub const SLEEP_TIER_MEDIUM: u16 = 30145; // 46%
 

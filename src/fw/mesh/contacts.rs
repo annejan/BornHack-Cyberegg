@@ -15,7 +15,8 @@
 //! ## Slot layout (148 bytes each)
 //!
 //! Path size matches MeshCore `MAX_PATH_SIZE` = 64 B.
-//! Offsets verified against `MyMesh::updateContactFromFrame()` in the MeshCore reference firmware.
+//! Offsets verified against `MyMesh::updateContactFromFrame()` in the MeshCore
+//! reference firmware.
 //!
 //! | Offset | Bytes | Field           | Notes                         |
 //! |--------|-------|-----------------|-------------------------------|
@@ -93,8 +94,8 @@ pub const OUT_PATH_UNKNOWN: u8 = 0xFF;
 ///
 /// Version history:
 /// - `1`: first versioned layout. 149 bytes. No `sync_since` field.
-/// - `2`: adds `sync_since: u32` at offset 149. 153 bytes. Required for
-///   room server posts so we don't replay the full mailbox on every reboot.
+/// - `2`: adds `sync_since: u32` at offset 149. 153 bytes. Required for room
+///   server posts so we don't replay the full mailbox on every reboot.
 pub(crate) const CURRENT_RECORD_VERSION: u8 = 2;
 
 // ---------------------------------------------------------------------------
@@ -125,8 +126,9 @@ pub struct Contact {
     /// Routing path length.  [`OUT_PATH_UNKNOWN`] (0xFF) = not yet established.
     pub out_path_len: u8,
     _pad: u8,
-    /// Routing path bytes — zero-filled when `out_path_len == OUT_PATH_UNKNOWN`.
-    /// Always stored as `MAX_PATH_SIZE` (64 B) on the wire, matching MeshCore.
+    /// Routing path bytes — zero-filled when `out_path_len ==
+    /// OUT_PATH_UNKNOWN`. Always stored as `MAX_PATH_SIZE` (64 B) on the
+    /// wire, matching MeshCore.
     pub out_path: [u8; MAX_PATH_SIZE],
     /// Display name, UTF-8, zero-padded to 32 bytes.
     pub name: [u8; 32],
@@ -156,9 +158,10 @@ pub struct Contact {
 impl Contact {
     /// Number of bytes in `out_path` that are valid, given `out_path_len`.
     ///
-    /// MeshCore path_len_byte encoding: bits 7-6 = hash_size_code (0→1B, 1→2B, 2→3B),
-    /// bits 5-0 = hop_count.  Actual bytes = hop_count × (hash_size_code + 1).
-    /// Returns 0 when `out_path_len` is [`OUT_PATH_UNKNOWN`] or invalid.
+    /// MeshCore path_len_byte encoding: bits 7-6 = hash_size_code (0→1B, 1→2B,
+    /// 2→3B), bits 5-0 = hop_count.  Actual bytes = hop_count ×
+    /// (hash_size_code + 1). Returns 0 when `out_path_len` is
+    /// [`OUT_PATH_UNKNOWN`] or invalid.
     pub fn path_actual_bytes(&self) -> usize {
         if self.out_path_len == OUT_PATH_UNKNOWN {
             return 0;
@@ -745,10 +748,9 @@ impl ContactStore {
     ///
     /// - `meta` missing → first boot / brand-new KV store → nothing to wipe.
     /// - `meta.schema_version == CURRENT_RECORD_VERSION` → store is current.
-    /// - `meta.schema_version == 0` → historical meta written before this
-    ///   field existed; legacy slots, wipe.
-    /// - `meta.schema_version != CURRENT_RECORD_VERSION` → stale layout,
-    ///   wipe.
+    /// - `meta.schema_version == 0` → historical meta written before this field
+    ///   existed; legacy slots, wipe.
+    /// - `meta.schema_version != CURRENT_RECORD_VERSION` → stale layout, wipe.
     ///
     /// Exactly **one** flash read per boot. The previous implementation
     /// walked up to `MAX_CONTACTS` slots to find a non-empty record, and
@@ -806,10 +808,10 @@ impl ContactStore {
     /// Initialise the contact store.
     ///
     /// 1. If the on-flash records are in a layout this firmware does not
-    ///    understand (legacy `CONTACT_SIZE` or version byte mismatch),
-    ///    wipe the contact-related namespaces.
-    /// 2. Read stored metadata; if [`MAX_CONTACTS`] differs from the value
-    ///    on flash, perform the capacity migration.
+    ///    understand (legacy `CONTACT_SIZE` or version byte mismatch), wipe the
+    ///    contact-related namespaces.
+    /// 2. Read stored metadata; if [`MAX_CONTACTS`] differs from the value on
+    ///    flash, perform the capacity migration.
     ///
     /// Call once from the main task after [`kv::init`] succeeds, before
     /// spawning any task that reads or writes contacts.
@@ -819,15 +821,9 @@ impl ContactStore {
             defmt::warn!(
                 "contacts: record format mismatch — wiping store (blink LED, alpha-phase policy)"
             );
-            crate::fw::led::set_led(
-                &crate::fw::led::LED_GREEN,
-                crate::fw::led::LedState::Duty50,
-            );
+            crate::fw::led::set_led(&crate::fw::led::LED_GREEN, crate::fw::led::LedState::Duty50);
             self.wipe_contact_store().await;
-            crate::fw::led::set_led(
-                &crate::fw::led::LED_GREEN,
-                crate::fw::led::LedState::Off,
-            );
+            crate::fw::led::set_led(&crate::fw::led::LED_GREEN, crate::fw::led::LedState::Off);
         }
 
         // --- 2. Read/write meta. ---
@@ -852,7 +848,7 @@ impl ContactStore {
                     head: 0,
                     count: 0,
                     schema_version: CURRENT_RECORD_VERSION,
-                _reserved: 0,
+                    _reserved: 0,
                 };
                 match self.kv.set("meta", &meta.to_bytes(), true).await {
                     Ok(()) => defmt::info!("contacts: initialised (capacity {})", MAX_CONTACTS),
@@ -911,7 +907,9 @@ impl ContactStore {
                 let key = slot_key(idx);
                 if let Ok(n) = self.kv.get(key.as_str(), &mut cbuf).await {
                     if n == CONTACT_SIZE {
-                        if let Some(c) = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap()) {
+                        if let Some(c) =
+                            Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
+                        {
                             if !c.is_deleted() {
                                 count += 1;
                             }
@@ -1007,8 +1005,8 @@ impl ContactStore {
 
     /// Update the routing path for a contact identified by `pub_key`.
     ///
-    /// Only writes to flash if the contact exists and the path actually changed.
-    /// Silently does nothing if the contact is not found.
+    /// Only writes to flash if the contact exists and the path actually
+    /// changed. Silently does nothing if the contact is not found.
     ///
     /// Returns:
     /// - `Ok(true)` — the flash record was rewritten because the new path
@@ -1063,9 +1061,9 @@ impl ContactStore {
     /// Add a new contact or update an existing one.
     ///
     /// Behaviour:
-    /// - If a contact with the same `pub_key` already exists it is updated;
-    ///   the stored favourite flag is **preserved** even when the incoming
-    ///   entry clears it.
+    /// - If a contact with the same `pub_key` already exists it is updated; the
+    ///   stored favourite flag is **preserved** even when the incoming entry
+    ///   clears it.
     /// - If a free (never-written) or deleted slot is available it is used.
     /// - When the store is full the oldest non-favourite contact (by `lastmod`)
     ///   is evicted.  If every contact is a favourite the oldest favourite is
@@ -1117,15 +1115,16 @@ impl ContactStore {
         // Read the incumbent (if any) so we can unlink its index entries
         // before overwriting the slot.
         let mut slot_buf = [0u8; CONTACT_SIZE];
-        let incumbent: Option<Contact> = match self.kv.get(slot_key(target).as_str(), &mut slot_buf).await {
-            Ok(n) if n == CONTACT_SIZE => {
-                match Contact::from_bytes(slot_buf[..CONTACT_SIZE].try_into().unwrap()) {
-                    Some(c) if !c.is_deleted() => Some(c),
-                    _ => None,
+        let incumbent: Option<Contact> =
+            match self.kv.get(slot_key(target).as_str(), &mut slot_buf).await {
+                Ok(n) if n == CONTACT_SIZE => {
+                    match Contact::from_bytes(slot_buf[..CONTACT_SIZE].try_into().unwrap()) {
+                        Some(c) if !c.is_deleted() => Some(c),
+                        _ => None,
+                    }
                 }
-            }
-            _ => None,
-        };
+                _ => None,
+            };
         let evicted = incumbent.is_some();
 
         // Pre-check the hash bucket BEFORE any writes so a rejection leaves
@@ -1207,7 +1206,8 @@ impl ContactStore {
         Ok(true)
     }
 
-    /// Delete all contacts by iterating every slot and calling [`delete`] on each.
+    /// Delete all contacts by iterating every slot and calling [`delete`] on
+    /// each.
     pub async fn clear_all(&self) {
         for idx in 0..MAX_CONTACTS {
             if let Some(contact) = self.read_slot(idx).await {

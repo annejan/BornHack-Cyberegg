@@ -17,46 +17,42 @@
 pub mod engine;
 pub mod input;
 pub mod lifecycle;
+pub mod lightsout;
 pub mod modal;
 pub mod nav;
-pub mod sprite_loader;
-pub mod lightsout;
 pub mod pet_select;
 pub mod realm_view;
+pub mod sprite_loader;
 pub mod stat_bar;
 pub mod station;
 pub mod tictactoe;
 pub mod traits_view;
+// ── Action feedback toast ────────────────────────────────────────────────────
+use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 pub use nav::{GameNav, Row};
 
-use embedded_graphics::{
-    prelude::*,
-    primitives::{Circle, PrimitiveStyle, Rectangle},
-};
-
 use crate::{BLACK, TriColor, WHITE};
-
-// ── Action feedback toast ────────────────────────────────────────────────────
-
-use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 /// Action feedback shown briefly after an action.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Toast {
-    None          = 0,
-    Feed          = 1,
-    Heal          = 2,
-    Sleep         = 3,
-    Relax         = 4,
-    Play          = 5,
-    Inspired      = 6,
-    Hibernate     = 7,
-    Wake          = 8,
-    StationFood   = 9,
-    StationDrugs  = 10,
+    None = 0,
+    Feed = 1,
+    Heal = 2,
+    Sleep = 3,
+    Relax = 4,
+    Play = 5,
+    Inspired = 6,
+    Hibernate = 7,
+    Wake = 8,
+    StationFood = 9,
+    StationDrugs = 10,
     StationInspire = 11,
-    StationRest   = 12,
+    StationRest = 12,
     /// Station tap was rejected because the matching effect is still
     /// on cooldown.  The remaining seconds are read from
     /// [`STATION_COOLDOWN_SECS`] and formatted at draw time.
@@ -66,11 +62,18 @@ pub enum Toast {
 impl Toast {
     fn from_u8(v: u8) -> Self {
         match v {
-            1 => Self::Feed, 2 => Self::Heal, 3 => Self::Sleep,
-            4 => Self::Relax, 5 => Self::Play, 6 => Self::Inspired,
-            7 => Self::Hibernate, 8 => Self::Wake,
-            9 => Self::StationFood, 10 => Self::StationDrugs,
-            11 => Self::StationInspire, 12 => Self::StationRest,
+            1 => Self::Feed,
+            2 => Self::Heal,
+            3 => Self::Sleep,
+            4 => Self::Relax,
+            5 => Self::Play,
+            6 => Self::Inspired,
+            7 => Self::Hibernate,
+            8 => Self::Wake,
+            9 => Self::StationFood,
+            10 => Self::StationDrugs,
+            11 => Self::StationInspire,
+            12 => Self::StationRest,
             13 => Self::StationCooldown,
             _ => Self::None,
         }
@@ -78,19 +81,19 @@ impl Toast {
 
     fn message(self) -> &'static str {
         match self {
-            Toast::None           => "",
-            Toast::Feed           => "-hunger",
-            Toast::Heal           => "-sick",
-            Toast::Sleep          => "-tired",
-            Toast::Relax          => "-drained",
-            Toast::Play           => "-miserable",
-            Toast::Inspired       => "+inspired",
-            Toast::Hibernate      => "hibernating",
-            Toast::Wake           => "waking up",
-            Toast::StationFood    => "station: fed!",
-            Toast::StationDrugs   => "station: healed!",
+            Toast::None => "",
+            Toast::Feed => "-hunger",
+            Toast::Heal => "-sick",
+            Toast::Sleep => "-tired",
+            Toast::Relax => "-drained",
+            Toast::Play => "-miserable",
+            Toast::Inspired => "+inspired",
+            Toast::Hibernate => "hibernating",
+            Toast::Wake => "waking up",
+            Toast::StationFood => "station: fed!",
+            Toast::StationDrugs => "station: healed!",
             Toast::StationInspire => "station: inspired!",
-            Toast::StationRest    => "station: rested!",
+            Toast::StationRest => "station: rested!",
             // Dynamic — handled in the renderer.
             Toast::StationCooldown => "",
         }
@@ -107,7 +110,8 @@ static TOAST_TTL: AtomicU8 = AtomicU8::new(0);
 /// [`show_station_cooldown`].
 static STATION_COOLDOWN_SECS: AtomicU16 = AtomicU16::new(0);
 
-/// Number of display refreshes to show the toast (~2–3 sec per refresh on e-ink).
+/// Number of display refreshes to show the toast (~2–3 sec per refresh on
+/// e-ink).
 const TOAST_DRAWS: u8 = 2;
 
 /// Show a feedback toast for the next few display refreshes.
@@ -123,7 +127,8 @@ pub fn show_station_cooldown(secs: u16) {
     show_toast(Toast::StationCooldown);
 }
 
-// ── Layout constants ──────────────────────────────────────────────────────────
+// ── Layout constants
+// ──────────────────────────────────────────────────────────
 
 /// X centres of the four icon columns (evenly spaced across 152 px).
 const ICON_CX: [i32; 4] = [19, 57, 95, 133];
@@ -141,7 +146,8 @@ const SEL_RADIUS: i32 = 13;
 /// First display row of the pet/sprite area.
 pub const PET_AREA_TOP: usize = SEP_TOP as usize + 1;
 
-// ── Selection highlight ───────────────────────────────────────────────────────
+// ── Selection highlight
+// ───────────────────────────────────────────────────────
 
 fn draw_selection_bg<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
 where
@@ -155,7 +161,8 @@ where
     .draw(display)
 }
 
-// ── Icon drawing functions ────────────────────────────────────────────────────
+// ── Icon drawing functions
+// ────────────────────────────────────────────────────
 
 fn icon_fork<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
 where
@@ -266,7 +273,8 @@ where
     Ok(())
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry point
+// ────────────────────────────────────────────────────────
 
 /// Render the BornPets game screen.
 ///
@@ -279,7 +287,8 @@ pub fn draw_screen_game<D>(display: &mut D, nav: GameNav) -> Result<(), D::Error
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD};
+    use embedded_graphics::mono_font::MonoTextStyle;
+    use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
     use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
     use engine::to_display::DisplayAnim;
 
@@ -405,20 +414,16 @@ where
             let secs = STATION_COOLDOWN_SECS.load(Ordering::Relaxed);
             let m = secs / 60;
             let s = secs % 60;
-            let _ = core::fmt::Write::write_fmt(
-                &mut dyn_buf,
-                format_args!("wait {}:{:02}", m, s),
-            );
+            let _ = core::fmt::Write::write_fmt(&mut dyn_buf, format_args!("wait {}:{:02}", m, s));
             dyn_buf.as_str()
         } else {
             toast.message()
         };
         if !msg.is_empty() {
-            use embedded_graphics::text::{Text, TextStyleBuilder, Baseline};
-            use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD};
-            let style = TextStyleBuilder::new()
-                .baseline(Baseline::Top)
-                .build();
+            use embedded_graphics::mono_font::MonoTextStyle;
+            use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+            use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
+            let style = TextStyleBuilder::new().baseline(Baseline::Top).build();
             Text::with_text_style(
                 msg,
                 Point::new(2, SEP_TOP + 2),
@@ -444,9 +449,10 @@ where
 /// when no artwork is loaded.
 #[cfg(feature = "embassy-base")]
 pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) {
-    use crate::fw::fat12;
     use engine::anim_files;
     use engine::to_display::DisplayAnim;
+
+    use crate::fw::fat12;
 
     if lifecycle::is_started() {
         lifecycle::cycle();
@@ -485,7 +491,8 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
 
     // Debug: show animation name when no artwork loaded.
     if !has_sprite && lifecycle::is_started() {
-        use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13};
+        use embedded_graphics::mono_font::MonoTextStyle;
+        use embedded_graphics::mono_font::ascii::FONT_7X13;
         use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
         use ssd1675::graphics::Color;
 

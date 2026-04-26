@@ -1,8 +1,9 @@
 //! BLE bond persistence via the shared KV store.
 //!
-//! All bond data is stored under a single key `"bonds:all"` (namespace `"bonds"`,
-//! key `"all"`) as a flat array of fixed-size 42-byte records — one per bonded peer.
-//! No separate index is needed; loading reads the whole array, saving rewrites it.
+//! All bond data is stored under a single key `"bonds:all"` (namespace
+//! `"bonds"`, key `"all"`) as a flat array of fixed-size 42-byte records — one
+//! per bonded peer. No separate index is needed; loading reads the whole array,
+//! saving rewrites it.
 //!
 //! `bond_task` owns a `BondStore` and services [`BondCmd`] messages from the
 //! BLE task.  The KV store must be initialised with `kv::init()` before this
@@ -32,8 +33,8 @@ const MAX_BONDS: usize = 4;
 //  [22]     irk_present (0 or 1)
 //  [23..39] IRK (u128 little-endian, zeroed if absent)
 //  [39]     is_bonded (0 or 1)
-//  [40]     security_level (0=NoEncryption, 1=Encrypted, 2=EncryptedAuthenticated)
-//  [41]     reserved
+//  [40]     security_level (0=NoEncryption, 1=Encrypted,
+// 2=EncryptedAuthenticated)  [41]     reserved
 
 const BOND_SIZE: usize = 42;
 
@@ -78,7 +79,10 @@ fn deserialize_bond(buf: &[u8; BOND_SIZE]) -> BondInformation {
     } else {
         None
     };
-    let identity = Identity { bd_addr: BdAddr::new(addr), irk };
+    let identity = Identity {
+        bd_addr: BdAddr::new(addr),
+        irk,
+    };
     BondInformation::new(identity, ltk, security_level_from_u8(buf[40]), buf[39] != 0)
 }
 
@@ -92,7 +96,9 @@ struct BondStore {
 
 impl BondStore {
     fn new() -> Self {
-        Self { kv: kv::namespace("bonds") }
+        Self {
+            kv: kv::namespace("bonds"),
+        }
     }
 
     /// Read all bonds from `"bonds:all"`.
@@ -120,7 +126,11 @@ impl BondStore {
         for (i, bond) in bonds.iter().enumerate() {
             buf[i * BOND_SIZE..(i + 1) * BOND_SIZE].copy_from_slice(&serialize_bond(bond));
         }
-        if let Err(e) = self.kv.set("all", &buf[..bonds.len() * BOND_SIZE], true).await {
+        if let Err(e) = self
+            .kv
+            .set("all", &buf[..bonds.len() * BOND_SIZE], true)
+            .await
+        {
             defmt::warn!("BondStore: store: {:?}", e);
         }
     }
@@ -129,9 +139,14 @@ impl BondStore {
     async fn save(&self, info: &BondInformation) {
         let mut bonds = self.load_all().await;
         let addr = info.identity.bd_addr.into_inner();
-        match bonds.iter().position(|b| b.identity.bd_addr.into_inner() == addr) {
+        match bonds
+            .iter()
+            .position(|b| b.identity.bd_addr.into_inner() == addr)
+        {
             Some(i) => bonds[i] = info.clone(),
-            None    => { let _ = bonds.push(info.clone()); }
+            None => {
+                let _ = bonds.push(info.clone());
+            }
         }
         self.store_all(&bonds).await;
     }
@@ -143,7 +158,8 @@ impl BondStore {
         self.store_all(&bonds).await;
     }
 
-    /// Delete the `"bonds:all"` key entirely (cleaner than writing a 0-length value).
+    /// Delete the `"bonds:all"` key entirely (cleaner than writing a 0-length
+    /// value).
     async fn clear_all(&self) {
         if let Err(e) = self.kv.delete("all").await {
             defmt::warn!("BondStore: clear: {:?}", e);
@@ -163,7 +179,8 @@ pub enum BondCmd {
 
 pub static BOND_CMD_CHANNEL: Channel<CriticalSectionRawMutex, BondCmd, 4> = Channel::new();
 
-/// Populated by `bond_task` at startup; the BLE task waits on this before advertising.
+/// Populated by `bond_task` at startup; the BLE task waits on this before
+/// advertising.
 pub static INITIAL_BONDS: OnceLock<Vec<BondInformation, MAX_BONDS>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------

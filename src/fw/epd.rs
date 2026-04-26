@@ -1,16 +1,14 @@
-use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::peripherals;
-use embassy_nrf::spim::{Config, Frequency, InterruptHandler, Spim};
-use embassy_nrf::{Peri, bind_interrupts};
-use embassy_time::Timer;
-use embedded_hal_bus::spi::ExclusiveDevice;
-use static_cell::StaticCell;
-
 use core::convert::Infallible;
 use core::sync::atomic::{AtomicPtr, Ordering};
-use embassy_nrf::gpio::{Pin as GpioPin, Port};
-use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
+
+use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin as GpioPin, Port, Pull};
+use embassy_nrf::spim::{Config, Frequency, InterruptHandler, Spim};
+use embassy_nrf::{Peri, bind_interrupts, peripherals};
+use embassy_time::Timer;
+use embedded_hal_bus::spi::ExclusiveDevice;
 pub use ssd1675::LutMode;
+use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 // EPD display configuration - compile-time constants with generics
@@ -51,7 +49,10 @@ static OTP_LUT: StaticCell<[u8; 107]> = StaticCell::new();
 static OTP_LUT_PTR: AtomicPtr<[u8; 107]> = AtomicPtr::new(core::ptr::null_mut());
 
 fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
-    let port = match p.port() { Port::Port0 => 0u8, Port::Port1 => 1u8 };
+    let port = match p.port() {
+        Port::Port0 => 0u8,
+        Port::Port1 => 1u8,
+    };
     port * 32 + p.pin()
 }
 
@@ -59,14 +60,17 @@ fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
 ///
 /// Sequence (per SSD1619 reference driver):
 ///   1. Hardware reset + 100 ms settle
-///   2. Select the on-chip internal temperature sensor (0x18 = 0x80) —
-///      the SSD1675 will use its own die measurement when the next
-///      LoadTemp step runs.  The SoC's idea of temperature is *not*
-///      written: the panel's internal sensor is more representative
-///      of the panel itself than the nRF52840's die.
-///   3. Send 0x22 / 0xB1 — EnableClock | LoadTemp | LoadLUT-Mode1 | DisableClock
-///   4. Send 0x20 — Master Activation (BUSY goes HIGH while controller loads OTP zone)
-///   5. Wait for BUSY LOW (controller has loaded the temperature zone into the LUT register)
+///   2. Select the on-chip internal temperature sensor (0x18 = 0x80) — the
+///      SSD1675 will use its own die measurement when the next LoadTemp step
+///      runs.  The SoC's idea of temperature is *not* written: the panel's
+///      internal sensor is more representative of the panel itself than the
+///      nRF52840's die.
+///   3. Send 0x22 / 0xB1 — EnableClock | LoadTemp | LoadLUT-Mode1 |
+///      DisableClock
+///   4. Send 0x20 — Master Activation (BUSY goes HIGH while controller loads
+///      OTP zone)
+///   5. Wait for BUSY LOW (controller has loaded the temperature zone into the
+///      LUT register)
 ///   6. Send 0x33 command then read 107 bytes — the loaded LUT zone
 ///
 /// All stolen resources are dropped before returning.
@@ -106,7 +110,8 @@ async fn probe_lut(
     let mut cfg = Config::default();
     cfg.frequency = Frequency::M1;
 
-    // Hardware reset — flat 100 ms settle (BUSY does not reliably pulse during reset/OTP boot).
+    // Hardware reset — flat 100 ms settle (BUSY does not reliably pulse during
+    // reset/OTP boot).
     Timer::after_millis(10).await;
     rst_out.set_high();
     Timer::after_millis(100).await;
@@ -135,7 +140,8 @@ async fn probe_lut(
         spi_tx.write(&[0x22]).await.ok();
         dc_out.set_high();
         spi_tx.write(&[0xB1]).await.ok();
-        // 0x20: Master Activation — BUSY goes HIGH while the controller loads the OTP zone.
+        // 0x20: Master Activation — BUSY goes HIGH while the controller loads the OTP
+        // zone.
         dc_out.set_low();
         spi_tx.write(&[0x20]).await.ok();
         // Don't drop — Spim::drop disconnects SPI pins.
@@ -143,8 +149,8 @@ async fn probe_lut(
     }
     cs_out.set_high();
 
-    // Wait for BUSY LOW: controller has finished loading the temperature zone into the LUT register.
-    // Poll every 10 ms, up to 1 s total.
+    // Wait for BUSY LOW: controller has finished loading the temperature zone into
+    // the LUT register. Poll every 10 ms, up to 1 s total.
     for _ in 0..100u8 {
         if !busy_in.is_high() {
             break;
@@ -154,7 +160,8 @@ async fn probe_lut(
 
     // Phase 2: read 107 bytes from the LUT register (0x33).
     // The controller now presents the loaded zone on MISO.
-    // Stack-allocated only for the duration of the SPI read; caller moves it into StaticCell.
+    // Stack-allocated only for the duration of the SPI read; caller moves it into
+    // StaticCell.
     let mut lut = [0u8; 107];
     cs_out.set_low();
     {
@@ -215,7 +222,6 @@ async fn probe_lut(
     lut
 }
 
-
 /// Initialize the EPD display (SSD1675/SSD1675B, SPIM3 interface).
 ///
 /// Reads the factory OTP LUT from the display controller before consuming
@@ -237,9 +243,18 @@ pub async fn init_epd<'a>(
     lut_mode: LutMode,
 ) -> Result<EpdGfx<'a>, Infallible> {
     // Read OTP LUT via stolen peripherals before consuming the real tokens.
-    // Move raw bytes into static storage immediately — keeps the 107-byte buffer off the stack.
+    // Move raw bytes into static storage immediately — keeps the 107-byte buffer
+    // off the stack.
     let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(
-        probe_lut(&sck_pin, &mosi_pin, &csn_pin, &dc_pin, &resetn_pin, &busy_pin).await,
+        probe_lut(
+            &sck_pin,
+            &mosi_pin,
+            &csn_pin,
+            &dc_pin,
+            &resetn_pin,
+            &busy_pin,
+        )
+        .await,
     );
     OTP_LUT_PTR.store(otp_lut as *mut _, Ordering::Relaxed);
 

@@ -10,13 +10,13 @@
 //! - READ CAPACITY(10), READ(10), WRITE(10)
 //! - MODE SENSE(6), PREVENT ALLOW MEDIUM REMOVAL
 
-use embassy_usb::driver::{Driver, Endpoint, EndpointIn, EndpointOut};
 use embassy_usb::Builder;
+use embassy_usb::driver::{Driver, Endpoint, EndpointIn, EndpointOut};
 
 // USB class/subclass/protocol for Mass Storage BBB.
 const USB_CLASS_MSC: u8 = 0x08;
 const MSC_SUBCLASS_SCSI: u8 = 0x06; // SCSI transparent command set
-const MSC_PROTOCOL_BBB: u8 = 0x50;  // Bulk-Only Transport
+const MSC_PROTOCOL_BBB: u8 = 0x50; // Bulk-Only Transport
 
 // CBW/CSW signatures.
 const CBW_SIGNATURE: u32 = 0x4342_5355; // "USBC"
@@ -40,14 +40,12 @@ const SCSI_WRITE_10: u8 = 0x2A;
 
 // SCSI sense keys.
 const SENSE_OK: [u8; 18] = [
-    0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x70, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00,
 ];
 
 const SENSE_INVALID_CMD: [u8; 18] = [
-    0x70, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x0A,
-    0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+    0x70, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
     0x00, 0x00,
 ];
 
@@ -74,7 +72,9 @@ pub struct MscState {
 
 impl MscState {
     pub const fn new() -> Self {
-        Self { last_sense: SENSE_OK }
+        Self {
+            last_sense: SENSE_OK,
+        }
     }
 }
 
@@ -98,7 +98,11 @@ impl<'d, D: Driver<'d>> MscClass<'d, D> {
         let read_ep = alt.endpoint_bulk_out(None, max_packet_size);
         let write_ep = alt.endpoint_bulk_in(None, max_packet_size);
 
-        Self { read_ep, write_ep, state }
+        Self {
+            read_ep,
+            write_ep,
+            state,
+        }
     }
 
     /// Run the MSC class forever, serving block device requests.
@@ -127,7 +131,8 @@ impl<'d, D: Driver<'d>> MscClass<'d, D> {
                 }
 
                 let tag = u32::from_le_bytes([cbw_buf[4], cbw_buf[5], cbw_buf[6], cbw_buf[7]]);
-                let transfer_len = u32::from_le_bytes([cbw_buf[8], cbw_buf[9], cbw_buf[10], cbw_buf[11]]);
+                let transfer_len =
+                    u32::from_le_bytes([cbw_buf[8], cbw_buf[9], cbw_buf[10], cbw_buf[11]]);
                 let flags = cbw_buf[12]; // bit 7: 1=device-to-host, 0=host-to-device
                 let _lun = cbw_buf[13] & 0x0F;
                 let cb_len = (cbw_buf[14] & 0x1F) as usize;
@@ -182,7 +187,7 @@ impl<'d, D: Driver<'d>> MscClass<'d, D> {
                 resp[1] = 0x80; // removable
                 resp[2] = 0x02; // SPC-2
                 resp[3] = 0x02; // response data format
-                resp[4] = 31;   // additional length
+                resp[4] = 31; // additional length
                 // Vendor (bytes 8-15), Product (16-31), Rev (32-35)
                 resp[8..16].copy_from_slice(b"CyberEgg");
                 resp[16..32].copy_from_slice(b"FAT12 Storage   ");
@@ -214,9 +219,7 @@ impl<'d, D: Driver<'d>> MscClass<'d, D> {
                 (CSW_STATUS_PASSED, transfer_len - len as u32)
             }
 
-            SCSI_PREVENT_ALLOW_MEDIUM_REMOVAL => {
-                (CSW_STATUS_PASSED, 0)
-            }
+            SCSI_PREVENT_ALLOW_MEDIUM_REMOVAL => (CSW_STATUS_PASSED, 0),
 
             SCSI_READ_10 if direction_in => {
                 if cb.len() < 10 {

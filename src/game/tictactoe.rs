@@ -8,12 +8,11 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use embedded_graphics::{
-    mono_font::{ascii::FONT_7X13_BOLD, MonoTextStyle},
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle, Line},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, TriColor, WHITE};
 
@@ -30,7 +29,7 @@ const PAD: i32 = 6;
 // Cell values stored in BOARD[0..9]:
 const EMPTY: u8 = 0;
 const PLAYER: u8 = 1; // X
-const AI: u8 = 2;     // O
+const AI: u8 = 2; // O
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -41,9 +40,15 @@ static CURSOR: AtomicU8 = AtomicU8::new(4);
 /// Board cells packed into two u32s wouldn't work nicely; use 9 AtomicU8s.
 /// Index: 0=top-left, 1=top-mid, 2=top-right, 3=mid-left, ... 8=bot-right.
 static BOARD: [AtomicU8; 9] = [
-    AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
-    AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
-    AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
 ];
 /// Game result: 0 = in progress, 1 = player won, 2 = AI won, 3 = draw.
 static RESULT: AtomicU8 = AtomicU8::new(0);
@@ -75,22 +80,30 @@ pub fn close() {
 
 pub fn cursor_up() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c >= 3 { CURSOR.store(c - 3, Ordering::Relaxed); }
+    if c >= 3 {
+        CURSOR.store(c - 3, Ordering::Relaxed);
+    }
 }
 
 pub fn cursor_down() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c <= 5 { CURSOR.store(c + 3, Ordering::Relaxed); }
+    if c <= 5 {
+        CURSOR.store(c + 3, Ordering::Relaxed);
+    }
 }
 
 pub fn cursor_left() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c % 3 > 0 { CURSOR.store(c - 1, Ordering::Relaxed); }
+    if c % 3 > 0 {
+        CURSOR.store(c - 1, Ordering::Relaxed);
+    }
 }
 
 pub fn cursor_right() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c % 3 < 2 { CURSOR.store(c + 1, Ordering::Relaxed); }
+    if c % 3 < 2 {
+        CURSOR.store(c + 1, Ordering::Relaxed);
+    }
 }
 
 /// Player places their mark. Returns true if the game ended (win/draw).
@@ -107,11 +120,17 @@ pub fn place() -> bool {
         return true;
     }
 
-    if !PLAYER_TURN.load(Ordering::Relaxed) { return false; }
+    if !PLAYER_TURN.load(Ordering::Relaxed) {
+        return false;
+    }
 
     let pos = CURSOR.load(Ordering::Relaxed) as usize;
-    if pos >= 9 { return false; }
-    if BOARD[pos].load(Ordering::Relaxed) != EMPTY { return false; }
+    if pos >= 9 {
+        return false;
+    }
+    if BOARD[pos].load(Ordering::Relaxed) != EMPTY {
+        return false;
+    }
 
     // Player move.
     BOARD[pos].store(PLAYER, Ordering::Relaxed);
@@ -148,9 +167,14 @@ fn read_board() -> [u8; 9] {
 fn check_board() -> Option<u8> {
     let b = read_board();
     const LINES: [[usize; 3]; 8] = [
-        [0,1,2], [3,4,5], [6,7,8], // rows
-        [0,3,6], [1,4,7], [2,5,8], // cols
-        [0,4,8], [2,4,6],          // diags
+        [0, 1, 2],
+        [3, 4, 5],
+        [6, 7, 8], // rows
+        [0, 3, 6],
+        [1, 4, 7],
+        [2, 5, 8], // cols
+        [0, 4, 8],
+        [2, 4, 6], // diags
     ];
     for line in &LINES {
         let a = b[line[0]];
@@ -222,9 +246,14 @@ fn minimax(board: &[u8; 9], is_ai: bool, depth: u8) -> i8 {
 
 fn winner(board: &[u8; 9]) -> Option<u8> {
     const LINES: [[usize; 3]; 8] = [
-        [0,1,2], [3,4,5], [6,7,8],
-        [0,3,6], [1,4,7], [2,5,8],
-        [0,4,8], [2,4,6],
+        [0, 1, 2],
+        [3, 4, 5],
+        [6, 7, 8],
+        [0, 3, 6],
+        [1, 4, 7],
+        [2, 5, 8],
+        [0, 4, 8],
+        [2, 4, 6],
     ];
     for line in &LINES {
         let a = board[line[0]];
@@ -258,13 +287,17 @@ where
         Line::new(
             Point::new(BOARD_X, offset),
             Point::new(BOARD_X + 3 * CELL, offset),
-        ).into_styled(grid_style).draw(display)?;
+        )
+        .into_styled(grid_style)
+        .draw(display)?;
         // Vertical.
         let offset_x = BOARD_X + i as i32 * CELL;
         Line::new(
             Point::new(offset_x, BOARD_Y),
             Point::new(offset_x, BOARD_Y + 3 * CELL),
-        ).into_styled(grid_style).draw(display)?;
+        )
+        .into_styled(grid_style)
+        .draw(display)?;
     }
 
     // Draw marks and cursor.
@@ -303,8 +336,7 @@ where
         3 => "Draw! +inspired",
         _ => "Your turn (X)",
     };
-    Text::with_text_style(msg, Point::new(76, 134), font, centered)
-        .draw(display)?;
+    Text::with_text_style(msg, Point::new(76, 134), font, centered).draw(display)?;
 
     Ok(())
 }
@@ -316,9 +348,11 @@ where
 {
     let style = PrimitiveStyle::with_stroke(crate::RED, 3);
     Line::new(Point::new(x, y), Point::new(x + size, y + size))
-        .into_styled(style).draw(display)?;
+        .into_styled(style)
+        .draw(display)?;
     Line::new(Point::new(x + size, y), Point::new(x, y + size))
-        .into_styled(style).draw(display)?;
+        .into_styled(style)
+        .draw(display)?;
     Ok(())
 }
 

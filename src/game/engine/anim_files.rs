@@ -23,26 +23,26 @@ use super::to_display::DisplayAnim;
 /// Map a DisplayAnim to its animation ID byte.
 fn anim_id(anim: DisplayAnim) -> u8 {
     match anim {
-        DisplayAnim::Idle              => 0x01,
-        DisplayAnim::Happy             => 0x02,
-        DisplayAnim::CriticalSick      => 0x03,
-        DisplayAnim::CriticalTired     => 0x04,
-        DisplayAnim::CriticalHungry    => 0x05,
-        DisplayAnim::CriticalDrained   => 0x06,
-        DisplayAnim::WarningSick       => 0x07,
-        DisplayAnim::WarningTired      => 0x08,
-        DisplayAnim::WarningHungry     => 0x09,
-        DisplayAnim::WarningDrained    => 0x0A,
-        DisplayAnim::WarningMiserable  => 0x0B,
-        DisplayAnim::Feeding           => 0x0C,
-        DisplayAnim::Healing           => 0x0D,
-        DisplayAnim::Relaxing          => 0x0E,
-        DisplayAnim::Playing           => 0x0F,
-        DisplayAnim::Sleeping          => 0x10,
-        DisplayAnim::Leaving { .. }    => 0x11,
-        DisplayAnim::Gone              => 0x12,
-        DisplayAnim::Hibernating       => 0x13,
-        DisplayAnim::Hatching { .. }   => 0x14,
+        DisplayAnim::Idle => 0x01,
+        DisplayAnim::Happy => 0x02,
+        DisplayAnim::CriticalSick => 0x03,
+        DisplayAnim::CriticalTired => 0x04,
+        DisplayAnim::CriticalHungry => 0x05,
+        DisplayAnim::CriticalDrained => 0x06,
+        DisplayAnim::WarningSick => 0x07,
+        DisplayAnim::WarningTired => 0x08,
+        DisplayAnim::WarningHungry => 0x09,
+        DisplayAnim::WarningDrained => 0x0A,
+        DisplayAnim::WarningMiserable => 0x0B,
+        DisplayAnim::Feeding => 0x0C,
+        DisplayAnim::Healing => 0x0D,
+        DisplayAnim::Relaxing => 0x0E,
+        DisplayAnim::Playing => 0x0F,
+        DisplayAnim::Sleeping => 0x10,
+        DisplayAnim::Leaving { .. } => 0x11,
+        DisplayAnim::Gone => 0x12,
+        DisplayAnim::Hibernating => 0x13,
+        DisplayAnim::Hatching { .. } => 0x14,
     }
 }
 
@@ -50,58 +50,58 @@ fn anim_id(anim: DisplayAnim) -> u8 {
 
 /// Frame counts for snail animations.
 const SNAIL_FRAMES: [u8; 21] = [
-    0,  // 0x00: start screen (not used here)
-    1,  // 0x01: idle
-    2,  // 0x02: happy
-    1,  // 0x03: critical sick
-    1,  // 0x04: critical tired
-    1,  // 0x05: critical hungry
-    1,  // 0x06: critical drained
-    1,  // 0x07: warning sick
-    1,  // 0x08: warning tired
-    1,  // 0x09: warning hungry
-    1,  // 0x0A: warning drained
-    1,  // 0x0B: warning miserable
-    2,  // 0x0C: feeding
-    2,  // 0x0D: healing
-    1,  // 0x0E: relaxing
-    1,  // 0x0F: playing
-    2,  // 0x10: sleeping
-    1,  // 0x11: leaving
-    1,  // 0x12: gone
-    1,  // 0x13: hibernating
-    4,  // 0x14: hatching
+    0, // 0x00: start screen (not used here)
+    1, // 0x01: idle
+    2, // 0x02: happy
+    1, // 0x03: critical sick
+    1, // 0x04: critical tired
+    1, // 0x05: critical hungry
+    1, // 0x06: critical drained
+    1, // 0x07: warning sick
+    1, // 0x08: warning tired
+    1, // 0x09: warning hungry
+    1, // 0x0A: warning drained
+    1, // 0x0B: warning miserable
+    2, // 0x0C: feeding
+    2, // 0x0D: healing
+    1, // 0x0E: relaxing
+    1, // 0x0F: playing
+    2, // 0x10: sleeping
+    1, // 0x11: leaving
+    1, // 0x12: gone
+    1, // 0x13: hibernating
+    4, // 0x14: hatching
 ];
 
 /// Frame counts for cat animations.
 const CAT_FRAMES: [u8; 21] = [
-    0,  // 0x00: start screen
-    2,  // 0x01: idle
-    2,  // 0x02: happy
-    1,  // 0x03: critical sick
-    2,  // 0x04: critical tired
-    2,  // 0x05: critical hungry
-    2,  // 0x06: critical drained
-    1,  // 0x07: warning sick
-    2,  // 0x08: warning tired
-    2,  // 0x09: warning hungry
-    2,  // 0x0A: warning drained
-    2,  // 0x0B: warning miserable
-    2,  // 0x0C: feeding
-    2,  // 0x0D: healing
-    2,  // 0x0E: relaxing
-    4,  // 0x0F: playing
-    2,  // 0x10: sleeping
-    1,  // 0x11: leaving
-    1,  // 0x12: gone
-    1,  // 0x13: hibernating
-    4,  // 0x14: hatching
+    0, // 0x00: start screen
+    2, // 0x01: idle
+    2, // 0x02: happy
+    1, // 0x03: critical sick
+    2, // 0x04: critical tired
+    2, // 0x05: critical hungry
+    2, // 0x06: critical drained
+    1, // 0x07: warning sick
+    2, // 0x08: warning tired
+    2, // 0x09: warning hungry
+    2, // 0x0A: warning drained
+    2, // 0x0B: warning miserable
+    2, // 0x0C: feeding
+    2, // 0x0D: healing
+    2, // 0x0E: relaxing
+    4, // 0x0F: playing
+    2, // 0x10: sleeping
+    1, // 0x11: leaving
+    1, // 0x12: gone
+    1, // 0x13: hibernating
+    4, // 0x14: hatching
 ];
 
 fn frames_for(kind: PetKind) -> &'static [u8; 21] {
     match kind {
         PetKind::Snail => &SNAIL_FRAMES,
-        PetKind::Cat   => &CAT_FRAMES,
+        PetKind::Cat => &CAT_FRAMES,
     }
 }
 
@@ -117,11 +117,17 @@ pub fn build_filename(kind: PetKind, anim: DisplayAnim, frame: u8) -> [u8; 11] {
     let aa = anim_id(anim);
     let ff = frame;
     [
-        HEX[(pp >> 4) as usize], HEX[(pp & 0xF) as usize],
-        HEX[(aa >> 4) as usize], HEX[(aa & 0xF) as usize],
-        HEX[(ff >> 4) as usize], HEX[(ff & 0xF) as usize],
-        b' ', b' ',
-        b'P', b'C', b'X',
+        HEX[(pp >> 4) as usize],
+        HEX[(pp & 0xF) as usize],
+        HEX[(aa >> 4) as usize],
+        HEX[(aa & 0xF) as usize],
+        HEX[(ff >> 4) as usize],
+        HEX[(ff & 0xF) as usize],
+        b' ',
+        b' ',
+        b'P',
+        b'C',
+        b'X',
     ]
 }
 

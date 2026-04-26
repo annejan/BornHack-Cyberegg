@@ -14,73 +14,165 @@ trait Policy {
     fn name(&self) -> &'static str;
     fn act(&self, state: &mut GameState, tick: u32);
     /// Next tick this policy wants to check.  Default: every tick.
-    fn next_check(&self, current_tick: u32) -> u32 { current_tick + 1 }
+    fn next_check(&self, current_tick: u32) -> u32 {
+        current_tick + 1
+    }
 }
 
 /// Shared optimal action logic used by several policies.
 fn optimal_act(state: &mut GameState) {
-    if state.phase != Phase::Active { return; }
-
-    if state.is_sleeping {
-        if state.tired < 13107 { state.wake(); }
+    if state.phase != Phase::Active {
         return;
     }
 
-    if state.tired > 45874 { state.sleep(); return; }
-    if state.hunger > 32768 { state.feed(); return; }
-    if state.sick > 32768 { state.heal(); return; }
-    if state.drained > 32768 { state.relax(); return; }
-    if state.miserable > 32768 { state.play(); return; }
-    if state.hunger > 16384 { state.feed(); return; }
+    if state.is_sleeping {
+        if state.tired < 13107 {
+            state.wake();
+        }
+        return;
+    }
+
+    if state.tired > 45874 {
+        state.sleep();
+        return;
+    }
+    if state.hunger > 32768 {
+        state.feed();
+        return;
+    }
+    if state.sick > 32768 {
+        state.heal();
+        return;
+    }
+    if state.drained > 32768 {
+        state.relax();
+        return;
+    }
+    if state.miserable > 32768 {
+        state.play();
+        return;
+    }
+    if state.hunger > 16384 {
+        state.feed();
+        return;
+    }
 }
 
 // ── Perfect: checks every tick ──────────────────────────────────────────
 
 struct PerfectPolicy;
 impl Policy for PerfectPolicy {
-    fn name(&self) -> &'static str { "perfect" }
-    fn act(&self, state: &mut GameState, _tick: u32) { optimal_act(state); }
+    fn name(&self) -> &'static str {
+        "perfect"
+    }
+    fn act(&self, state: &mut GameState, _tick: u32) {
+        optimal_act(state);
+    }
 }
 
 // ── Perfect minus one action ────────────────────────────────────────────
 
 struct PerfectNoFeed;
 impl Policy for PerfectNoFeed {
-    fn name(&self) -> &'static str { "perfect_no_feed" }
+    fn name(&self) -> &'static str {
+        "perfect_no_feed"
+    }
     fn act(&self, state: &mut GameState, _tick: u32) {
-        if state.phase != Phase::Active { return; }
-        if state.is_sleeping { if state.tired < 13107 { state.wake(); } return; }
-        if state.tired > 45874 { state.sleep(); return; }
-        if state.sick > 32768 { state.heal(); return; }
-        if state.drained > 32768 { state.relax(); return; }
-        if state.miserable > 32768 { state.play(); return; }
+        if state.phase != Phase::Active {
+            return;
+        }
+        if state.is_sleeping {
+            if state.tired < 13107 {
+                state.wake();
+            }
+            return;
+        }
+        if state.tired > 45874 {
+            state.sleep();
+            return;
+        }
+        if state.sick > 32768 {
+            state.heal();
+            return;
+        }
+        if state.drained > 32768 {
+            state.relax();
+            return;
+        }
+        if state.miserable > 32768 {
+            state.play();
+            return;
+        }
     }
 }
 
 struct PerfectNoHeal;
 impl Policy for PerfectNoHeal {
-    fn name(&self) -> &'static str { "perfect_no_heal" }
+    fn name(&self) -> &'static str {
+        "perfect_no_heal"
+    }
     fn act(&self, state: &mut GameState, _tick: u32) {
-        if state.phase != Phase::Active { return; }
-        if state.is_sleeping { if state.tired < 13107 { state.wake(); } return; }
-        if state.tired > 45874 { state.sleep(); return; }
-        if state.hunger > 32768 { state.feed(); return; }
-        if state.drained > 32768 { state.relax(); return; }
-        if state.miserable > 32768 { state.play(); return; }
-        if state.hunger > 16384 { state.feed(); return; }
+        if state.phase != Phase::Active {
+            return;
+        }
+        if state.is_sleeping {
+            if state.tired < 13107 {
+                state.wake();
+            }
+            return;
+        }
+        if state.tired > 45874 {
+            state.sleep();
+            return;
+        }
+        if state.hunger > 32768 {
+            state.feed();
+            return;
+        }
+        if state.drained > 32768 {
+            state.relax();
+            return;
+        }
+        if state.miserable > 32768 {
+            state.play();
+            return;
+        }
+        if state.hunger > 16384 {
+            state.feed();
+            return;
+        }
     }
 }
 
 struct PerfectNoRest;
 impl Policy for PerfectNoRest {
-    fn name(&self) -> &'static str { "perfect_no_rest" }
+    fn name(&self) -> &'static str {
+        "perfect_no_rest"
+    }
     fn act(&self, state: &mut GameState, _tick: u32) {
-        if state.phase != Phase::Active { return; }
-        if state.is_sleeping { state.wake(); return; }
-        if state.hunger > 32768 { state.feed(); return; }
-        if state.sick > 32768 { state.heal(); return; }
-        if state.miserable > 32768 { state.play(); return; }
-        if state.hunger > 16384 { state.feed(); return; }
+        if state.phase != Phase::Active {
+            return;
+        }
+        if state.is_sleeping {
+            state.wake();
+            return;
+        }
+        if state.hunger > 32768 {
+            state.feed();
+            return;
+        }
+        if state.sick > 32768 {
+            state.heal();
+            return;
+        }
+        if state.miserable > 32768 {
+            state.play();
+            return;
+        }
+        if state.hunger > 16384 {
+            state.feed();
+            return;
+        }
     }
 }
 
@@ -92,11 +184,19 @@ struct AttentivePolicy {
 }
 
 impl Policy for AttentivePolicy {
-    fn name(&self) -> &'static str { self.label }
-    fn act(&self, state: &mut GameState, _tick: u32) { optimal_act(state); }
+    fn name(&self) -> &'static str {
+        self.label
+    }
+    fn act(&self, state: &mut GameState, _tick: u32) {
+        optimal_act(state);
+    }
     fn next_check(&self, tick: u32) -> u32 {
         let rem = tick % self.interval;
-        if rem == 0 { tick + self.interval } else { tick + self.interval - rem }
+        if rem == 0 {
+            tick + self.interval
+        } else {
+            tick + self.interval - rem
+        }
     }
 }
 
@@ -104,14 +204,33 @@ impl Policy for AttentivePolicy {
 
 struct NightOwlPolicy;
 impl Policy for NightOwlPolicy {
-    fn name(&self) -> &'static str { "night_owl" }
+    fn name(&self) -> &'static str {
+        "night_owl"
+    }
     fn act(&self, state: &mut GameState, _tick: u32) {
-        if state.phase != Phase::Active { return; }
-        if state.is_sleeping { state.wake(); return; }
-        if state.hunger > 32768 { state.feed(); return; }
-        if state.sick > 32768 { state.heal(); return; }
-        if state.drained > 32768 { state.relax(); return; }
-        if state.miserable > 32768 { state.play(); return; }
+        if state.phase != Phase::Active {
+            return;
+        }
+        if state.is_sleeping {
+            state.wake();
+            return;
+        }
+        if state.hunger > 32768 {
+            state.feed();
+            return;
+        }
+        if state.sick > 32768 {
+            state.heal();
+            return;
+        }
+        if state.drained > 32768 {
+            state.relax();
+            return;
+        }
+        if state.miserable > 32768 {
+            state.play();
+            return;
+        }
     }
     fn next_check(&self, tick: u32) -> u32 {
         let rem = tick % 6;
@@ -123,21 +242,40 @@ impl Policy for NightOwlPolicy {
 
 struct AbsentPolicy;
 impl Policy for AbsentPolicy {
-    fn name(&self) -> &'static str { "absent" }
+    fn name(&self) -> &'static str {
+        "absent"
+    }
     fn act(&self, _state: &mut GameState, _tick: u32) {}
-    fn next_check(&self, _tick: u32) -> u32 { u32::MAX }
+    fn next_check(&self, _tick: u32) -> u32 {
+        u32::MAX
+    }
 }
 
 // ── Feed and sleep only ─────────────────────────────────────────────────
 
 struct FeedAndSleepPolicy;
 impl Policy for FeedAndSleepPolicy {
-    fn name(&self) -> &'static str { "feed_and_sleep" }
+    fn name(&self) -> &'static str {
+        "feed_and_sleep"
+    }
     fn act(&self, state: &mut GameState, _tick: u32) {
-        if state.phase != Phase::Active { return; }
-        if state.is_sleeping { if state.tired < 13107 { state.wake(); } return; }
-        if state.tired > 45874 { state.sleep(); return; }
-        if state.hunger > 32768 { state.feed(); return; }
+        if state.phase != Phase::Active {
+            return;
+        }
+        if state.is_sleeping {
+            if state.tired < 13107 {
+                state.wake();
+            }
+            return;
+        }
+        if state.tired > 45874 {
+            state.sleep();
+            return;
+        }
+        if state.hunger > 32768 {
+            state.feed();
+            return;
+        }
     }
     fn next_check(&self, tick: u32) -> u32 {
         let rem = tick % 90;
@@ -149,13 +287,31 @@ impl Policy for FeedAndSleepPolicy {
 
 struct FeedSleepHealPolicy;
 impl Policy for FeedSleepHealPolicy {
-    fn name(&self) -> &'static str { "feed_sleep_heal" }
+    fn name(&self) -> &'static str {
+        "feed_sleep_heal"
+    }
     fn act(&self, state: &mut GameState, _tick: u32) {
-        if state.phase != Phase::Active { return; }
-        if state.is_sleeping { if state.tired < 13107 { state.wake(); } return; }
-        if state.tired > 45874 { state.sleep(); return; }
-        if state.hunger > 32768 { state.feed(); return; }
-        if state.sick > 32768 { state.heal(); return; }
+        if state.phase != Phase::Active {
+            return;
+        }
+        if state.is_sleeping {
+            if state.tired < 13107 {
+                state.wake();
+            }
+            return;
+        }
+        if state.tired > 45874 {
+            state.sleep();
+            return;
+        }
+        if state.hunger > 32768 {
+            state.feed();
+            return;
+        }
+        if state.sick > 32768 {
+            state.heal();
+            return;
+        }
     }
     fn next_check(&self, tick: u32) -> u32 {
         let rem = tick % 90;
@@ -234,9 +390,18 @@ fn main() {
         Box::new(PerfectNoFeed),
         Box::new(PerfectNoHeal),
         Box::new(PerfectNoRest),
-        Box::new(AttentivePolicy { label: "attentive_15min", interval: 90 }),
-        Box::new(AttentivePolicy { label: "casual_30min", interval: 180 }),
-        Box::new(AttentivePolicy { label: "busy_1hr", interval: 360 }),
+        Box::new(AttentivePolicy {
+            label: "attentive_15min",
+            interval: 90,
+        }),
+        Box::new(AttentivePolicy {
+            label: "casual_30min",
+            interval: 180,
+        }),
+        Box::new(AttentivePolicy {
+            label: "busy_1hr",
+            interval: 360,
+        }),
         Box::new(NightOwlPolicy),
         Box::new(AbsentPolicy),
         Box::new(FeedAndSleepPolicy),
@@ -245,7 +410,18 @@ fn main() {
 
     println!(
         "{:<22} {:>4} {:>7} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7}",
-        "Profile", "Left", "Day", "Ticks", "Steps", "Hunger", "Tired", "Miser", "Drained", "Sick", "Attn#", "Attn/h"
+        "Profile",
+        "Left",
+        "Day",
+        "Ticks",
+        "Steps",
+        "Hunger",
+        "Tired",
+        "Miser",
+        "Drained",
+        "Sick",
+        "Attn#",
+        "Attn/h"
     );
     println!("{}", "─".repeat(110));
 

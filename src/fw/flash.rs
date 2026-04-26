@@ -8,8 +8,8 @@
 //! (ekv and USB MSC) are serialized automatically.
 
 use embassy_nrf::{Peri, bind_interrupts, peripherals, qspi};
-use embassy_sync::mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
 
 // ---------------------------------------------------------------------------
 // Flash geometry
@@ -53,10 +53,8 @@ bind_interrupts!(struct QspiIrqs {
 #[repr(C, align(4))]
 struct AlignedBuf([u8; PAGE_SIZE]);
 
-static FLASH: Mutex<
-    CriticalSectionRawMutex,
-    Option<(qspi::Qspi<'static>, AlignedBuf)>,
-> = Mutex::new(None);
+static FLASH: Mutex<CriticalSectionRawMutex, Option<(qspi::Qspi<'static>, AlignedBuf)>> =
+    Mutex::new(None);
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -89,7 +87,9 @@ pub async fn init(
 
     defmt::info!(
         "QSPI flash JEDEC ID: {:02X} {:02X} {:02X}",
-        jedec[0], jedec[1], jedec[2],
+        jedec[0],
+        jedec[1],
+        jedec[2],
     );
 
     // Safety: init() is called from main() which never returns.
@@ -120,7 +120,8 @@ pub async fn read(addr: u32, data: &mut [u8]) -> Result<(), FlashError> {
         // Align address down to 4 bytes.
         let aligned_addr = flash_addr & !3;
         let skip = (flash_addr - aligned_addr) as usize;
-        // Read enough to cover skip + remaining, rounded up to 4 bytes, capped to buffer.
+        // Read enough to cover skip + remaining, rounded up to 4 bytes, capped to
+        // buffer.
         let raw_len = ((skip + remaining + 3) & !3).min(PAGE_SIZE);
         qspi.read(aligned_addr, &mut buf.0[..raw_len])
             .await

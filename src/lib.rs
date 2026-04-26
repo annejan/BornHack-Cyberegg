@@ -17,25 +17,24 @@ pub enum ScreenError {
 pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
-pub mod ui;
 pub mod menu;
 pub mod text_entry;
+pub mod ui;
 use core::cell::RefCell;
-pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
-
-use core::result::{Result, Result::Ok};
-use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
+use core::result::Result;
+use core::result::Result::Ok;
 #[cfg(feature = "embassy-base")]
 use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
+
 #[cfg(feature = "embassy-base")]
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::{
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 #[cfg(feature = "embassy-base")]
 use heapless::format;
+pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 // Embassy: re-export Color from ssd1675 hardware driver
 #[cfg(feature = "embassy-base")]
 mod embassy_colors {
@@ -50,7 +49,8 @@ pub use embassy_colors::*;
 // Simulator: define TriColor locally
 #[cfg(feature = "simulator")]
 mod tricolor {
-    use embedded_graphics::pixelcolor::{Rgb888, raw::RawU2};
+    use embedded_graphics::pixelcolor::Rgb888;
+    use embedded_graphics::pixelcolor::raw::RawU2;
     use embedded_graphics::prelude::PixelColor;
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,15 +79,13 @@ mod tricolor {
     }
 }
 
-#[cfg(feature = "simulator")]
-pub use tricolor::{BLACK, RED, TriColor, WHITE};
-
 // Conditional imports based on feature
 #[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 #[cfg(feature = "embassy-base")]
 use embassy_sync::signal::Signal;
-
+#[cfg(feature = "simulator")]
+pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
@@ -183,20 +181,24 @@ pub static BLE_DISABLED_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::n
 #[cfg(feature = "embassy-base")]
 pub static CLEAR_BONDS_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-// Re-export mesh types and statics so existing `crate::SomeType` paths keep working.
+// Re-export mesh types and statics so existing `crate::SomeType` paths keep
+// working.
 #[cfg(feature = "mesh")]
 pub use fw::mesh::*;
 
-/// Active BLE pairing passkey (6-digit, 0–999999). `u32::MAX` means no pairing in progress.
+/// Active BLE pairing passkey (6-digit, 0–999999). `u32::MAX` means no pairing
+/// in progress.
 pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Set to `true` while a BLE companion is connected, `false` on disconnect.
 pub static BLE_CONNECTED: AtomicBool = AtomicBool::new(false);
 
-/// Set to `true` when an unread PM arrives; cleared when the PM screen is viewed.
+/// Set to `true` when an unread PM arrives; cleared when the PM screen is
+/// viewed.
 pub static PM_UNREAD: AtomicBool = AtomicBool::new(false);
 
-/// Fired by the BLE task whenever the pairing passkey changes (new passkey or cleared).
+/// Fired by the BLE task whenever the pairing passkey changes (new passkey or
+/// cleared).
 #[cfg(feature = "embassy-base")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
@@ -243,9 +245,10 @@ pub fn unix_now() -> Option<u32> {
     })
 }
 
-/// MeshCore node name cached from KV for synchronous access by the display renderer.
-/// Populated by the BLE task at startup (after reading from flash) and on every
-/// SET_ADVERT_NAME update.  Empty until the BLE task has initialized.
+/// MeshCore node name cached from KV for synchronous access by the display
+/// renderer. Populated by the BLE task at startup (after reading from flash)
+/// and on every SET_ADVERT_NAME update.  Empty until the BLE task has
+/// initialized.
 #[cfg(feature = "embassy-base")]
 pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31>>> =
     Mutex::new(RefCell::new(heapless::String::new()));
@@ -266,7 +269,8 @@ pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
+/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is
+/// ignored.
 #[cfg(feature = "embassy-base")]
 pub fn update_node_name(name: &[u8]) {
     if let Ok(s) = core::str::from_utf8(name) {
@@ -278,7 +282,8 @@ pub fn update_node_name(name: &[u8]) {
     }
 }
 
-/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
+/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is
+/// ignored.
 #[cfg(feature = "simulator")]
 pub fn update_node_name(name: &[u8]) {
     if let Ok(s) = core::str::from_utf8(name) {
@@ -346,8 +351,8 @@ macro_rules! with_display_state_mut {
 // Position of the animated circle
 
 // Re-export screen indices from ScreenId for convenience.
-// The game screen is always at index 0 but disabled when the game feature is off.
-// Navigation automatically skips disabled screens.
+// The game screen is always at index 0 but disabled when the game feature is
+// off. Navigation automatically skips disabled screens.
 pub use menu::ScreenId;
 pub const SCREEN_GAME: u8 = ScreenId::Game as u8;
 pub const SCREEN_MAIN: u8 = ScreenId::Main as u8;
@@ -419,7 +424,8 @@ where
 /// Draw the BLE passkey PIN dialog centred on screen.
 ///
 /// Does nothing when no pairing is in progress (`BLE_PASSKEY == u32::MAX`).
-/// The double-border box signals urgency and renders on top of all other content.
+/// The double-border box signals urgency and renders on top of all other
+/// content.
 #[cfg(feature = "embassy-base")]
 fn draw_ble_pin_overlay<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -443,13 +449,7 @@ where
     Rectangle::new(Point::new(24, 52), Size::new(104, 54))
         .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
         .draw(display)?;
-    Text::with_text_style(
-        "BT PIN:",
-        Point::new(76, 66),
-        ui::TEXT_BLACK,
-        centered,
-    )
-    .draw(display)?;
+    Text::with_text_style("BT PIN:", Point::new(76, 66), ui::TEXT_BLACK, centered).draw(display)?;
     let code_str = format!(8; "{:06}", passkey_val).unwrap();
     Text::with_text_style(
         &code_str,
@@ -475,8 +475,10 @@ where
 /// Returns `(body_y_start, body_y_end)` — the vertical pixel range available
 /// for screen-specific content.
 ///
-/// - `header`: if `Some`, draws bold title (left) + battery % (right) + divider.
-/// - `footer`: if `Some`, draws bold text centered in a bottom bar + divider above.
+/// - `header`: if `Some`, draws bold title (left) + battery % (right) +
+///   divider.
+/// - `footer`: if `Some`, draws bold text centered in a bottom bar + divider
+///   above.
 pub fn draw_frame<D>(
     display: &mut D,
     header: Option<(&str, &u8)>,
@@ -488,7 +490,8 @@ where
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     let body_start = if let Some((title, bat_prc)) = header {
-        Text::with_text_style(title, Point::new(4, 14), ui::TEXT_BOLD_BLACK, bottom).draw(display)?;
+        Text::with_text_style(title, Point::new(4, 14), ui::TEXT_BOLD_BLACK, bottom)
+            .draw(display)?;
         draw_battery_icon(display, 128, 2, *bat_prc)?;
         Rectangle::new(Point::new(0, 16), Size::new(152, 1))
             .into_styled(PrimitiveStyle::with_fill(BLACK))
@@ -754,7 +757,13 @@ where
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style("Channels (no mesh)", Point::new(76, 76), ui::TEXT_BLACK, center).draw(display)?;
+    Text::with_text_style(
+        "Channels (no mesh)",
+        Point::new(76, 76),
+        ui::TEXT_BLACK,
+        center,
+    )
+    .draw(display)?;
     Ok(())
 }
 
@@ -800,7 +809,8 @@ where
                     4 => "Sensor",
                     _ => "Unknown role",
                 };
-                Text::with_text_style(role, Point::new(4, 28), style_small, bottom).draw(display)?;
+                Text::with_text_style(role, Point::new(4, 28), style_small, bottom)
+                    .draw(display)?;
 
                 // Divider
                 Rectangle::new(Point::new(0, 30), Size::new(152, 1))
@@ -824,7 +834,11 @@ where
                 } else {
                     "Sig: INVALID"
                 };
-                let sig_style = if adv.sig_ok { ui::TEXT_BLACK } else { ui::TEXT_RED };
+                let sig_style = if adv.sig_ok {
+                    ui::TEXT_BLACK
+                } else {
+                    ui::TEXT_RED
+                };
                 Text::with_text_style(sig_text, Point::new(4, 72), sig_style, bottom)
                     .draw(display)?;
 

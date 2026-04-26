@@ -16,16 +16,12 @@
 //! exactly where the fill ends, so a glyph straddling the boundary
 //! shows half-and-half but stays readable on both halves.
 
-use embedded_graphics::{
-    draw_target::DrawTargetExt,
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_7X13, FONT_7X13_BOLD},
-    },
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::draw_target::DrawTargetExt;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::{FONT_7X13, FONT_7X13_BOLD};
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, TriColor, WHITE};
 
@@ -34,9 +30,9 @@ use crate::{BLACK, TriColor, WHITE};
 /// * `label_pos` — top-left of the label text (baseline `Top`).
 /// * `bar_origin` — top-left of the bar including the 1-px border.
 /// * `bar_size` — outer dimensions of the bar (border included).
-/// * `fill_color` — colour of the filled portion (usually `BLACK`,
-///   but the live stats view passes `RED` for values below 25 % so
-///   critical stats stand out).
+/// * `fill_color` — colour of the filled portion (usually `BLACK`, but the live
+///   stats view passes `RED` for values below 25 % so critical stats stand
+///   out).
 ///
 /// The bar must be at least 4 × 4 px or the inner fill region
 /// degenerates; the percentage label assumes the inner height is at

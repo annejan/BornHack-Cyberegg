@@ -1,0 +1,30 @@
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true  # `Foo { x: x }` → `Foo { x }`
+use_try_shorthand        = true  # not really used in this code, but harmless
+unstable_features = true
+
+# This is the big one for your codebase.  Currently `lib.rs` and
+# `ble.rs` have long, manually-grouped use blocks that drift out of
+# sync.  "Module" rolls everything from the same crate root into one
+# nested block.
+imports_granularity = "Module"
+
+# Groups std / external / crate imports into three blocks separated
+# by a blank line.  You already do this by hand in places.
+group_imports = "StdExternalCrate"
+
+# Long doc comments (the `//!` headers in modal.rs, lifecycle.rs,
+# meshcore.rs) regularly run past 100 chars.  This auto-wraps them.
+wrap_comments = true
+
+# Reflows the ASCII tables and code samples in `///` comments to fit.
+format_code_in_doc_comments = true
+
+# Long macro matcher arms get formatted like fn args.
+format_macro_matchers = true
+
+# `(_, _, _)` → `(..)` where unambiguous.
+condense_wildcard_suffixes = true

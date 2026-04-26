@@ -46,7 +46,10 @@ pub async fn load_or_create(kv: KvNamespace) -> DeviceIdentity {
             defmt::info!("MeshCore identity: loaded existing keypair from flash");
         }
         Ok(n) => {
-            defmt::warn!("MeshCore identity: seed in flash has wrong length ({=usize}), regenerating", n);
+            defmt::warn!(
+                "MeshCore identity: seed in flash has wrong length ({=usize}), regenerating",
+                n
+            );
             seed = trng_seed();
             persist_seed(&kv, &seed).await;
         }
@@ -56,7 +59,10 @@ pub async fn load_or_create(kv: KvNamespace) -> DeviceIdentity {
             persist_seed(&kv, &seed).await;
         }
         Err(e) => {
-            defmt::warn!("MeshCore identity: KV read error ({:?}), using ephemeral keypair", e);
+            defmt::warn!(
+                "MeshCore identity: KV read error ({:?}), using ephemeral keypair",
+                e
+            );
             seed = trng_seed();
             // Don't persist — storage may be broken; an ephemeral key is
             // better than a boot loop.
@@ -111,18 +117,18 @@ async fn persist_seed(kv: &KvNamespace, seed: &[u8; 32]) {
 /// because it accesses registers directly without the embassy wrapper.
 pub fn trng_seed() -> [u8; 32] {
     // nRF52840 RNG register offsets (Product Spec §6.19)
-    const RNG_BASE:      u32 = 0x4000_D000;
-    const TASKS_START:   u32 = RNG_BASE + 0x000;
-    const TASKS_STOP:    u32 = RNG_BASE + 0x004;
+    const RNG_BASE: u32 = 0x4000_D000;
+    const TASKS_START: u32 = RNG_BASE + 0x000;
+    const TASKS_STOP: u32 = RNG_BASE + 0x004;
     const EVENTS_VALRDY: u32 = RNG_BASE + 0x100;
-    const CONFIG:        u32 = RNG_BASE + 0x504; // bit 0: DERCEN
-    const VALUE:         u32 = RNG_BASE + 0x508;
+    const CONFIG: u32 = RNG_BASE + 0x504; // bit 0: DERCEN
+    const VALUE: u32 = RNG_BASE + 0x508;
 
     // Safety: valid nRF52840 RNG register addresses, only accessed here
     // during single-threaded startup before any tasks are spawned.
     unsafe {
-        (CONFIG        as *mut u32).write_volatile(1); // DERCEN = 1
-        (TASKS_START   as *mut u32).write_volatile(1);
+        (CONFIG as *mut u32).write_volatile(1); // DERCEN = 1
+        (TASKS_START as *mut u32).write_volatile(1);
 
         let mut seed = [0u8; 32];
         for byte in &mut seed {

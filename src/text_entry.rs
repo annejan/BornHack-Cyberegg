@@ -21,12 +21,11 @@
 
 use core::cell::RefCell;
 
-use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD},
-    prelude::*,
-    primitives::{Circle, PrimitiveStyle, Rectangle, Triangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::menu::ButtonId;
 use crate::{BLACK, TriColor, WHITE};
@@ -115,7 +114,11 @@ impl TextEntry {
         if ch == BKSP {
             self.text.pop();
         } else if self.text.len() < self.max_len as usize {
-            let c = if self.shift { ch.to_ascii_uppercase() } else { ch };
+            let c = if self.shift {
+                ch.to_ascii_uppercase()
+            } else {
+                ch
+            };
             let _ = self.text.push(c);
             self.shift = false;
         }
@@ -275,16 +278,12 @@ impl TextEntry {
             InputState::SpecialPick { cursor } => match btn {
                 ButtonId::Left => {
                     if cursor > 0 {
-                        self.state = InputState::SpecialPick {
-                            cursor: cursor - 1,
-                        };
+                        self.state = InputState::SpecialPick { cursor: cursor - 1 };
                     }
                 }
                 ButtonId::Right => {
                     if (cursor + 1) < SPECIAL_CHARS.len() as u8 {
-                        self.state = InputState::SpecialPick {
-                            cursor: cursor + 1,
-                        };
+                        self.state = InputState::SpecialPick { cursor: cursor + 1 };
                     }
                 }
                 ButtonId::Execute | ButtonId::Fire => {
@@ -299,16 +298,12 @@ impl TextEntry {
             InputState::NumberPick { cursor } => match btn {
                 ButtonId::Left => {
                     if cursor > 0 {
-                        self.state = InputState::NumberPick {
-                            cursor: cursor - 1,
-                        };
+                        self.state = InputState::NumberPick { cursor: cursor - 1 };
                     }
                 }
                 ButtonId::Right => {
                     if (cursor + 1) < NUMBER_CHARS.len() as u8 {
-                        self.state = InputState::NumberPick {
-                            cursor: cursor + 1,
-                        };
+                        self.state = InputState::NumberPick { cursor: cursor + 1 };
                     }
                 }
                 ButtonId::Execute | ButtonId::Fire => {
@@ -326,10 +321,8 @@ impl TextEntry {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
-const FONT: MonoTextStyle<'static, TriColor> =
-    MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-const FONT_INV: MonoTextStyle<'static, TriColor> =
-    MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+const FONT: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+const FONT_INV: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
 
 const CHAR_W: i32 = 7;
 const LINE_H: i32 = 14;
@@ -476,7 +469,10 @@ where
         if byte_end == text.len() && line_str.len() < CHARS_PER_LINE {
             Text::with_text_style(
                 "_",
-                Point::new(4 + line_str.len() as i32 * CHAR_W, y_offset + TEXT_AREA_Y + 2 + i as i32 * LINE_H),
+                Point::new(
+                    4 + line_str.len() as i32 * CHAR_W,
+                    y_offset + TEXT_AREA_Y + 2 + i as i32 * LINE_H,
+                ),
                 FONT,
                 ts,
             )
@@ -629,7 +625,13 @@ where
         Quadrant::Up => draw_arrow_down(display)?,
         Quadrant::Right => draw_arrow_left(display)?,
     }
-    draw_label(display, back_label.0, back_label.2, back_label.3, back_label.1)?;
+    draw_label(
+        display,
+        back_label.0,
+        back_label.2,
+        back_label.3,
+        back_label.1,
+    )?;
 
     // Draw sub-group arrows + labels
     for (i, &(dir, x, y, align)) in dirs.iter().enumerate() {
@@ -696,12 +698,9 @@ where
         let is_sel = i == cursor as usize;
 
         if is_sel {
-            Rectangle::new(
-                Point::new(x - 7, KB_CY - 9),
-                Size::new(14, 18),
-            )
-            .into_styled(PrimitiveStyle::with_fill(BLACK))
-            .draw(display)?;
+            Rectangle::new(Point::new(x - 7, KB_CY - 9), Size::new(14, 18))
+                .into_styled(PrimitiveStyle::with_fill(BLACK))
+                .draw(display)?;
         }
 
         let label = if ch == b' ' {

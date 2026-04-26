@@ -13,8 +13,8 @@ use super::{Note, Tone};
 // within the C3-B4 range supported by the Buzzer driver.
 //
 // Rhythm confirmed from sheet music: the opening motif is
-//   G(Q) G(Q) G(Q) Eb(D8) Bb(S)  — three equal quarters, then dotted-eighth + sixteenth
-// NOT three dotted-quarters as commonly misremembered.
+//   G(Q) G(Q) G(Q) Eb(D8) Bb(S)  — three equal quarters, then dotted-eighth +
+// sixteenth NOT three dotted-quarters as commonly misremembered.
 //
 // P = inter-note pause inserted between consecutive same-pitch notes.
 // The note before is shortened by P to keep bar length correct.
@@ -46,17 +46,17 @@ pub const PET_WARN: &[Tone] = &[
 /// into a held Bb for the remainder of the measure.
 pub const FUNNY_ENDING: &[Tone] = &[
     // Measure 1: G | G A | Bb G | F — playful descending motif.
-    Tone::new(Note::G4,  333),
-    Tone::new(Note::G4,  166),
-    Tone::new(Note::A4,  166),
+    Tone::new(Note::G4, 333),
+    Tone::new(Note::G4, 166),
+    Tone::new(Note::A4, 166),
     Tone::new(Note::As4, 166),
-    Tone::new(Note::G4,  166),
-    Tone::new(Note::F4,  333),
+    Tone::new(Note::G4, 166),
+    Tone::new(Note::F4, 333),
     // Measure 2: rest, then arpeggiated Eb-G-Bb chord landing on a
     // half-note Bb.
     Tone::new(Note::Rest, 333),
     Tone::new(Note::Ds4, 166),
-    Tone::new(Note::G4,  166),
+    Tone::new(Note::G4, 166),
     Tone::new(Note::As4, 666),
 ];
 
@@ -111,67 +111,112 @@ pub const RICK_INTRO: &[Tone] = &[
 // SP separates consecutive same-pitch notes.
 const SS: u32 = 107; // sixteenth
 const SE: u32 = 214; // eighth
-const SP: u32 = 30;  // inter-same-note gap
+const SP: u32 = 30; // inter-same-note gap
 
 pub const SANDSTORM: &[Tone] = &[
     // ── A: 4×C4(S) C4(E) 6×C4(S) C4(E) ─────────────────────────────────────
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SE-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
     Tone::new(Note::C4, SE),
     // ── B: 6×F4(S) F4(E) ─────────────────────────────────────────────────────
-    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS - SP),
+    Tone::new(Note::Rest, SP),
     Tone::new(Note::F4, SE),
     // ── C: 6×Eb4(S) Eb4(E) ───────────────────────────────────────────────────
-    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS - SP),
+    Tone::new(Note::Rest, SP),
     Tone::new(Note::Ds4, SE),
     // ── D: Bb3(E) ─────────────────────────────────────────────────────────────
     Tone::new(Note::As3, SE),
     // ── A ────────────────────────────────────────────────────────────────────
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SE-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
     Tone::new(Note::C4, SE),
     // ── E: F4(E) ──────────────────────────────────────────────────────────────
     Tone::new(Note::F4, SE),
     // ── A ────────────────────────────────────────────────────────────────────
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SE-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
-    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS - SP),
+    Tone::new(Note::Rest, SP),
     Tone::new(Note::C4, SE),
     // ── E: F4(E) ──────────────────────────────────────────────────────────────
     Tone::new(Note::F4, SE),
@@ -218,7 +263,7 @@ pub const IMPERIAL_MARCH: &[Tone] = &[
     Tone::new(Note::E4, S),   // E  sixteenth
     Tone::new(Note::Ds4, S),  // Eb sixteenth
     Tone::new(Note::E4, E),   // E  eighth
-    Tone::new(Note::Rest, E), // -  eighth rest
+    Tone::new(Note::Rest, E), // - eighth rest
     Tone::new(Note::Gs3, E),  // Ab eighth
     Tone::new(Note::Cs4, Q),  // Db quarter
     Tone::new(Note::C4, D8),  // C  dotted-eighth
@@ -228,7 +273,7 @@ pub const IMPERIAL_MARCH: &[Tone] = &[
     Tone::new(Note::As3, S),  // Bb sixteenth
     Tone::new(Note::A3, S),   // A  sixteenth
     Tone::new(Note::As3, E),  // Bb eighth
-    Tone::new(Note::Rest, E), // -  eighth rest
+    Tone::new(Note::Rest, E), // - eighth rest
     Tone::new(Note::Ds3, E),  // Eb eighth
     Tone::new(Note::Fs3, Q),  // Gb quarter
     Tone::new(Note::Ds3, D8), // Eb dotted-eighth
@@ -253,42 +298,64 @@ pub const IMPERIAL_MARCH: &[Tone] = &[
 //   half      = 1000 fermata       = 1500
 pub const PINK_PANTHER: &[Tone] = &[
     // ── Statement 1 — sneaky motif with descending tag ─────────────
-    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  750),
-    Tone::new(Note::E5,  125), Tone::new(Note::F5,  750),
-    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  250),
-    Tone::new(Note::E5,  125), Tone::new(Note::F5,  250),
-    Tone::new(Note::As5, 125), Tone::new(Note::A5,  250),
-    Tone::new(Note::D5,  125), Tone::new(Note::F5,  250),
-    Tone::new(Note::A5,  125), Tone::new(Note::Gs5, 750),
+    Tone::new(Note::Cs5, 125),
+    Tone::new(Note::D5, 750),
+    Tone::new(Note::E5, 125),
+    Tone::new(Note::F5, 750),
+    Tone::new(Note::Cs5, 125),
+    Tone::new(Note::D5, 250),
+    Tone::new(Note::E5, 125),
+    Tone::new(Note::F5, 250),
+    Tone::new(Note::As5, 125),
+    Tone::new(Note::A5, 250),
+    Tone::new(Note::D5, 125),
+    Tone::new(Note::F5, 250),
+    Tone::new(Note::A5, 125),
+    Tone::new(Note::Gs5, 750),
     // Descending run
-    Tone::new(Note::G5,  125), Tone::new(Note::F5,  125),
-    Tone::new(Note::D5,  125), Tone::new(Note::C5,  125),
-    Tone::new(Note::D5,  1000),
+    Tone::new(Note::G5, 125),
+    Tone::new(Note::F5, 125),
+    Tone::new(Note::D5, 125),
+    Tone::new(Note::C5, 125),
+    Tone::new(Note::D5, 1000),
     Tone::new(Note::Rest, 250),
-
     // ── Statement 2 — motif climbs to Cs6 instead of falling ───────
-    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  750),
-    Tone::new(Note::E5,  125), Tone::new(Note::F5,  750),
-    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  250),
-    Tone::new(Note::E5,  125), Tone::new(Note::F5,  250),
-    Tone::new(Note::As5, 125), Tone::new(Note::A5,  250),
-    Tone::new(Note::F5,  125), Tone::new(Note::A5,  250),
-    Tone::new(Note::D6,  125), Tone::new(Note::Cs6, 1000),
+    Tone::new(Note::Cs5, 125),
+    Tone::new(Note::D5, 750),
+    Tone::new(Note::E5, 125),
+    Tone::new(Note::F5, 750),
+    Tone::new(Note::Cs5, 125),
+    Tone::new(Note::D5, 250),
+    Tone::new(Note::E5, 125),
+    Tone::new(Note::F5, 250),
+    Tone::new(Note::As5, 125),
+    Tone::new(Note::A5, 250),
+    Tone::new(Note::F5, 125),
+    Tone::new(Note::A5, 250),
+    Tone::new(Note::D6, 125),
+    Tone::new(Note::Cs6, 1000),
     Tone::new(Note::Rest, 250),
-
     // ── Statement 3 — mirror of statement 1, ends on the fermata ───
-    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  750),
-    Tone::new(Note::E5,  125), Tone::new(Note::F5,  750),
-    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  250),
-    Tone::new(Note::E5,  125), Tone::new(Note::F5,  250),
-    Tone::new(Note::As5, 125), Tone::new(Note::A5,  250),
-    Tone::new(Note::D5,  125), Tone::new(Note::F5,  250),
-    Tone::new(Note::A5,  125), Tone::new(Note::Gs5, 750),
-    Tone::new(Note::G5,  125), Tone::new(Note::F5,  125),
-    Tone::new(Note::D5,  125), Tone::new(Note::C5,  125),
-
+    Tone::new(Note::Cs5, 125),
+    Tone::new(Note::D5, 750),
+    Tone::new(Note::E5, 125),
+    Tone::new(Note::F5, 750),
+    Tone::new(Note::Cs5, 125),
+    Tone::new(Note::D5, 250),
+    Tone::new(Note::E5, 125),
+    Tone::new(Note::F5, 250),
+    Tone::new(Note::As5, 125),
+    Tone::new(Note::A5, 250),
+    Tone::new(Note::D5, 125),
+    Tone::new(Note::F5, 250),
+    Tone::new(Note::A5, 125),
+    Tone::new(Note::Gs5, 750),
+    Tone::new(Note::G5, 125),
+    Tone::new(Note::F5, 125),
+    Tone::new(Note::D5, 125),
+    Tone::new(Note::C5, 125),
     // Final held tonic — fermata + pp fade.
-    Tone::new(Note::D5,  1500),
+    Tone::new(Note::D5, 1500),
 ];
 
 // Eduard Khil – "Trololo" (vocal melody, first two phrases)

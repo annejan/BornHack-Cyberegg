@@ -14,9 +14,9 @@
 //! Uses the display's work buffer as scratch for RLE decoding.
 
 #[cfg(feature = "embassy-base")]
-use crate::fw::fat12::{self, FileRef};
-#[cfg(feature = "embassy-base")]
 use crate::fw::epd::EpdGfx;
+#[cfg(feature = "embassy-base")]
+use crate::fw::fat12::{self, FileRef};
 
 /// Display dimensions.
 #[cfg(feature = "embassy-base")]
@@ -45,8 +45,12 @@ struct SyncCell<T>(core::cell::UnsafeCell<T>);
 unsafe impl<T> Sync for SyncCell<T> {}
 #[cfg(feature = "embassy-base")]
 impl<T> SyncCell<T> {
-    const fn new(v: T) -> Self { Self(core::cell::UnsafeCell::new(v)) }
-    fn get(&self) -> *mut T { self.0.get() }
+    const fn new(v: T) -> Self {
+        Self(core::cell::UnsafeCell::new(v))
+    }
+    fn get(&self) -> *mut T {
+        self.0.get()
+    }
 }
 
 #[cfg(feature = "embassy-base")]
@@ -129,11 +133,21 @@ struct PcxInfo {
 
 #[cfg(feature = "embassy-base")]
 fn parse_pcx_header(hdr: &[u8]) -> Option<PcxInfo> {
-    if hdr.len() < PCX_HEADER_SIZE { return None; }
-    if hdr[0] != 0x0A { return None; }         // manufacturer
-    if hdr[2] != 1 { return None; }             // RLE encoding
-    if hdr[3] != 2 { return None; }             // 2 bpp
-    if hdr[65] != 1 { return None; }            // 1 plane
+    if hdr.len() < PCX_HEADER_SIZE {
+        return None;
+    }
+    if hdr[0] != 0x0A {
+        return None;
+    } // manufacturer
+    if hdr[2] != 1 {
+        return None;
+    } // RLE encoding
+    if hdr[3] != 2 {
+        return None;
+    } // 2 bpp
+    if hdr[65] != 1 {
+        return None;
+    } // 1 plane
 
     let xmin = u16::from_le_bytes([hdr[4], hdr[5]]);
     let ymin = u16::from_le_bytes([hdr[6], hdr[7]]);
@@ -141,7 +155,9 @@ fn parse_pcx_header(hdr: &[u8]) -> Option<PcxInfo> {
     let ymax = u16::from_le_bytes([hdr[10], hdr[11]]);
     let bytes_per_line = u16::from_le_bytes([hdr[66], hdr[67]]);
 
-    if xmax < xmin || ymax < ymin { return None; }
+    if xmax < xmin || ymax < ymin {
+        return None;
+    }
 
     Some(PcxInfo {
         width: xmax - xmin + 1,
@@ -206,7 +222,9 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 #[cfg(feature = "embassy-base")]
 pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
     let count = frame_count();
-    if count == 0 || index >= count { return; }
+    if count == 0 || index >= count {
+        return;
+    }
     let file = unsafe { &(*FRAMES.get())[index as usize] };
     blit_file(display, file, x, y).await;
 }
@@ -229,9 +247,9 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
     // consumes bytes; sized for several worst-case scanlines (bpl ≤ 38 for
     // 152-wide 2bpp) to amortise flash reads.
     let mut read_buf = [0u8; 256];
-    let mut read_pos: usize;        // bytes consumed from read_buf (set after header)
-    let mut read_len: usize;        // valid bytes in read_buf (set by prime read)
-    let mut file_offset: u32;       // next byte to fetch from flash (set by prime read)
+    let mut read_pos: usize; // bytes consumed from read_buf (set after header)
+    let mut read_len: usize; // valid bytes in read_buf (set by prime read)
+    let mut file_offset: u32; // next byte to fetch from flash (set by prime read)
 
     // Prime the buffer with the header + as much compressed data as fits.
     let first = read_buf.len().min(file_size);
@@ -280,7 +298,9 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
             let want = read_buf.len() - read_len;
             let can = (file_size - file_offset as usize).min(want);
             if can > 0 {
-                match fat12::read_file(file, file_offset, &mut read_buf[read_len..read_len + can]).await {
+                match fat12::read_file(file, file_offset, &mut read_buf[read_len..read_len + can])
+                    .await
+                {
                     Ok(n) => {
                         read_len += n;
                         file_offset += n as u32;
@@ -293,21 +313,21 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
             }
         }
 
-        let consumed = decode_rle_line(
-            &read_buf[read_pos..read_len],
-            &mut line_buf[..bpl],
-            bpl,
-        );
+        let consumed = decode_rle_line(&read_buf[read_pos..read_len], &mut line_buf[..bpl], bpl);
         read_pos += consumed;
 
         // PCX is top-down (row 0 = top of image).
         let screen_y = y + pcx_row;
-        if screen_y < 0 || screen_y >= DISP_HEIGHT as i32 { continue; }
+        if screen_y < 0 || screen_y >= DISP_HEIGHT as i32 {
+            continue;
+        }
         let disp_row_off = screen_y as usize * DISP_ROW_STRIDE;
 
         for pixel in 0..pcx_w {
             let screen_x = x + pixel;
-            if screen_x < 0 || screen_x >= DISP_WIDTH as i32 { continue; }
+            if screen_x < 0 || screen_x >= DISP_WIDTH as i32 {
+                continue;
+            }
 
             // 2bpp: 4 pixels per byte, MSB first.
             let byte_idx = pixel as usize / 4;
@@ -319,10 +339,19 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
 
             // Palette: 00=black, 01=red, 10=white, 11=transparent
             match val {
-                0b00 => { black[disp_byte] &= !bit; red[disp_byte] &= !bit; }
-                0b01 => { black[disp_byte] |= bit;  red[disp_byte] |= bit;  }  // red
-                0b10 => { black[disp_byte] |= bit;  red[disp_byte] &= !bit; }  // white
-                _    => {} // transparent
+                0b00 => {
+                    black[disp_byte] &= !bit;
+                    red[disp_byte] &= !bit;
+                }
+                0b01 => {
+                    black[disp_byte] |= bit;
+                    red[disp_byte] |= bit;
+                } // red
+                0b10 => {
+                    black[disp_byte] |= bit;
+                    red[disp_byte] &= !bit;
+                } // white
+                _ => {} // transparent
             }
         }
     }

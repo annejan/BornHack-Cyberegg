@@ -34,11 +34,10 @@
 //! Visual/audible feedback:
 //!   - boot:    LED white, all checks run
 //!   - pass:    LED green, short three-note "OK" chime
-//!   - fail:    LED red, looped beep sequence.  Each failure code is
-//!              encoded as `(code / 5)` long beeps followed by `(code % 5)`
-//!              short beeps — e.g. code 13 → long-long-short-short-short.
-//!              Codes are separated by a 0.8 s gap and the whole cycle
-//!              repeats after a 2 s pause.
+//!   - fail:    LED red, looped beep sequence.  Each failure code is encoded as
+//!     `(code / 5)` long beeps followed by `(code % 5)` short beeps — e.g. code
+//!     13 → long-long-short-short-short. Codes are separated by a 0.8 s gap and
+//!     the whole cycle repeats after a 2 s pause.
 
 #![no_std]
 #![no_main]
@@ -110,28 +109,28 @@ bind_interrupts!(struct Irqs {
 });
 
 // ── Failure codes (= number of beeps per code) ──────────────────────────────
-const ERR_CANCEL:    u8 = 1;
-const ERR_EXECUTE:   u8 = 2;
-const ERR_UP:        u8 = 3;
-const ERR_DOWN:      u8 = 4;
-const ERR_LEFT:      u8 = 5;
-const ERR_RIGHT:     u8 = 6;
-const ERR_FIRE:      u8 = 7;
-const ERR_LORA:      u8 = 8;
-const ERR_BATTERY:   u8 = 9;
-const ERR_QSPI:      u8 = 10;
+const ERR_CANCEL: u8 = 1;
+const ERR_EXECUTE: u8 = 2;
+const ERR_UP: u8 = 3;
+const ERR_DOWN: u8 = 4;
+const ERR_LEFT: u8 = 5;
+const ERR_RIGHT: u8 = 6;
+const ERR_FIRE: u8 = 7;
+const ERR_LORA: u8 = 8;
+const ERR_BATTERY: u8 = 9;
+const ERR_QSPI: u8 = 10;
 const ERR_QWIIC_SDA: u8 = 11;
 const ERR_QWIIC_SCL: u8 = 12;
-const ERR_EPD_BUSY:  u8 = 13;
+const ERR_EPD_BUSY: u8 = 13;
 const ERR_EPD_RESET: u8 = 14;
-const ERR_EPD_DC:    u8 = 15;
-const ERR_EPD_CSN:   u8 = 16;
-const ERR_EPD_SCK:   u8 = 17;
-const ERR_EPD_MOSI:  u8 = 18;
-const ERR_PS_SYNC:   u8 = 19;
-const ERR_BUZZER:    u8 = 20;
-const ERR_LFXO:      u8 = 21;
-const ERR_HFXO:      u8 = 22;
+const ERR_EPD_DC: u8 = 15;
+const ERR_EPD_CSN: u8 = 16;
+const ERR_EPD_SCK: u8 = 17;
+const ERR_EPD_MOSI: u8 = 18;
+const ERR_PS_SYNC: u8 = 19;
+const ERR_BUZZER: u8 = 20;
+const ERR_LFXO: u8 = 21;
+const ERR_HFXO: u8 = 22;
 
 const VBAT_MIN_MV: u16 = 3000;
 const VBAT_MAX_MV: u16 = 4400;
@@ -174,11 +173,11 @@ async fn main(_spawner: Spawner) {
     // ── Joystick pins (internal pull-up) — tested for high at rest AND
     //    for shorts against other joystick pins via Flex. ────────────────
     let mut joy: [(u8, Flex<'_>); 5] = [
-        (ERR_UP,    Flex::new(board!(p, joy_up))),
-        (ERR_DOWN,  Flex::new(board!(p, joy_down))),
-        (ERR_LEFT,  Flex::new(board!(p, joy_left))),
+        (ERR_UP, Flex::new(board!(p, joy_up))),
+        (ERR_DOWN, Flex::new(board!(p, joy_down))),
+        (ERR_LEFT, Flex::new(board!(p, joy_left))),
         (ERR_RIGHT, Flex::new(board!(p, joy_right))),
-        (ERR_FIRE,  Flex::new(board!(p, joy_fire))),
+        (ERR_FIRE, Flex::new(board!(p, joy_fire))),
     ];
     for (_, f) in joy.iter_mut() {
         f.set_as_input(Pull::Up);
@@ -197,12 +196,12 @@ async fn main(_spawner: Spawner) {
     // ── EPD pins — panel is not fitted during board test; use internal
     //    pull-ups to detect solder bridges between the six signal lines. ──
     let mut epd: [(u8, Flex<'_>); 6] = [
-        (ERR_EPD_BUSY,  Flex::new(board!(p, epd_busy))),
+        (ERR_EPD_BUSY, Flex::new(board!(p, epd_busy))),
         (ERR_EPD_RESET, Flex::new(board!(p, epd_reset))),
-        (ERR_EPD_DC,    Flex::new(board!(p, epd_dc))),
-        (ERR_EPD_CSN,   Flex::new(board!(p, epd_csn))),
-        (ERR_EPD_SCK,   Flex::new(board!(p, epd_sck))),
-        (ERR_EPD_MOSI,  Flex::new(board!(p, epd_mosi))),
+        (ERR_EPD_DC, Flex::new(board!(p, epd_dc))),
+        (ERR_EPD_CSN, Flex::new(board!(p, epd_csn))),
+        (ERR_EPD_SCK, Flex::new(board!(p, epd_sck))),
+        (ERR_EPD_MOSI, Flex::new(board!(p, epd_mosi))),
     ];
     for (_, f) in epd.iter_mut() {
         f.set_as_input(Pull::Up);
@@ -251,9 +250,7 @@ async fn main(_spawner: Spawner) {
     // but the code is removed from the failure list before reporting.
     if let Some(pos) = failures.iter().position(|&c| c == ERR_EPD_BUSY) {
         failures.remove(pos);
-        defmt::info!(
-            "hwtest:   EPD BUSY readings ignored — EPD panel likely installed"
-        );
+        defmt::info!("hwtest:   EPD BUSY readings ignored — EPD panel likely installed");
     }
 
     // ── LoRa SX1262 ───────────────────────────────────────────────────────
@@ -383,7 +380,9 @@ async fn check_shorts(
             if pin.is_low() {
                 defmt::warn!(
                     "hwtest:   {} short: driving {} low → {} also low",
-                    group, driver_code, code,
+                    group,
+                    driver_code,
+                    code,
                 );
                 if !failures.contains(code) {
                     let _ = failures.push(*code);
@@ -453,7 +452,9 @@ fn probe_qspi(
 
     defmt::info!(
         "hwtest: JEDEC ID: {:02X} {:02X} {:02X}",
-        jedec[0], jedec[1], jedec[2]
+        jedec[0],
+        jedec[1],
+        jedec[2]
     );
     jedec != [0x00; 3] && jedec != [0xFF; 3]
 }

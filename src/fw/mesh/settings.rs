@@ -32,9 +32,10 @@
 //! | `0x3A`       | SET_AUTOADD_CONFIG    | `"autoadd"`      |
 //! | `0x3D`       | SET_PATH_HASH_MODE    | `"path_hash"`    |
 
+pub use device_identity::DeviceIdentity;
+
 use super::device_identity;
 use crate::fw::kv;
-pub use device_identity::DeviceIdentity;
 
 // ---------------------------------------------------------------------------
 // Shared KV namespace
@@ -117,8 +118,8 @@ impl RadioParams {
         let mut b = [0u8; 12];
         b[0..4].copy_from_slice(&self.freq_hz.to_le_bytes());
         b[4..8].copy_from_slice(&self.bw_hz.to_le_bytes());
-        b[8]  = self.sf;
-        b[9]  = self.cr;
+        b[8] = self.sf;
+        b[9] = self.cr;
         b[10] = self.tx_power as u8;
         b[11] = self.client_repeat as u8;
         b
@@ -126,11 +127,11 @@ impl RadioParams {
 
     fn from_bytes(b: &[u8; 12]) -> Self {
         Self {
-            freq_hz:       u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-            bw_hz:         u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
-            sf:            b[8],
-            cr:            b[9],
-            tx_power:      b[10] as i8,
+            freq_hz: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            bw_hz: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+            sf: b[8],
+            cr: b[9],
+            tx_power: b[10] as i8,
             client_repeat: b[11] != 0,
         }
     }
@@ -140,14 +141,14 @@ impl RadioParams {
 ///
 /// 869.618 MHz · BW 62.5 kHz · SF8 · CR 4/5 · 14 dBm TX
 ///
-/// Coding rate uses **MeshCore protocol encoding**: 5 = CR 4/5, 6 = CR 4/6, etc.
-/// (distinct from the sx126x hardware register encoding where CR4_5 = 1).
+/// Coding rate uses **MeshCore protocol encoding**: 5 = CR 4/5, 6 = CR 4/6,
+/// etc. (distinct from the sx126x hardware register encoding where CR4_5 = 1).
 pub const DEFAULT_RADIO: RadioParams = RadioParams {
-    freq_hz:       869_618_000,
-    bw_hz:         62_500,
-    sf:            8,
-    cr:            5,   // CR 4/5 in MeshCore protocol encoding
-    tx_power:      14,
+    freq_hz: 869_618_000,
+    bw_hz: 62_500,
+    sf: 8,
+    cr: 5, // CR 4/5 in MeshCore protocol encoding
+    tx_power: 14,
     client_repeat: false,
 };
 
@@ -160,7 +161,8 @@ pub async fn get_radio_params() -> Option<RadioParams> {
     }
 }
 
-/// Read the persisted radio parameters, or return [`DEFAULT_RADIO`] if not stored.
+/// Read the persisted radio parameters, or return [`DEFAULT_RADIO`] if not
+/// stored.
 pub async fn get_radio_params_or_default() -> RadioParams {
     get_radio_params().await.unwrap_or(DEFAULT_RADIO)
 }
@@ -234,7 +236,8 @@ pub async fn set_ignore_blink(ignore: bool) -> Result<(), kv::KvError> {
 // LoRa enabled  (menu only — not part of the companion protocol)
 // ---------------------------------------------------------------------------
 
-/// Read the persisted LoRa enabled flag.  Returns `true` (enabled) if not stored.
+/// Read the persisted LoRa enabled flag.  Returns `true` (enabled) if not
+/// stored.
 pub async fn get_lora_enabled() -> bool {
     let mut b = [0u8; 1];
     match ns().get("lora_en", &mut b).await {
@@ -252,7 +255,8 @@ pub async fn set_lora_enabled(enabled: bool) -> Result<(), kv::KvError> {
 // BLE enabled  (menu only — not part of the companion protocol)
 // ---------------------------------------------------------------------------
 
-/// Read the persisted BLE enabled flag.  Returns `true` (enabled) if not stored.
+/// Read the persisted BLE enabled flag.  Returns `true` (enabled) if not
+/// stored.
 pub async fn get_ble_enabled() -> bool {
     let mut b = [0u8; 1];
     match ns().get("ble_en", &mut b).await {
@@ -284,7 +288,7 @@ pub struct AdvertConfig {
 
 /// Default: adverts enabled, 4-hour interval.
 pub const DEFAULT_ADVERT: AdvertConfig = AdvertConfig {
-    enabled:        true,
+    enabled: true,
     interval_hours: 16,
 };
 
@@ -292,7 +296,7 @@ pub async fn get_advert_config_or_default() -> AdvertConfig {
     let mut b = [0u8; 2];
     match ns().get("advert", &mut b).await {
         Ok(2) => AdvertConfig {
-            enabled:        b[0] != 0,
+            enabled: b[0] != 0,
             interval_hours: b[1],
         },
         _ => DEFAULT_ADVERT,
@@ -300,7 +304,8 @@ pub async fn get_advert_config_or_default() -> AdvertConfig {
 }
 
 pub async fn set_advert_config(cfg: AdvertConfig) -> Result<(), kv::KvError> {
-    ns().set("advert", &[cfg.enabled as u8, cfg.interval_hours], true).await
+    ns().set("advert", &[cfg.enabled as u8, cfg.interval_hours], true)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +317,8 @@ pub async fn set_advert_config(cfg: AdvertConfig) -> Result<(), kv::KvError> {
 pub struct OtherParams {
     /// 0 = auto-add contacts, 1 = manual approval required.
     pub manual_add_contacts: u8,
-    /// Telemetry mode — base sensors (0 = deny, 1 = use contact.flags, 2 = allow all).
+    /// Telemetry mode — base sensors (0 = deny, 1 = use contact.flags, 2 =
+    /// allow all).
     pub telemetry_mode_base: u8,
     /// Telemetry mode — location.
     pub telemetry_mode_loc: u8,
@@ -343,10 +349,10 @@ impl OtherParams {
         Self {
             manual_add_contacts: b[0],
             telemetry_mode_base: tele & 0x03,
-            telemetry_mode_loc:  (tele >> 2) & 0x03,
-            telemetry_mode_env:  (tele >> 4) & 0x03,
-            advert_loc_policy:   b[2],
-            multi_acks:          b[3],
+            telemetry_mode_loc: (tele >> 2) & 0x03,
+            telemetry_mode_env: (tele >> 4) & 0x03,
+            advert_loc_policy: b[2],
+            multi_acks: b[3],
         }
     }
 }
@@ -442,7 +448,7 @@ impl TuningParams {
 
     fn from_bytes(b: &[u8; 8]) -> Self {
         Self {
-            rx_delay_base_x1000:  u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            rx_delay_base_x1000: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
             airtime_factor_x1000: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
         }
     }
@@ -450,13 +456,15 @@ impl TuningParams {
 
 /// Default tuning parameters.
 ///
-/// `rx_delay_base = 0` (no relay delay), `airtime_factor = 9.0` (10% duty cycle).
+/// `rx_delay_base = 0` (no relay delay), `airtime_factor = 9.0` (10% duty
+/// cycle).
 pub const DEFAULT_TUNING: TuningParams = TuningParams {
-    rx_delay_base_x1000:  0,
+    rx_delay_base_x1000: 0,
     airtime_factor_x1000: 9_000,
 };
 
-/// Read the persisted tuning params, or return [`DEFAULT_TUNING`] if not stored.
+/// Read the persisted tuning params, or return [`DEFAULT_TUNING`] if not
+/// stored.
 pub async fn get_tuning_params() -> TuningParams {
     let mut b = [0u8; 8];
     match ns().get("tuning", &mut b).await {
@@ -474,7 +482,8 @@ pub async fn set_tuning_params(p: TuningParams) -> Result<(), kv::KvError> {
 // Path hash mode  (CMD_SET_PATH_HASH_MODE 0x3D)
 // ---------------------------------------------------------------------------
 
-/// Read the path hash mode (0 = 1-byte hashes, 1/2 = extended).  Returns 0 if not stored.
+/// Read the path hash mode (0 = 1-byte hashes, 1/2 = extended).  Returns 0 if
+/// not stored.
 pub async fn get_path_hash_mode() -> u8 {
     let mut b = [0u8; 1];
     match ns().get("path_hash", &mut b).await {

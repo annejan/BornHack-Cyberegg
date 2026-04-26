@@ -1,12 +1,11 @@
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD},
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, RED, TriColor, WHITE};
 
@@ -61,7 +60,8 @@ impl ButtonId {
     }
 }
 
-// ── Item kinds ────────────────────────────────────────────────────────────────
+// ── Item kinds
+// ────────────────────────────────────────────────────────────────
 
 pub enum MenuItemKind {
     Action(fn()),
@@ -96,7 +96,8 @@ pub struct MenuItem {
     pub kind: MenuItemKind,
 }
 
-// ── Per-screen navigation state ───────────────────────────────────────────────
+// ── Per-screen navigation state
+// ───────────────────────────────────────────────
 
 /// Cursor position and optional active submenu for one screen.
 pub struct ScreenState {
@@ -268,7 +269,11 @@ impl ScreenState {
             MenuItemKind::Confirm { prompt, action } => {
                 self.confirm = Some((prompt, action));
             }
-            MenuItemKind::ConditionalConfirm { prompt, needs_confirm, action } => {
+            MenuItemKind::ConditionalConfirm {
+                prompt,
+                needs_confirm,
+                action,
+            } => {
                 if needs_confirm() {
                     self.confirm = Some((prompt, action));
                 } else {
@@ -289,10 +294,10 @@ impl ScreenState {
             self.sub_items = None;
         }
     }
-
 }
 
-// ── Top-level display state ───────────────────────────────────────────────────
+// ── Top-level display state
+// ───────────────────────────────────────────────────
 
 /// `M` screens, each with their own item list and cursor.
 /// Left/right switches screens, skipping disabled ones.
@@ -522,10 +527,10 @@ impl<const M: usize> DisplayState<M> {
             ButtonId::Right => self.screen_right(),
         }
     }
-
 }
 
-// ── Action / label helpers ────────────────────────────────────────────────────
+// ── Action / label helpers
+// ────────────────────────────────────────────────────
 
 fn label_boost_rx() -> &'static str {
     if crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed) {
@@ -562,14 +567,38 @@ fn action_factory_reset() {
 /// Pre-rendered labels for every valid TX power value (−9..=22 dBm).
 /// Indexed by `(dbm + 9) as usize`.
 static TX_POWER_LABELS: [&str; 32] = [
-    "TX: -9 dBm", "TX: -8 dBm", "TX: -7 dBm", "TX: -6 dBm",
-    "TX: -5 dBm", "TX: -4 dBm", "TX: -3 dBm", "TX: -2 dBm",
-    "TX: -1 dBm", "TX: 0 dBm",  "TX: 1 dBm",  "TX: 2 dBm",
-    "TX: 3 dBm",  "TX: 4 dBm",  "TX: 5 dBm",  "TX: 6 dBm",
-    "TX: 7 dBm",  "TX: 8 dBm",  "TX: 9 dBm",  "TX: 10 dBm",
-    "TX: 11 dBm", "TX: 12 dBm", "TX: 13 dBm", "TX: 14 dBm",
-    "TX: 15 dBm", "TX: 16 dBm", "TX: 17 dBm", "TX: 18 dBm",
-    "TX: 19 dBm", "TX: 20 dBm", "TX: 21 dBm", "TX: 22 dBm",
+    "TX: -9 dBm",
+    "TX: -8 dBm",
+    "TX: -7 dBm",
+    "TX: -6 dBm",
+    "TX: -5 dBm",
+    "TX: -4 dBm",
+    "TX: -3 dBm",
+    "TX: -2 dBm",
+    "TX: -1 dBm",
+    "TX: 0 dBm",
+    "TX: 1 dBm",
+    "TX: 2 dBm",
+    "TX: 3 dBm",
+    "TX: 4 dBm",
+    "TX: 5 dBm",
+    "TX: 6 dBm",
+    "TX: 7 dBm",
+    "TX: 8 dBm",
+    "TX: 9 dBm",
+    "TX: 10 dBm",
+    "TX: 11 dBm",
+    "TX: 12 dBm",
+    "TX: 13 dBm",
+    "TX: 14 dBm",
+    "TX: 15 dBm",
+    "TX: 16 dBm",
+    "TX: 17 dBm",
+    "TX: 18 dBm",
+    "TX: 19 dBm",
+    "TX: 20 dBm",
+    "TX: 21 dBm",
+    "TX: 22 dBm",
 ];
 
 fn label_tx_power() -> &'static str {
@@ -716,8 +745,13 @@ fn action_advert_toggle() {
 /// Interval presets (hours): 2, 4, 8, 16, 32, 64, 96.
 static ADVERT_INTERVAL_STEPS: [u8; 7] = [2, 4, 8, 16, 32, 64, 96];
 static ADVERT_INTERVAL_LABELS: [&str; 7] = [
-    "Interval: 2h", "Interval: 4h", "Interval: 8h", "Interval: 16h",
-    "Interval: 32h", "Interval: 64h", "Interval: 96h",
+    "Interval: 2h",
+    "Interval: 4h",
+    "Interval: 8h",
+    "Interval: 16h",
+    "Interval: 32h",
+    "Interval: 64h",
+    "Interval: 96h",
 ];
 
 fn advert_interval_idx() -> usize {
@@ -804,12 +838,13 @@ fn action_telemetry_toggle() {
 struct SyncBuf<const N: usize>(core::cell::UnsafeCell<[u8; N]>);
 unsafe impl<const N: usize> Sync for SyncBuf<N> {}
 impl<const N: usize> SyncBuf<N> {
-    const fn new(val: [u8; N]) -> Self { Self(core::cell::UnsafeCell::new(val)) }
+    const fn new(val: [u8; N]) -> Self {
+        Self(core::cell::UnsafeCell::new(val))
+    }
 }
 
 static BLE_NAME_BUF: SyncBuf<15> = SyncBuf::new([
-    b'C', b'y', b'b', b'e', b'r', b' ', 0xC3, 0x86, b'g', b'g', b' ',
-    b'?', b'?', b'?', b'?',
+    b'C', b'y', b'b', b'e', b'r', b' ', 0xC3, 0x86, b'g', b'g', b' ', b'?', b'?', b'?', b'?',
 ]);
 static BLE_NAME_INIT: AtomicBool = AtomicBool::new(false);
 
@@ -890,7 +925,12 @@ fn action_set_name() {
         buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
         (buf, n)
     };
-    crate::text_entry::begin(&prefill.0[..prefill.1], 31, on_name_complete, "Set Node Name");
+    crate::text_entry::begin(
+        &prefill.0[..prefill.1],
+        31,
+        on_name_complete,
+        "Set Node Name",
+    );
 }
 
 fn action_lora_toggle() {
@@ -936,7 +976,8 @@ fn play_melody(_index: usize) {
     crate::game::lifecycle::play();
 }
 
-// ── Static item arrays ────────────────────────────────────────────────────────
+// ── Static item arrays
+// ────────────────────────────────────────────────────────
 
 #[cfg(feature = "game")]
 static MELODY_ITEMS: [MenuItem; 7] = [
@@ -1219,22 +1260,118 @@ pub struct LoRaPreset {
 }
 
 pub static LORA_PRESETS: &[LoRaPreset] = &[
-    LoRaPreset { title: "Australia",            freq_hz: 915_800_000, bw_hz: 250_000, sf: 10, cr: 5 },
-    LoRaPreset { title: "Australia (Narrow)",   freq_hz: 916_575_000, bw_hz:  62_500, sf:  7, cr: 8 },
-    LoRaPreset { title: "Australia: SA, WA",    freq_hz: 923_125_000, bw_hz:  62_500, sf:  8, cr: 8 },
-    LoRaPreset { title: "Australia: QLD",       freq_hz: 923_125_000, bw_hz:  62_500, sf:  8, cr: 5 },
-    LoRaPreset { title: "EU/UK (Narrow)",       freq_hz: 869_618_000, bw_hz:  62_500, sf:  8, cr: 8 },
-    LoRaPreset { title: "EU/UK (Deprecated)",   freq_hz: 869_525_000, bw_hz: 250_000, sf: 11, cr: 5 },
-    LoRaPreset { title: "Czech (Narrow)",       freq_hz: 869_432_000, bw_hz:  62_500, sf:  7, cr: 5 },
-    LoRaPreset { title: "EU 433 (Long)",        freq_hz: 433_650_000, bw_hz: 250_000, sf: 11, cr: 5 },
-    LoRaPreset { title: "New Zealand",          freq_hz: 917_375_000, bw_hz: 250_000, sf: 11, cr: 5 },
-    LoRaPreset { title: "NZ (Narrow)",          freq_hz: 917_375_000, bw_hz:  62_500, sf:  7, cr: 5 },
-    LoRaPreset { title: "Portugal 433",         freq_hz: 433_375_000, bw_hz:  62_500, sf:  9, cr: 6 },
-    LoRaPreset { title: "Portugal 868",         freq_hz: 869_618_000, bw_hz:  62_500, sf:  7, cr: 6 },
-    LoRaPreset { title: "Switzerland",          freq_hz: 869_618_000, bw_hz:  62_500, sf:  8, cr: 8 },
-    LoRaPreset { title: "USA/Canada",           freq_hz: 910_525_000, bw_hz:  62_500, sf:  7, cr: 5 },
-    LoRaPreset { title: "Vietnam (Narrow)",     freq_hz: 920_250_000, bw_hz:  62_500, sf:  8, cr: 5 },
-    LoRaPreset { title: "Vietnam (Deprecated)", freq_hz: 920_250_000, bw_hz: 250_000, sf: 11, cr: 5 },
+    LoRaPreset {
+        title: "Australia",
+        freq_hz: 915_800_000,
+        bw_hz: 250_000,
+        sf: 10,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "Australia (Narrow)",
+        freq_hz: 916_575_000,
+        bw_hz: 62_500,
+        sf: 7,
+        cr: 8,
+    },
+    LoRaPreset {
+        title: "Australia: SA, WA",
+        freq_hz: 923_125_000,
+        bw_hz: 62_500,
+        sf: 8,
+        cr: 8,
+    },
+    LoRaPreset {
+        title: "Australia: QLD",
+        freq_hz: 923_125_000,
+        bw_hz: 62_500,
+        sf: 8,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "EU/UK (Narrow)",
+        freq_hz: 869_618_000,
+        bw_hz: 62_500,
+        sf: 8,
+        cr: 8,
+    },
+    LoRaPreset {
+        title: "EU/UK (Deprecated)",
+        freq_hz: 869_525_000,
+        bw_hz: 250_000,
+        sf: 11,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "Czech (Narrow)",
+        freq_hz: 869_432_000,
+        bw_hz: 62_500,
+        sf: 7,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "EU 433 (Long)",
+        freq_hz: 433_650_000,
+        bw_hz: 250_000,
+        sf: 11,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "New Zealand",
+        freq_hz: 917_375_000,
+        bw_hz: 250_000,
+        sf: 11,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "NZ (Narrow)",
+        freq_hz: 917_375_000,
+        bw_hz: 62_500,
+        sf: 7,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "Portugal 433",
+        freq_hz: 433_375_000,
+        bw_hz: 62_500,
+        sf: 9,
+        cr: 6,
+    },
+    LoRaPreset {
+        title: "Portugal 868",
+        freq_hz: 869_618_000,
+        bw_hz: 62_500,
+        sf: 7,
+        cr: 6,
+    },
+    LoRaPreset {
+        title: "Switzerland",
+        freq_hz: 869_618_000,
+        bw_hz: 62_500,
+        sf: 8,
+        cr: 8,
+    },
+    LoRaPreset {
+        title: "USA/Canada",
+        freq_hz: 910_525_000,
+        bw_hz: 62_500,
+        sf: 7,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "Vietnam (Narrow)",
+        freq_hz: 920_250_000,
+        bw_hz: 62_500,
+        sf: 8,
+        cr: 5,
+    },
+    LoRaPreset {
+        title: "Vietnam (Deprecated)",
+        freq_hz: 920_250_000,
+        bw_hz: 250_000,
+        sf: 11,
+        cr: 5,
+    },
 ];
 
 /// Returns the index of the preset that matches the current LoRa atomics, or
@@ -1296,11 +1433,13 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
-// ── DISPLAY_STATE ─────────────────────────────────────────────────────────────
+// ── DISPLAY_STATE
+// ─────────────────────────────────────────────────────────────
 
 pub const SCREEN_COUNT: usize = ScreenId::COUNT;
 
-// The game screen placeholder when the feature is disabled — never navigated to.
+// The game screen placeholder when the feature is disabled — never navigated
+// to.
 #[cfg(not(feature = "game"))]
 static GAME_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "BornPets",
@@ -1312,10 +1451,11 @@ const GAME_ENABLED: bool = true;
 #[cfg(not(feature = "game"))]
 const GAME_ENABLED: bool = false;
 
-#[cfg(feature = "embassy-base")]
-use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
+
+#[cfg(feature = "embassy-base")]
+use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
 #[cfg(feature = "embassy-base")]
 type DisplayMutex = Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>>;
@@ -1333,7 +1473,8 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
     [GAME_ENABLED, true, true, true, true],
 )));
 
-// ── Scrolling menu renderer ───────────────────────────────────────────────────
+// ── Scrolling menu renderer
+// ───────────────────────────────────────────────────
 
 /// Geometry constants for the 152×152 display.
 ///
@@ -1684,10 +1825,8 @@ where
     if is_custom {
         let _ = core::fmt::Write::write_fmt(&mut indicator, format_args!("< Custom >"));
     } else {
-        let _ = core::fmt::Write::write_fmt(
-            &mut indicator,
-            format_args!("< {}/{} >", page + 1, total),
-        );
+        let _ =
+            core::fmt::Write::write_fmt(&mut indicator, format_args!("< {}/{} >", page + 1, total));
     }
     Text::with_text_style(&indicator, Point::new(x, 120), font_bold, center).draw(display)?;
     Text::with_text_style("Fire: apply", Point::new(x, 134), font_bold, center).draw(display)?;
@@ -1740,7 +1879,11 @@ where
     }
 
     // Hints
-    let hint_y = if line_count <= 1 { 96 } else { 54 + line_count as i32 * 16 + 8 };
+    let hint_y = if line_count <= 1 {
+        96
+    } else {
+        54 + line_count as i32 * 16 + 8
+    };
     Text::with_text_style("Fire  = Yes", Point::new(x, hint_y), font, center).draw(display)?;
     Text::with_text_style("Cancel = No", Point::new(x, hint_y + 18), font, center).draw(display)?;
 

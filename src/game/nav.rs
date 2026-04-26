@@ -37,11 +37,13 @@ pub struct GameNav {
 pub enum NavResult {
     /// Cursor moved within the grid.
     Moved,
-    /// Cursor was already at the rightmost column — caller should switch screen.
+    /// Cursor was already at the rightmost column — caller should switch
+    /// screen.
     NextScreen,
 }
 
-// ── Global packed state ───────────────────────────────────────────────────────
+// ── Global packed state
+// ───────────────────────────────────────────────────────
 
 /// Number of icons in each row.
 const TOP_COLS: u8 = 2;
@@ -56,7 +58,11 @@ fn pack(nav: &GameNav) -> u8 {
 
 fn unpack(v: u8) -> GameNav {
     GameNav {
-        row: if v & 0b100 != 0 { Row::Bottom } else { Row::Top },
+        row: if v & 0b100 != 0 {
+            Row::Bottom
+        } else {
+            Row::Top
+        },
         col: v & 0b11,
     }
 }
@@ -66,7 +72,8 @@ pub fn get_nav() -> GameNav {
     unpack(NAV_STATE.load(Ordering::Relaxed))
 }
 
-// ── Public nav actions (called from button handler) ───────────────────────────
+// ── Public nav actions (called from button handler)
+// ───────────────────────────
 
 /// Max column for the given row.
 fn max_col(row: Row) -> u8 {
@@ -84,7 +91,8 @@ pub fn nav_up() {
     NAV_STATE.store(pack(&n), Ordering::Relaxed);
 }
 
-/// Move focus to the bottom icon row (same column, always valid since bottom has 4).
+/// Move focus to the bottom icon row (same column, always valid since bottom
+/// has 4).
 pub fn nav_down() {
     let mut n = unpack(NAV_STATE.load(Ordering::Relaxed));
     n.row = Row::Bottom;

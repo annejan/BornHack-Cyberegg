@@ -9,7 +9,8 @@
 
 use core::sync::atomic::{AtomicI16, Ordering};
 
-use embassy_nrf::{bind_interrupts, peripherals, temp::Temp};
+use embassy_nrf::temp::Temp;
+use embassy_nrf::{bind_interrupts, peripherals};
 
 bind_interrupts!(struct Irqs {
     TEMP => embassy_nrf::temp::InterruptHandler;

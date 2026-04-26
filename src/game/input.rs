@@ -7,10 +7,10 @@
 //! - **Gone**: only Execute starts a new generation.
 //! - **Active**: icon navigation + modal interaction.
 
-use crate::menu::ButtonId;
-use super::{lifecycle, modal};
 use super::engine::to_display::DisplayAnim;
-use super::nav::{get_nav, nav_down, nav_left, nav_right, nav_up, NavResult};
+use super::nav::{NavResult, get_nav, nav_down, nav_left, nav_right, nav_up};
+use super::{lifecycle, modal};
+use crate::menu::ButtonId;
 
 /// Route a button press on the game screen.
 ///
@@ -32,8 +32,8 @@ pub fn dispatch(btn: ButtonId) -> bool {
     // ── Pet selection screen ────────────────────────────────────────────
     if super::pet_select::is_active() {
         match btn {
-            ButtonId::Up    => super::pet_select::cursor_up(),
-            ButtonId::Down  => super::pet_select::cursor_down(),
+            ButtonId::Up => super::pet_select::cursor_up(),
+            ButtonId::Down => super::pet_select::cursor_down(),
             ButtonId::Fire | ButtonId::Execute => super::pet_select::confirm(),
             ButtonId::Cancel => super::pet_select::close(),
             _ => {}
@@ -48,13 +48,19 @@ pub fn dispatch(btn: ButtonId) -> bool {
             return true;
         }
         // Let Left/Right pass through to switch screens.
-        return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Execute);
+        return matches!(
+            btn,
+            ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Execute
+        );
     }
 
     // ── Hatching: block game input but allow screen navigation ─────
     let anim = lifecycle::display_anim();
     if matches!(anim, DisplayAnim::Hatching { .. }) {
-        return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Execute | ButtonId::Fire | ButtonId::Cancel);
+        return matches!(
+            btn,
+            ButtonId::Up | ButtonId::Down | ButtonId::Execute | ButtonId::Fire | ButtonId::Cancel
+        );
     }
 
     // ── Gone: Fire opens pet selection for new generation ────────────
@@ -70,12 +76,14 @@ pub fn dispatch(btn: ButtonId) -> bool {
     // ── Lights Out mini-game ──────────────────────────────────────────
     if super::lightsout::is_active() {
         match btn {
-            ButtonId::Cancel  => super::lightsout::close(),
-            ButtonId::Up      => super::lightsout::cursor_up(),
-            ButtonId::Down    => super::lightsout::cursor_down(),
-            ButtonId::Left    => super::lightsout::cursor_left(),
-            ButtonId::Right   => super::lightsout::cursor_right(),
-            ButtonId::Fire | ButtonId::Execute => { super::lightsout::activate(); }
+            ButtonId::Cancel => super::lightsout::close(),
+            ButtonId::Up => super::lightsout::cursor_up(),
+            ButtonId::Down => super::lightsout::cursor_down(),
+            ButtonId::Left => super::lightsout::cursor_left(),
+            ButtonId::Right => super::lightsout::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => {
+                super::lightsout::activate();
+            }
         }
         return true;
     }
@@ -83,12 +91,14 @@ pub fn dispatch(btn: ButtonId) -> bool {
     // ── Tic-tac-toe mini-game ──────────────────────────────────────────
     if super::tictactoe::is_active() {
         match btn {
-            ButtonId::Cancel  => super::tictactoe::close(),
-            ButtonId::Up      => super::tictactoe::cursor_up(),
-            ButtonId::Down    => super::tictactoe::cursor_down(),
-            ButtonId::Left    => super::tictactoe::cursor_left(),
-            ButtonId::Right   => super::tictactoe::cursor_right(),
-            ButtonId::Fire | ButtonId::Execute => { super::tictactoe::place(); }
+            ButtonId::Cancel => super::tictactoe::close(),
+            ButtonId::Up => super::tictactoe::cursor_up(),
+            ButtonId::Down => super::tictactoe::cursor_down(),
+            ButtonId::Left => super::tictactoe::cursor_left(),
+            ButtonId::Right => super::tictactoe::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => {
+                super::tictactoe::place();
+            }
         }
         return true;
     }
@@ -96,21 +106,30 @@ pub fn dispatch(btn: ButtonId) -> bool {
     // ── Active: modal or icon navigation ─────────────────────────────
     if modal::is_open() {
         match btn {
-            ButtonId::Cancel             => modal::close(),
-            ButtonId::Up                 => modal::cursor_up(),
-            ButtonId::Down               => modal::cursor_down(),
+            ButtonId::Cancel => modal::close(),
+            ButtonId::Up => modal::cursor_up(),
+            ButtonId::Down => modal::cursor_down(),
             ButtonId::Fire | ButtonId::Execute => modal::activate(),
-            ButtonId::Left | ButtonId::Right   => {}
+            ButtonId::Left | ButtonId::Right => {}
         }
         true
     } else {
         match btn {
-            ButtonId::Up    => { nav_up();   true }
-            ButtonId::Down  => { nav_down(); true }
-            ButtonId::Left  => { nav_left(); true }
+            ButtonId::Up => {
+                nav_up();
+                true
+            }
+            ButtonId::Down => {
+                nav_down();
+                true
+            }
+            ButtonId::Left => {
+                nav_left();
+                true
+            }
             ButtonId::Right => matches!(nav_right(), NavResult::Moved),
             ButtonId::Fire | ButtonId::Execute => {
-                let nav  = get_nav();
+                let nav = get_nav();
                 let kind = modal::kind_for_icon(nav.row, nav.col);
                 if kind != modal::ModalKind::None {
                     modal::open(kind);
