@@ -518,168 +518,43 @@ async fn nus_peripheral_loop<C>(
         });
 
     loop {
-        // Handle channel reset request from the menu (fires between connections).
-        // CHANNEL_RESET_SIGNAL is now handled in the meshcore task
-        // (which loops continuously and can respond immediately).
-        // Persist boost-RX flag when toggled from the menu.
-        if crate::BOOST_RX_CHANGED_SIGNAL.signaled() {
-            crate::BOOST_RX_CHANGED_SIGNAL.reset();
-            let enabled = crate::BOOSTED_RX_GAIN.load(core::sync::atomic::Ordering::Relaxed);
-            match settings::set_boost_rx(enabled).await {
-                Ok(()) => defmt::debug!("settings: boost_rx={} persisted", enabled),
-                Err(e) => defmt::warn!("settings: boost_rx persist failed: {:?}", e),
-            }
-        }
-        // Persist timezone offset when changed from the menu.
-        if crate::TZ_CHANGED_SIGNAL.signaled() {
-            crate::TZ_CHANGED_SIGNAL.reset();
-            let offset = crate::TIMEZONE_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-            match settings::set_timezone(offset).await {
-                Ok(()) => defmt::debug!("settings: timezone={} persisted", offset),
-                Err(e) => defmt::warn!("settings: timezone persist failed: {:?}", e),
-            }
-        }
-        // Persist LoRa radio params when changed from the menu.
-        if crate::LORA_RADIO_CHANGED_SIGNAL.signaled() {
-            crate::LORA_RADIO_CHANGED_SIGNAL.reset();
+        // Note: persistence of menu-changed settings (timezone, boost-RX,
+        // LoRa params, etc.) is handled by `persister::run` running in
+        // its own task — see `src/fw/mesh/persister.rs`.  This loop
+        // only owns BLE peripheral state.
+        //
+        // Re-sync local mirrors of `radio_params` / `other_params` from
+        // the in-RAM atomics on every outer iteration so any change
+        // the menu made (and the persister already wrote to flash)
+        // is reflected in subsequent companion BLE responses.  Same
+        // visibility window as before — the previous code refreshed
+        // these locals at the top of this same loop too.
+        {
             use core::sync::atomic::Ordering::Relaxed;
-            radio_params.freq_hz = crate::LORA_FREQ_HZ.load(Relaxed);
-            radio_params.bw_hz = crate::LORA_BW_HZ.load(Relaxed);
-            radio_params.sf = crate::LORA_SF.load(Relaxed);
-            radio_params.cr = crate::LORA_CR.load(Relaxed);
-            radio_params.tx_power = crate::LORA_TX_POWER.load(Relaxed);
+            radio_params.freq_hz       = crate::LORA_FREQ_HZ.load(Relaxed);
+            radio_params.bw_hz         = crate::LORA_BW_HZ.load(Relaxed);
+            radio_params.sf            = crate::LORA_SF.load(Relaxed);
+            radio_params.cr            = crate::LORA_CR.load(Relaxed);
+            radio_params.tx_power      = crate::LORA_TX_POWER.load(Relaxed);
             radio_params.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
-            match settings::set_radio_params(radio_params).await {
-                Ok(()) => defmt::info!(
-                    "settings: radio params persisted from menu (takes effect on reboot)"
-                ),
-                Err(e) => defmt::warn!("settings: radio params persist failed: {:?}", e),
-            }
-        }
-        // Persist OtherParams fields when changed from the menu.
-        if crate::OTHER_PARAMS_CHANGED_SIGNAL.signaled() {
-            crate::OTHER_PARAMS_CHANGED_SIGNAL.reset();
-            use core::sync::atomic::Ordering::Relaxed;
-            other_params.advert_loc_policy =
-                crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
-            other_params.multi_acks = crate::MULTI_ACKS.load(Relaxed);
-            let share = crate::TELEMETRY_SHARE.load(Relaxed);
-            let mode: u8 = if share { 2 } else { 0 };
+            other_params.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
+            other_params.multi_acks        = crate::MULTI_ACKS.load(Relaxed);
+            let mode: u8 = if crate::TELEMETRY_SHARE.load(Relaxed) { 2 } else { 0 };
             other_params.telemetry_mode_base = mode;
             other_params.telemetry_mode_loc  = mode;
             other_params.telemetry_mode_env  = mode;
-            match settings::set_other_params(other_params).await {
-                Ok(()) => defmt::info!("settings: other_params persisted from menu"),
-                Err(e) => defmt::warn!("settings: other_params persist failed: {:?}", e),
-            }
-            let ignore = crate::IGNORE_BLINK.load(Relaxed);
-            match settings::set_ignore_blink(ignore).await {
-                Ok(()) => defmt::info!("settings: ignore_blink={=bool} persisted", ignore),
-                Err(e) => defmt::warn!("settings: ignore_blink persist failed: {:?}", e),
-            }
-        }
-        // Persist advert scheduling when changed from the menu.
-        if crate::ADVERT_CHANGED_SIGNAL.signaled() {
-            crate::ADVERT_CHANGED_SIGNAL.reset();
-            use core::sync::atomic::Ordering::Relaxed;
-            let cfg = settings::AdvertConfig {
-                enabled:        crate::ADVERT_ENABLED.load(Relaxed),
-                interval_hours: crate::ADVERT_INTERVAL_HOURS.load(Relaxed),
-            };
-            match settings::set_advert_config(cfg).await {
-                Ok(()) => defmt::info!(
-                    "settings: advert_config persisted (enabled={=bool} interval={=u8}h)",
-                    cfg.enabled, cfg.interval_hours
-                ),
-                Err(e) => defmt::warn!("settings: advert_config persist failed: {:?}", e),
-            }
-        }
-        // Persist PATH_HASH_MODE when changed from the menu.
-        if crate::PATH_HASH_CHANGED_SIGNAL.signaled() {
-            crate::PATH_HASH_CHANGED_SIGNAL.reset();
-            let mode = crate::fw::mesh::PATH_HASH_MODE
-                .load(core::sync::atomic::Ordering::Relaxed);
-            match settings::set_path_hash_mode(mode).await {
-                Ok(()) => defmt::info!("settings: path_hash_mode={=u8} persisted", mode),
-                Err(e) => defmt::warn!("settings: path_hash persist failed: {:?}", e),
-            }
-        }
-        // Factory reset: wipe the entire KV store and reboot.
-        if crate::FACTORY_RESET_SIGNAL.signaled() {
-            crate::FACTORY_RESET_SIGNAL.reset();
-            defmt::info!("settings: factory reset requested — wiping KV and rebooting");
-            crate::fw::kv::wipe_and_reset().await;
-        }
-        // Clear all contacts when requested from the menu.
-        if crate::CONTACT_RESET_SIGNAL.signaled() {
-            crate::CONTACT_RESET_SIGNAL.reset();
-            defmt::info!("settings: clearing all contacts");
-            super::contacts::ContactStore::new().clear_all().await;
         }
 
-        // Persist node name when changed from the menu text entry.
-        if crate::NODE_NAME_CHANGED_SIGNAL.signaled() {
-            crate::NODE_NAME_CHANGED_SIGNAL.reset();
-            #[cfg(feature = "embassy-base")]
-            {
-                let name_bytes = crate::NODE_NAME.lock(|cell| {
-                    let s = cell.borrow();
-                    let mut buf = [0u8; 31];
-                    let n = s.len().min(31);
-                    buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
-                    (buf, n)
-                });
-                node_name[..name_bytes.1].copy_from_slice(&name_bytes.0[..name_bytes.1]);
-                node_name_len = name_bytes.1;
-                match settings::set_node_name(&name_bytes.0[..name_bytes.1]).await {
-                    Ok(()) => defmt::info!("settings: node_name persisted from menu"),
-                    Err(e) => defmt::warn!("settings: node_name persist failed: {:?}", e),
-                }
-            }
-        }
-        // Persist LoRa-enabled flag when changed from the menu.
-        if crate::LORA_DISABLED_CHANGED.signaled() {
-            crate::LORA_DISABLED_CHANGED.reset();
-            let enabled = !crate::LORA_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
-            match settings::set_lora_enabled(enabled).await {
-                Ok(()) => defmt::info!("settings: lora_enabled={=bool} persisted", enabled),
-                Err(e) => defmt::warn!("settings: lora_enabled persist failed: {:?}", e),
-            }
-        }
-        // Persist BLE-enabled flag when changed from the menu.
-        if crate::BLE_DISABLED_CHANGED.signaled() {
-            crate::BLE_DISABLED_CHANGED.reset();
-            let enabled = !crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
-            match settings::set_ble_enabled(enabled).await {
-                Ok(()) => defmt::info!("settings: ble_enabled={=bool} persisted", enabled),
-                Err(e) => defmt::warn!("settings: ble_enabled persist failed: {:?}", e),
-            }
-        }
-        // Clear all BLE bonds when requested from the menu.
-        if crate::CLEAR_BONDS_SIGNAL.signaled() {
-            crate::CLEAR_BONDS_SIGNAL.reset();
-            let _ = super::bonds::BOND_CMD_CHANNEL
-                .try_send(super::bonds::BondCmd::ClearAll);
-            // bond_task will wipe the store and reboot — just wait.
-            embassy_time::Timer::after_secs(5).await;
-        }
         // When BLE is disabled, stop advertising and wait until re-enabled.
+        // The persister task takes care of saving the flag; here we just
+        // poll the in-RAM atomic so the advertise loop pauses cleanly.
         if crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed) {
             defmt::info!("BLE: disabled — waiting for re-enable");
             crate::BLE_CONNECTED.store(false, core::sync::atomic::Ordering::Relaxed);
-            loop {
-                crate::BLE_DISABLED_CHANGED.wait().await;
-                crate::BLE_DISABLED_CHANGED.reset();
-                let enabled = !crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
-                match settings::set_ble_enabled(enabled).await {
-                    Ok(()) => defmt::info!("settings: ble_enabled={=bool} persisted", enabled),
-                    Err(e) => defmt::warn!("settings: ble_enabled persist failed: {:?}", e),
-                }
-                if enabled {
-                    defmt::info!("BLE: re-enabled — resuming advertising");
-                    break;
-                }
+            while crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed) {
+                embassy_time::Timer::after_millis(200).await;
             }
+            defmt::info!("BLE: re-enabled — resuming advertising");
         }
 
         defmt::debug!("BLE: advertising…");

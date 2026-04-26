@@ -33,6 +33,7 @@ use hello_graphics::fw::mesh::{
     bonds::bond_task,
     contacts::ContactStore,
     meshcore::run_meshcore_listener,
+    persister,
     settings,
 };
 #[cfg(feature = "mesh")]
@@ -121,6 +122,7 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "mesh")]
     let identity = {
         spawner.must_spawn(bond_task());
+        spawner.must_spawn(persister::run());
         ContactStore::new().init().await;
 
         // Load persisted display/runtime settings (timezone, boost-RX) into

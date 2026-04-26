@@ -14,6 +14,7 @@ pub mod contacts;
 pub mod device_identity;
 pub mod meshcore;
 pub mod msg_queue;
+pub mod persister;
 pub mod repeater;
 pub mod settings;
 pub mod sx1262;
