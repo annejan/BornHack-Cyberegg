@@ -27,9 +27,7 @@ const MAX_SPONSORS: usize = 10;
 const SLIDE_DURATION_SECS: u64 = 10;
 
 /// EKV key: presence means the slideshow has already been shown.
-#[cfg(feature = "mesh")]
 const KV_KEY: &str = "shown";
-#[cfg(feature = "mesh")]
 const KV_NAMESPACE: &str = "sponsors";
 
 // ── Filename generation ──────────────────────────────────────────────────────
@@ -51,35 +49,26 @@ fn sponsor_filename(index: u8) -> [u8; 11] {
 // ── Slideshow flag ───────────────────────────────────────────────────────────
 
 /// Check if the slideshow has already been shown (flag exists in ekv).
-#[cfg(feature = "mesh")]
 pub async fn already_shown() -> bool {
-    use super::mesh::kv;
+    use super::kv;
     let ns = kv::namespace(KV_NAMESPACE);
     let mut buf = [0u8; 1];
     ns.get(KV_KEY, &mut buf).await.is_ok()
 }
 
 /// Mark the slideshow as shown (write flag to ekv).
-#[cfg(feature = "mesh")]
 async fn mark_shown() {
-    use super::mesh::kv;
+    use super::kv;
     let ns = kv::namespace(KV_NAMESPACE);
     let _ = ns.set(KV_KEY, &[1], true).await;
 }
 
 /// Clear the "already shown" flag so the slideshow replays on next boot.
-#[cfg(feature = "mesh")]
 pub async fn clear_flag() {
-    use super::mesh::kv;
+    use super::kv;
     let ns = kv::namespace(KV_NAMESPACE);
     let _ = ns.delete(KV_KEY).await;
 }
-
-/// Stubs when ekv is not available.
-#[cfg(not(feature = "mesh"))]
-pub async fn already_shown() -> bool { false }
-#[cfg(not(feature = "mesh"))]
-pub async fn clear_flag() {}
 
 /// Synchronous request to clear the flag (called from menu callback).
 /// The actual async clear happens on the next save cycle.
@@ -186,7 +175,6 @@ pub async fn run(
     }
 
     // ── Mark as shown ────────────────────────────────────────────────
-    #[cfg(feature = "mesh")]
     mark_shown().await;
 
     defmt::info!("sponsors: slideshow complete");

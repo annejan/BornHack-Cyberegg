@@ -6,7 +6,7 @@
 //! the shared QSPI mutex).
 
 use super::engine::{GameState, PetStats, DisplayAnim, PetRealm, PetRecord, PET_NAME_MAX};
-#[cfg(feature = "mesh")]
+#[cfg(feature = "embassy-base")]
 use super::engine::{SAVE_SIZE, REALM_SAVE_SIZE};
 
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
@@ -77,10 +77,9 @@ pub async fn init() {
     }
     unsafe { *GAME.get() = state; }
 
-    // Load pet name and Unicorn Realm.
-    #[cfg(feature = "mesh")]
+    // Load pet name and Unicorn Realm from KV (always present under embassy-base).
     {
-        use crate::fw::mesh::kv;
+        use crate::fw::kv;
         let ns = kv::namespace("game");
 
         // Pet name.
@@ -110,21 +109,18 @@ pub async fn init() {
 
 #[cfg(feature = "embassy-base")]
 async fn try_load() -> Option<GameState> {
-    #[cfg(feature = "mesh")]
-    {
-        use crate::fw::mesh::kv;
-        let ns = kv::namespace("game");
-        let mut buf = [0u8; SAVE_SIZE];
-        if let Ok(n) = ns.get("state", &mut buf).await {
-            if n == SAVE_SIZE {
-                if let Some(mut s) = GameState::from_bytes(&buf) {
-                    s.last_update_tick = 0;
-                    defmt::info!("game: restored from flash (gen={} age={})",
-                        s.generation, s.age_ticks);
-                    return Some(s);
-                }
-                defmt::warn!("game: corrupt save data");
+    use crate::fw::kv;
+    let ns = kv::namespace("game");
+    let mut buf = [0u8; SAVE_SIZE];
+    if let Ok(n) = ns.get("state", &mut buf).await {
+        if n == SAVE_SIZE {
+            if let Some(mut s) = GameState::from_bytes(&buf) {
+                s.last_update_tick = 0;
+                defmt::info!("game: restored from flash (gen={} age={})",
+                    s.generation, s.age_ticks);
+                return Some(s);
             }
+            defmt::warn!("game: corrupt save data");
         }
     }
     None
@@ -445,7 +441,7 @@ pub fn pet_generation() -> u16 {
     }
 }
 
-fn with_state(f: impl FnOnce(&mut GameState) -> bool) -> bool {
+pub(super) fn with_state(f: impl FnOnce(&mut GameState) -> bool) -> bool {
     let state = unsafe { (*GAME.get()).as_mut() };
     match state {
         Some(s) => f(s),
@@ -478,8 +474,9 @@ pub fn realm_pet(index: usize) -> Option<PetRecord> {
 
 /// Save the game state to ekv if enough time has passed.
 /// Returns true if a save was performed.
-/// Only available when the mesh feature provides ekv access.
-#[cfg(feature = "mesh")]
+/// Available in any firmware build that pulls in `embassy-base` (which
+/// brings the KV store).  Stubbed out for the simulator below.
+#[cfg(feature = "embassy-base")]
 pub async fn save_if_needed() -> bool {
     let state = unsafe { (*GAME.get()).as_mut() };
     let Some(state) = state else { return false; };
@@ -491,7 +488,7 @@ pub async fn save_if_needed() -> bool {
         let realm = unsafe { &mut *REALM.get() };
         realm.push(record);
         let buf = realm.to_bytes();
-        let ns = crate::fw::mesh::kv::namespace("game");
+        let ns = crate::fw::kv::namespace("game");
         if ns.set("realm", &buf, true).await.is_err() {
             defmt::warn!("game: realm save failed");
         } else {
@@ -502,7 +499,7 @@ pub async fn save_if_needed() -> bool {
     if !state.needs_save() { return false; }
 
     let buf = state.to_bytes();
-    let ns = crate::fw::mesh::kv::namespace("game");
+    let ns = crate::fw::kv::namespace("game");
     match ns.set("state", &buf, true).await {
         Ok(()) => {
             state.mark_saved();
@@ -518,6 +515,6 @@ pub async fn save_if_needed() -> bool {
     }
 }
 
-/// No-op when ekv is not available (game-only build).
-#[cfg(not(feature = "mesh"))]
+/// No-op when ekv is not available (simulator build).
+#[cfg(not(feature = "embassy-base"))]
 pub async fn save_if_needed() -> bool { false }

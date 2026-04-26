@@ -608,7 +608,7 @@ async fn nus_peripheral_loop<C>(
         if crate::FACTORY_RESET_SIGNAL.signaled() {
             crate::FACTORY_RESET_SIGNAL.reset();
             defmt::info!("settings: factory reset requested — wiping KV and rebooting");
-            super::kv::wipe_and_reset().await;
+            crate::fw::kv::wipe_and_reset().await;
         }
         // Clear all contacts when requested from the menu.
         if crate::CONTACT_RESET_SIGNAL.signaled() {
@@ -2081,7 +2081,7 @@ async fn nus_peripheral_loop<C>(
                                 embassy_time::Timer::after_millis(200).await;
                                 gatt_conn.raw().disconnect();
                                 embassy_time::Timer::after_millis(100).await;
-                                super::kv::wipe_and_reset().await;
+                                crate::fw::kv::wipe_and_reset().await;
                             }
 
                             // Persist an ADD_UPDATE_CONTACT payload to flash and push

@@ -12,12 +12,10 @@ pub mod channel_browser;
 pub mod channels;
 pub mod contacts;
 pub mod device_identity;
-pub mod kv;
 pub mod meshcore;
 pub mod msg_queue;
 pub mod repeater;
 pub mod settings;
-pub mod storage;
 pub mod sx1262;
 
 // Re-export the meshcore listener entry point for embassy.rs.

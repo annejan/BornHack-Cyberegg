@@ -11,6 +11,7 @@ use embassy_time::Timer;
 use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
+use hello_graphics::fw::kv;
 use hello_graphics::{
     BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, board,
     draw_graphics,
@@ -31,7 +32,6 @@ use hello_graphics::fw::mesh::{
     ble::{CompanionContext, init_ble, run_ble_peripheral},
     bonds::bond_task,
     contacts::ContactStore,
-    kv,
     meshcore::run_meshcore_listener,
     settings,
 };
@@ -109,12 +109,17 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(200).await;
     spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
 
-    // ── Mesh stack (KV, contacts, identity, BLE) ─────────────────────────
+    // ── KV store ─────────────────────────────────────────────────────────
+    // Persistent key-value store used by the game (save/load), sponsor
+    // slideshow flag, and the mesh stack.  Must be initialised before any
+    // task reads or writes flash-backed state.
+    kv::init().await;
+
+    // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
     // Must come before temperature/EPD because it consumes p.RNG, p.RTC0,
     // p.TIMER0, p.TEMP, and PPI channels.
     #[cfg(feature = "mesh")]
     let identity = {
-        kv::init().await;
         spawner.must_spawn(bond_task());
         ContactStore::new().init().await;
 

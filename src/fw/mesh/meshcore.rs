@@ -738,7 +738,7 @@ async fn log_advert(
             );
             match store.add_or_update(&contact).await {
                 Ok(_) => {}
-                Err(super::kv::KvError::StoreFull) => {
+                Err(crate::fw::kv::KvError::StoreFull) => {
                     // Hash bucket full (`MAX_SLOTS_PER_BUCKET` rejected the insert).
                     // Matches the spirit of `PUSH_CODE_CONTACTS_FULL` even though
                     // the trigger is different from the reference's slot-count cap.

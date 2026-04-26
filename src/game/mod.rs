@@ -24,6 +24,7 @@ pub mod lightsout;
 pub mod pet_select;
 pub mod realm_view;
 pub mod stat_bar;
+pub mod station;
 pub mod tictactoe;
 pub mod traits_view;
 pub use nav::{GameNav, Row};
@@ -43,15 +44,19 @@ use core::sync::atomic::{AtomicU8, Ordering};
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Toast {
-    None        = 0,
-    Feed        = 1,
-    Heal        = 2,
-    Sleep       = 3,
-    Relax       = 4,
-    Play        = 5,
-    Inspired    = 6,
-    Hibernate   = 7,
-    Wake        = 8,
+    None          = 0,
+    Feed          = 1,
+    Heal          = 2,
+    Sleep         = 3,
+    Relax         = 4,
+    Play          = 5,
+    Inspired      = 6,
+    Hibernate     = 7,
+    Wake          = 8,
+    StationFood   = 9,
+    StationDrugs  = 10,
+    StationInspire = 11,
+    StationRest   = 12,
 }
 
 impl Toast {
@@ -59,21 +64,28 @@ impl Toast {
         match v {
             1 => Self::Feed, 2 => Self::Heal, 3 => Self::Sleep,
             4 => Self::Relax, 5 => Self::Play, 6 => Self::Inspired,
-            7 => Self::Hibernate, 8 => Self::Wake, _ => Self::None,
+            7 => Self::Hibernate, 8 => Self::Wake,
+            9 => Self::StationFood, 10 => Self::StationDrugs,
+            11 => Self::StationInspire, 12 => Self::StationRest,
+            _ => Self::None,
         }
     }
 
     fn message(self) -> &'static str {
         match self {
-            Toast::None      => "",
-            Toast::Feed      => "-hunger",
-            Toast::Heal      => "-sick",
-            Toast::Sleep     => "-tired",
-            Toast::Relax     => "-drained",
-            Toast::Play      => "-miserable",
-            Toast::Inspired  => "+inspired",
-            Toast::Hibernate => "hibernating",
-            Toast::Wake      => "waking up",
+            Toast::None           => "",
+            Toast::Feed           => "-hunger",
+            Toast::Heal           => "-sick",
+            Toast::Sleep          => "-tired",
+            Toast::Relax          => "-drained",
+            Toast::Play           => "-miserable",
+            Toast::Inspired       => "+inspired",
+            Toast::Hibernate      => "hibernating",
+            Toast::Wake           => "waking up",
+            Toast::StationFood    => "station: fed!",
+            Toast::StationDrugs   => "station: healed!",
+            Toast::StationInspire => "station: inspired!",
+            Toast::StationRest    => "station: rested!",
         }
     }
 }

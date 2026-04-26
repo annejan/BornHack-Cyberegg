@@ -40,7 +40,7 @@
 //! |   4    |   2   | `count`    | Non-deleted contacts currently held|
 //! |   6    |   2   | _(pad)_    |                                    |
 
-use super::kv;
+use crate::fw::kv;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -861,7 +861,7 @@ impl ContactStore {
                             "contacts: failed to write initial metadata: {:?} — wiping KV store",
                             e
                         );
-                        super::kv::wipe_and_reset().await;
+                        crate::fw::kv::wipe_and_reset().await;
                     }
                 }
             }

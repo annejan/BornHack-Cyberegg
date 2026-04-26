@@ -8,9 +8,11 @@ pub mod fat12;
 pub mod health;
 pub mod iso14443;
 pub mod flash;
+pub mod kv;
 pub mod led;
 pub mod nfct;
 pub mod sponsors;
+pub mod storage;
 pub mod temperature;
 
 /// MeshCore networking stack (LoRa radio, BLE companion, contacts, channels, KV store).

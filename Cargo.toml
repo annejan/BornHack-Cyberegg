@@ -122,7 +122,6 @@ mesh = [
     "nrf-sdc",
     "trouble-host",
     "rand_core",
-    "ekv",
     "meshcore",
     "meshcore-companion",
 ]
@@ -134,6 +133,7 @@ embassy-base = [
     "cortex-m-rt",
     "defmt",
     "defmt-rtt",
+    "ekv",
     "embassy-executor",
     "embassy-futures",
     "embassy-nrf",

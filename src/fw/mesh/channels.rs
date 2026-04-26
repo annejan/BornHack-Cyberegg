@@ -13,7 +13,7 @@
 //! [name: 32 bytes, zero-padded UTF-8][key: 16 bytes AES-128]
 //! ```
 
-use super::kv;
+use crate::fw::kv;
 
 // ---------------------------------------------------------------------------
 // Constants

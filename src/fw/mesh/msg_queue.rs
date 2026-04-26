@@ -37,7 +37,7 @@ use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 
-use super::kv;
+use crate::fw::kv;
 
 // ---------------------------------------------------------------------------
 // Constants
