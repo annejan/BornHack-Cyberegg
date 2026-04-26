@@ -423,6 +423,71 @@ pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
 }
 
 // ---------------------------------------------------------------------------
+// Flood scope key  (region-scoped flood — applies to all originated flood TX)
+// ---------------------------------------------------------------------------
+//
+// Mirrors the reference C++ MeshCore implementation's single global
+// `send_scope` (see `examples/companion_radio/MyMesh.cpp::sendFloodScoped`).
+// `Some(key)` ⇒ outgoing flood packets carry the matching transport code so
+// regional repeaters that hold the same key forward them; foreign repeaters
+// silently drop them.  `None` ⇒ unscoped flood, accepted everywhere.
+//
+// On first boot we seed the persisted value with the dk-bornhack region key
+// so badges shipped to BornHack route through event repeaters by default.
+// The companion `SET_FLOOD_SCOPE` (0x36) command lets ops re-key or clear
+// the scope at runtime, and the change is persisted so it survives reboots.
+
+/// SHA-256-truncated derivation from the literal string `"dk-bornhack"`.
+///
+/// Reusing [`meshcore::channel::key_from_hashtag`] for the bytes (it just
+/// SHA-256s and truncates — same algorithm; the function name is a misnomer
+/// in this context but the result is the deterministic 16-byte key the
+/// BornHack repeaters expect).
+fn dk_bornhack_default_scope() -> [u8; 16] {
+    meshcore::channel::key_from_hashtag("dk-bornhack")
+}
+
+/// Read the persisted flood-scope key, seeding the first-boot default if no
+/// value has ever been stored.
+///
+/// Returns:
+/// - `Some(key)` when a non-zero key is stored or the default is just seeded.
+/// - `None` when an all-zero "explicitly cleared" value is stored (set by
+///   the BLE companion when the operator clears the scope).
+pub async fn get_flood_scope_or_init_default() -> Option<[u8; 16]> {
+    let mut b = [0u8; 16];
+    match ns().get("flood_scope", &mut b).await {
+        Ok(16) => {
+            if b.iter().all(|&x| x == 0) {
+                None
+            } else {
+                Some(b)
+            }
+        }
+        _ => {
+            // First boot (no key persisted yet): seed with dk-bornhack.
+            let default = dk_bornhack_default_scope();
+            if let Err(e) = ns().set("flood_scope", &default, true).await {
+                defmt::warn!("settings: flood_scope seed failed: {:?}", e);
+            } else {
+                defmt::info!("settings: flood_scope seeded with dk-bornhack default");
+            }
+            Some(default)
+        }
+    }
+}
+
+/// Persist a flood-scope key (or clear it) to flash.
+///
+/// Passing `None` writes 16 zero bytes; the next call to
+/// [`get_flood_scope_or_init_default`] then reads it back as `None` instead
+/// of re-seeding the default — i.e. an explicit clear sticks across reboots.
+pub async fn set_flood_scope(key: Option<[u8; 16]>) -> Result<(), kv::KvError> {
+    let bytes = key.unwrap_or([0u8; 16]);
+    ns().set("flood_scope", &bytes, true).await
+}
+
+// ---------------------------------------------------------------------------
 // Tuning parameters  (CMD_SET_TUNING_PARAMS 0x15 / CMD_GET_TUNING_PARAMS 0x2B)
 // ---------------------------------------------------------------------------
 

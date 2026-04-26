@@ -1309,14 +1309,20 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::SetFloodScope(key)) => {
                                     crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(key));
+                                    if let Err(e) = settings::set_flood_scope(key).await {
+                                        defmt::warn!(
+                                            "settings: flood_scope persist failed: {:?}",
+                                            e
+                                        );
+                                    }
                                     match key {
                                         Some(k) => defmt::info!(
-                                            "companion: SET_FLOOD_SCOPE key={:02X} → OK",
+                                            "companion: SET_FLOOD_SCOPE key={:02X} → OK (persisted)",
                                             k
                                         ),
-                                        None => {
-                                            defmt::debug!("companion: SET_FLOOD_SCOPE (clear) → OK")
-                                        }
+                                        None => defmt::debug!(
+                                            "companion: SET_FLOOD_SCOPE (clear) → OK (persisted)"
+                                        ),
                                     }
                                     companion::Response::Ok
                                 }

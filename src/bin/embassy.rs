@@ -142,6 +142,16 @@ async fn main(spawner: Spawner) {
             settings::get_boost_rx().await,
             core::sync::atomic::Ordering::Relaxed,
         );
+
+        // Flood-scope key: load from flash, seeding the dk-bornhack default
+        // on first boot so badges ship region-scoped to BornHack repeaters.
+        // Operators can override via the companion `SET_FLOOD_SCOPE` (0x36)
+        // command; that change persists.
+        {
+            let scope = settings::get_flood_scope_or_init_default().await;
+            hello_graphics::fw::mesh::FLOOD_SCOPE_KEY.lock(|c| c.set(scope));
+        }
+
         {
             let rp = settings::get_radio_params_or_default().await;
             use core::sync::atomic::Ordering::Relaxed;
