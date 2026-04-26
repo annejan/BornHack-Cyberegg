@@ -151,6 +151,14 @@ pub fn is_started() -> bool {
     unsafe { (*GAME.get()).is_some() }
 }
 
+/// Returns true if the pet is alive enough to receive a station buff
+/// over NFC — i.e. a game has started and the pet has not left.
+/// `Hatching`, `Active` and `Leaving` all qualify; `Gone` does not.
+pub fn can_use_station() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    matches!(state, Some(s) if s.phase != super::engine::Phase::Gone)
+}
+
 /// Create a new egg and begin the hatching countdown.
 /// Called after the player selects a pet kind on the selection screen.
 pub fn start_new_game(kind: super::engine::PetKind) {

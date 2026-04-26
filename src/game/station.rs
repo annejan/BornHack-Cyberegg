@@ -6,36 +6,97 @@
 //! is handed here; if it matches one of the four phrases the
 //! corresponding stat is restored to full and a station toast is
 //! shown.  Anything else is silently ignored.
+//!
+//! # Gating
+//!
+//! Station effects are only applied while a pet is present and not
+//! gone (see [`lifecycle::can_use_station`]); a fresh badge with no
+//! egg yet, or a badge whose pet has already left, ignores all
+//! station writes.
+//!
+//! # Cooldown
+//!
+//! Each of the four effects has its own 5-minute cooldown so a player
+//! can walk between stations without delay but can't farm the same
+//! station twice in quick succession.  Cooldowns live in RAM only and
+//! reset across reboots, which is acceptable for the event use case.
+
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use super::Toast;
-use super::lifecycle::with_state;
+use super::lifecycle::{self, with_state};
+
+/// Cooldown between repeat applications of the *same* station effect.
+/// 30 ticks × 10 s/tick = 5 minutes.
+const COOLDOWN_TICKS: u32 = 30;
+
+/// Last-applied tick per effect.  Sentinel `u32::MAX` means "never
+/// applied this boot" — the wrapping subtraction in `try_consume`
+/// then yields a huge gap so the first tap always succeeds, even at
+/// `now_tick == 0`.
+static LAST_FOOD: AtomicU32    = AtomicU32::new(u32::MAX);
+static LAST_DRUGS: AtomicU32   = AtomicU32::new(u32::MAX);
+static LAST_INSPIRE: AtomicU32 = AtomicU32::new(u32::MAX);
+static LAST_REST: AtomicU32    = AtomicU32::new(u32::MAX);
+
+/// Try to claim the cooldown slot.  Returns `Ok(())` and stamps the
+/// slot if the cooldown has elapsed; otherwise returns the remaining
+/// time in *seconds* so the caller can surface it to the user.
+fn try_consume(slot: &AtomicU32) -> Result<(), u16> {
+    let now = lifecycle::now_tick();
+    let last = slot.load(Ordering::Relaxed);
+    let elapsed = now.wrapping_sub(last);
+    if elapsed < COOLDOWN_TICKS {
+        let remaining_ticks = COOLDOWN_TICKS - elapsed;
+        // 1 tick = 10 seconds; cap at u16::MAX defensively even
+        // though our 5-min cooldown only ever produces ≤ 300.
+        return Err((remaining_ticks * 10).min(u16::MAX as u32) as u16);
+    }
+    slot.store(now, Ordering::Relaxed);
+    Ok(())
+}
 
 /// Try to interpret `text` as a station command.  Returns the toast to
 /// display on success, or `None` if the text is not a recognised
-/// station phrase.  Matching is exact after trimming ASCII whitespace
-/// and lowercasing; empty / non-ASCII / oversized payloads are
-/// rejected silently.
+/// station phrase, the game isn't ready to receive a buff, or the
+/// matched effect is on cooldown.  Matching is exact after trimming
+/// ASCII whitespace and lowercasing; empty / non-ASCII / oversized
+/// payloads are rejected silently.
 pub fn apply(text: &[u8]) -> Option<Toast> {
+    if !lifecycle::can_use_station() {
+        return None;
+    }
+
     let key = normalize(text)?;
 
     match key.as_slice() {
-        b"more food" => {
-            with_state(|s| { s.hunger = 0; true });
-            Some(Toast::StationFood)
-        }
-        b"more drugs" => {
-            with_state(|s| { s.sick = 0; true });
-            Some(Toast::StationDrugs)
-        }
-        b"more inspiration" => {
-            with_state(|s| { s.drained = 0; true });
-            Some(Toast::StationInspire)
-        }
-        b"sleep like a bear" => {
-            with_state(|s| { s.tired = 0; true });
-            Some(Toast::StationRest)
-        }
+        b"more food" => station_step(&LAST_FOOD, Toast::StationFood, |s| s.hunger = 0),
+        b"more drugs" => station_step(&LAST_DRUGS, Toast::StationDrugs, |s| s.sick = 0),
+        b"more inspiration" => station_step(&LAST_INSPIRE, Toast::StationInspire, |s| s.drained = 0),
+        b"sleep like a bear" => station_step(&LAST_REST, Toast::StationRest, |s| s.tired = 0),
         _ => None,
+    }
+}
+
+/// Apply a station effect, or surface the cooldown via a
+/// [`Toast::StationCooldown`] with remaining seconds.
+fn station_step(
+    slot: &AtomicU32,
+    success_toast: Toast,
+    mutate: impl FnOnce(&mut super::engine::GameState),
+) -> Option<Toast> {
+    match try_consume(slot) {
+        Ok(()) => {
+            with_state(|s| { mutate(s); true });
+            Some(success_toast)
+        }
+        Err(secs) => {
+            super::show_station_cooldown(secs);
+            // Returning `None` so the caller (`nfct.rs`) does not also
+            // call `show_toast` — the cooldown toast was already
+            // pushed by `show_station_cooldown` above.
+            None
+        }
     }
 }
 

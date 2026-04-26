@@ -38,7 +38,7 @@ use crate::{BLACK, TriColor, WHITE};
 
 // ── Action feedback toast ────────────────────────────────────────────────────
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 /// Action feedback shown briefly after an action.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,10 @@ pub enum Toast {
     StationDrugs  = 10,
     StationInspire = 11,
     StationRest   = 12,
+    /// Station tap was rejected because the matching effect is still
+    /// on cooldown.  The remaining seconds are read from
+    /// [`STATION_COOLDOWN_SECS`] and formatted at draw time.
+    StationCooldown = 13,
 }
 
 impl Toast {
@@ -67,6 +71,7 @@ impl Toast {
             7 => Self::Hibernate, 8 => Self::Wake,
             9 => Self::StationFood, 10 => Self::StationDrugs,
             11 => Self::StationInspire, 12 => Self::StationRest,
+            13 => Self::StationCooldown,
             _ => Self::None,
         }
     }
@@ -86,6 +91,8 @@ impl Toast {
             Toast::StationDrugs   => "station: healed!",
             Toast::StationInspire => "station: inspired!",
             Toast::StationRest    => "station: rested!",
+            // Dynamic — handled in the renderer.
+            Toast::StationCooldown => "",
         }
     }
 }
@@ -95,6 +102,11 @@ static TOAST_MSG: AtomicU8 = AtomicU8::new(0);
 /// Remaining draw cycles before the toast disappears.
 static TOAST_TTL: AtomicU8 = AtomicU8::new(0);
 
+/// Remaining cooldown in seconds, read by the renderer when the
+/// active toast is [`Toast::StationCooldown`].  Set by
+/// [`show_station_cooldown`].
+static STATION_COOLDOWN_SECS: AtomicU16 = AtomicU16::new(0);
+
 /// Number of display refreshes to show the toast (~2–3 sec per refresh on e-ink).
 const TOAST_DRAWS: u8 = 2;
 
@@ -102,6 +114,13 @@ const TOAST_DRAWS: u8 = 2;
 pub fn show_toast(toast: Toast) {
     TOAST_MSG.store(toast as u8, Ordering::Relaxed);
     TOAST_TTL.store(TOAST_DRAWS, Ordering::Relaxed);
+}
+
+/// Show the station-cooldown toast with the remaining time formatted
+/// from `secs` (e.g. `"wait 4:50"`).
+pub fn show_station_cooldown(secs: u16) {
+    STATION_COOLDOWN_SECS.store(secs, Ordering::Relaxed);
+    show_toast(Toast::StationCooldown);
 }
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -378,7 +397,22 @@ where
     let ttl = TOAST_TTL.load(Ordering::Relaxed);
     if ttl > 0 {
         let toast = Toast::from_u8(TOAST_MSG.load(Ordering::Relaxed));
-        let msg = toast.message();
+        // Dynamic toasts (station cooldown) format their text at draw
+        // time from a small atomic; everything else uses the static
+        // message table.
+        let mut dyn_buf: heapless::String<24> = heapless::String::new();
+        let msg: &str = if let Toast::StationCooldown = toast {
+            let secs = STATION_COOLDOWN_SECS.load(Ordering::Relaxed);
+            let m = secs / 60;
+            let s = secs % 60;
+            let _ = core::fmt::Write::write_fmt(
+                &mut dyn_buf,
+                format_args!("wait {}:{:02}", m, s),
+            );
+            dyn_buf.as_str()
+        } else {
+            toast.message()
+        };
         if !msg.is_empty() {
             use embedded_graphics::text::{Text, TextStyleBuilder, Baseline};
             use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD};
