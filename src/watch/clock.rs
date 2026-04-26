@@ -98,22 +98,25 @@ const COLON_BOT_Y: i32 = DIGIT_Y + 2 * STROKE + VERT_LEN + VERT_LEN / 2 - COLON_
 
 // ── Analog face geometry ─────────────────────────────────────────────────────
 //
-// The analog face fills almost the entire body between the header and the
-// weekday strip — the date is rendered as a small red `DD MON` complication
-// inside the dial rather than below it (so the digital face's date row only
-// applies to digital).
+// Day-Date layout, à la Rolex: the dial fills the entire body (no separate
+// weekday strip — that's digital-only), with two red complications inside
+// the dial — `TUE` at 12 o'clock and `27 APR` at 6 o'clock.
 const ANALOG_CX: i32 = 76;
-const ANALOG_CY: i32 = 78;
-const ANALOG_R: i32 = 54;
-const ANALOG_TICK_HOUR: i32 = 4;
-const ANALOG_TICK_CARDINAL: i32 = 7;
-const HOUR_HAND_LEN: i32 = 30;
-const MINUTE_HAND_LEN: i32 = 46;
+const ANALOG_CY: i32 = 84;
+const ANALOG_R: i32 = 64;
+const ANALOG_TICK_HOUR: i32 = 5;
+const ANALOG_TICK_CARDINAL: i32 = 9;
+const HOUR_HAND_LEN: i32 = 36;
+const MINUTE_HAND_LEN: i32 = 55;
 const HOUR_HAND_W: u32 = 4;
 const MINUTE_HAND_W: u32 = 2;
-const CENTER_DOT_R: u32 = 7; // diameter
-/// Date complication position — between the centre dot and the 6 o'clock tick.
-const DATE_COMPL_Y: i32 = ANALOG_CY + 27;
+const CENTER_DOT_R: u32 = 9; // diameter
+/// Date complication (12 o'clock) — pulled toward centre so it sits well
+/// clear of the 12 tick.
+const DATE_COMPL_Y: i32 = ANALOG_CY - 40;
+/// Day complication (6 o'clock) — pulled toward centre so it sits well
+/// clear of the 6 tick.
+const DAY_COMPL_Y: i32 = ANALOG_CY + 40;
 
 // ── Date label ───────────────────────────────────────────────────────────────
 const DATE_X: i32 = 76;
@@ -419,11 +422,12 @@ where
     .into_styled(minute_style)
     .draw(display)?;
 
-    // Date complication inside the dial — small `DD MON` in red between
-    // the centre dot and the 6 o'clock tick.  Drawn before the hands so
-    // the minute hand (which crosses it when pointing down) reads on top
-    // in black.  Red lives in its own plane so the two coexist legibly.
+    // Day-Date complications — `DD MON` at 12 o'clock, `TUE` at 6 o'clock.
+    // Drawn before the hands so the minute hand (which crosses each one
+    // about once an hour) reads on top in black; the complications are
+    // red, so the two planes coexist legibly.
     draw_analog_date_complication(display, clock)?;
+    draw_analog_day_complication(display, clock)?;
 
     // Centre dot covers the hand pivot.
     Circle::with_center(Point::new(ANALOG_CX, ANALOG_CY), CENTER_DOT_R)
@@ -436,6 +440,26 @@ where
 const MONTH_ABBR: [&str; 12] = [
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ];
+
+fn draw_analog_day_complication<D>(display: &mut D, clock: &Clock) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+
+    let weekday_idx = (clock.weekday as usize).min(6);
+    Text::with_text_style(
+        DAY_NAMES[weekday_idx],
+        Point::new(ANALOG_CX, DAY_COMPL_Y),
+        MonoTextStyle::new(&FONT_6X13_BOLD, RED),
+        centered,
+    )
+    .draw(display)?;
+    Ok(())
+}
 
 fn draw_analog_date_complication<D>(display: &mut D, clock: &Clock) -> Result<(), D::Error>
 where
@@ -540,17 +564,17 @@ where
         return Ok(());
     };
 
-    // Analog draws the date as a red `DD MON` complication inside the dial,
-    // so we only render the dedicated black date row for the digital face.
+    // Analog has its own Day-Date complications inside the dial (and fills
+    // the body all the way down to the screen edge), so the digital-style
+    // date row + bottom weekday strip apply to the digital face only.
     match current_face() {
         WatchFace::Digital => {
             draw_digital(display, &clock)?;
             draw_date(display, &clock)?;
+            draw_day_strip(display, clock.weekday)?;
         }
         WatchFace::Analog => draw_analog(display, &clock)?,
     }
-
-    draw_day_strip(display, clock.weekday)?;
     Ok(())
 }
 
