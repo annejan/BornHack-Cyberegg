@@ -1474,6 +1474,18 @@ pub struct LoRaPreset {
 }
 
 pub static LORA_PRESETS: &[LoRaPreset] = &[
+    // BornHack-event preset — ETSI g4 sub-band, spectrum-isolated from the
+    // standard EU/UK Narrow channel at 869.618 MHz so badges on this preset
+    // and stock MeshCore badges form physically separate networks.  TX power
+    // is left at whatever the user has set; for full ETSI compliance with
+    // 100 % duty cycle ops should set it to +7 dBm via the Power menu.
+    LoRaPreset {
+        title: "BornHack Turbo",
+        freq_hz: 869_850_000,
+        bw_hz: 250_000,
+        sf: 8,
+        cr: 5, // CR 4/5
+    },
     LoRaPreset {
         title: "Australia",
         freq_hz: 915_800_000,

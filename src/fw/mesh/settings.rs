@@ -137,15 +137,21 @@ impl RadioParams {
     }
 }
 
-/// Default radio parameters — EU/UK narrow band (MeshCore reference preset).
+/// Default radio parameters — **BornHack Turbo (ETSI g4)**, the badge's
+/// out-of-the-box preset.
 ///
-/// 869.618 MHz · BW 62.5 kHz · SF8 · CR 4/5 · 14 dBm TX
+/// 869.85 MHz · BW 250 kHz · SF8 · CR 4/5 · 14 dBm TX
+///
+/// Spectrum-separated from the standard EU/UK Narrow channel at 869.618 MHz,
+/// so badges on this preset don't share airtime with stock MeshCore badges.
+/// TX power is kept at the legacy 14 dBm default; for fully compliant ETSI
+/// g4 100 % duty-cycle operation, drop it to +7 dBm via the Power menu.
 ///
 /// Coding rate uses **MeshCore protocol encoding**: 5 = CR 4/5, 6 = CR 4/6,
 /// etc. (distinct from the sx126x hardware register encoding where CR4_5 = 1).
 pub const DEFAULT_RADIO: RadioParams = RadioParams {
-    freq_hz: 869_618_000,
-    bw_hz: 62_500,
+    freq_hz: 869_850_000,
+    bw_hz: 250_000,
     sf: 8,
     cr: 5, // CR 4/5 in MeshCore protocol encoding
     tx_power: 14,

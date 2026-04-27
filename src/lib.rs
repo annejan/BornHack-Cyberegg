@@ -101,9 +101,10 @@ pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new(
 
 /// Current LoRa radio parameters exposed as atomics so the menu can read them
 /// synchronously. Populated on boot from flash and kept in sync with
-/// `settings::get_radio_params_or_default()`.
-pub static LORA_FREQ_HZ: AtomicU32 = AtomicU32::new(869_618_000);
-pub static LORA_BW_HZ: AtomicU32 = AtomicU32::new(62_500);
+/// `settings::get_radio_params_or_default()`.  Defaults match
+/// [`crate::fw::mesh::settings::DEFAULT_RADIO`] — BornHack Turbo (g4).
+pub static LORA_FREQ_HZ: AtomicU32 = AtomicU32::new(869_850_000);
+pub static LORA_BW_HZ: AtomicU32 = AtomicU32::new(250_000);
 pub static LORA_SF: AtomicU8 = AtomicU8::new(8);
 pub static LORA_CR: AtomicU8 = AtomicU8::new(5);
 /// LoRa TX power in dBm (−9..=22, matches the companion validation range).
