@@ -28,7 +28,7 @@
 //!     * Fire/Execute  — exit field editing, back to row-nav
 //!     * Cancel        — exit field editing, back to row-nav
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
@@ -196,6 +196,12 @@ static ALARM_DAYS: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0b0111_1111) };
 /// Index into [`crate::fw::buzzer::MELODIES`] used as the alarm ringtone.
 /// Default: 8 = the dedicated `ALARM` beep-beep pattern.
 static ALARM_MELODY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(8) }; N_ALARMS];
+/// Optional one-shot date.  When `year` is non-zero, the slot fires only on
+/// the exact matching `year-month-day` (and then self-disables) — used for
+/// calendar-event alarms.  `year == 0` means recurring per the day mask.
+static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
+static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 
 /// Curated alarm-tone choices: (menu label, melody index).
 /// Order is the cycle order in the Settings → Alarm → Tone stepper.
@@ -234,10 +240,61 @@ pub fn alarm_days_n(slot: usize) -> u8 {
 pub fn alarm_melody_n(slot: usize) -> u8 {
     ALARM_MELODY[s(slot)].load(Ordering::Relaxed)
 }
+pub fn alarm_year_n(slot: usize) -> u16 {
+    ALARM_YEAR[s(slot)].load(Ordering::Relaxed)
+}
+pub fn alarm_month_n(slot: usize) -> u8 {
+    ALARM_MONTH[s(slot)].load(Ordering::Relaxed)
+}
+pub fn alarm_day_n(slot: usize) -> u8 {
+    ALARM_DAY[s(slot)].load(Ordering::Relaxed)
+}
 
 /// `day` is 0 = Mon .. 6 = Sun.
 pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
     day < 7 && (alarm_days_n(slot) >> day) & 1 != 0
+}
+
+/// Returns `true` if `slot` is a one-shot calendar alarm (year != 0) bound to
+/// a specific date, rather than a recurring weekly alarm.
+pub fn alarm_is_one_shot_n(slot: usize) -> bool {
+    alarm_year_n(slot) != 0
+}
+
+// The slot-aware setters below are intentionally pub but currently have no
+// in-tree caller — they're the entry point external code (calendar import,
+// future multi-alarm UI) will use to populate slots > 0.  Without
+// `#[allow(dead_code)]` rustc warns until that wiring lands.
+
+/// Set or clear a slot's one-shot date.  Pass `(0, 0, 0)` to make the slot
+/// recurring (governed by its day mask) again.
+#[allow(dead_code)]
+pub fn set_alarm_date_n(slot: usize, year: u16, month: u8, day: u8) {
+    let i = s(slot);
+    ALARM_YEAR[i].store(year, Ordering::Relaxed);
+    ALARM_MONTH[i].store(month, Ordering::Relaxed);
+    ALARM_DAY[i].store(day, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+#[allow(dead_code)]
+pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
+    let i = s(slot);
+    ALARM_HOUR[i].store(hour.min(23), Ordering::Relaxed);
+    ALARM_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+#[allow(dead_code)]
+pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
+    ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+#[allow(dead_code)]
+pub fn set_alarm_melody_n(slot: usize, melody: u8) {
+    ALARM_MELODY[s(slot)].store(melody, Ordering::Relaxed);
+    super::signal_settings_dirty();
 }
 
 // ── Slot-0 (primary) accessors — backward-compatible thin wrappers ──────────
@@ -423,10 +480,13 @@ static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
     (),
 > = embassy_sync::signal::Signal::new();
 
-/// Walks all `N_ALARMS` slots; for each enabled slot whose day mask covers
-/// today, if the local time matches `HH:MM` the buzzer is fired with that
-/// slot's melody.  The alarm-ring task then repeats the melody until the
-/// user dismisses or the repeat budget is exhausted.
+/// Walks all `N_ALARMS` slots; for each enabled slot, fires the buzzer if
+/// the local time matches and either:
+///  * the slot is a one-shot calendar alarm (`year != 0`) whose date is today, or
+///  * the slot is a recurring weekly alarm (`year == 0`) whose day mask covers today.
+///
+/// One-shot slots auto-disable after firing so they don't ring again on the
+/// next reboot if the badge is rebooted while still on the same calendar day.
 ///
 /// Only the *first* matching slot fires per minute boundary — running two
 /// melodies on top of each other would just sound bad.  Slot order is the
@@ -440,13 +500,26 @@ pub fn check_and_fire_alarm() {
         if !alarm_enabled_n(slot) {
             continue;
         }
-        if !alarm_day_enabled_n(slot, c.weekday) {
+        // Date- vs day-mask gate.
+        if alarm_is_one_shot_n(slot) {
+            if alarm_year_n(slot) != c.year
+                || alarm_month_n(slot) != c.month
+                || alarm_day_n(slot) != c.day
+            {
+                continue;
+            }
+        } else if !alarm_day_enabled_n(slot, c.weekday) {
             continue;
         }
         if c.hour == alarm_hour_n(slot) && c.minute == alarm_minute_n(slot) {
             ALARM_RINGING.store(true, Ordering::Relaxed);
             ALARM_RING_SIGNAL.signal(());
             crate::fw::buzzer::play(alarm_melody_n(slot) as usize);
+            // One-shot alarms auto-disable after firing.
+            if alarm_is_one_shot_n(slot) {
+                ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
+                super::signal_settings_dirty();
+            }
             return;
         }
     }
