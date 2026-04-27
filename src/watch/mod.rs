@@ -10,11 +10,11 @@
 //!   * Up/Down       — toggle digital ↔ analog face
 //!   * Fire/Execute  — enter alarm-edit mode
 //!
-//! Alarm-edit mode buttons:
-//!   * Left/Right    — cycle selected field
-//!                     (Hour → Minute → Days → Tone → Enabled → Hour)
-//!   * Up/Down       — increment / decrement the selected field
-//!   * Fire/Cancel   — exit edit mode (changes are live, no save needed)
+//! Alarm-edit mirrors the Settings-menu stepper pattern: Up/Down moves the
+//! selection between fields (Hour, Minute, Days, Tone, Enabled), Fire drills
+//! into a field (Up/Down then steps the value, Fire or Cancel pops back), and
+//! Cancel from row-nav exits the edit screen entirely.  See [`alarm`] for the
+//! full button table.
 //!
 //! The current weekday is highlighted in red (white-on-red) for visual punch.
 //! Note: the red plane only updates on a full tri-color refresh; on the fast

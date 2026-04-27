@@ -8,7 +8,9 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_7X13_BOLD};
+use embedded_graphics::mono_font::ascii::{
+    FONT_6X10, FONT_7X13_BOLD, FONT_8X13_BOLD, FONT_9X18_BOLD,
+};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{
     Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Triangle,
@@ -97,20 +99,32 @@ const COLON_TOP_Y: i32 = DIGIT_Y + STROKE + VERT_LEN / 2 - COLON_W / 2;
 const COLON_BOT_Y: i32 = DIGIT_Y + 2 * STROKE + VERT_LEN + VERT_LEN / 2 - COLON_W / 2;
 
 // ── Analog face geometry ─────────────────────────────────────────────────────
+//
+// Day-Date layout, à la Rolex: the dial fills the entire body (no separate
+// weekday strip — that's digital-only), with two red complications inside
+// the dial — `TUE` at 12 o'clock and `27 APR` at 6 o'clock.
 const ANALOG_CX: i32 = 76;
-const ANALOG_CY: i32 = 65;
-const ANALOG_R: i32 = 44;
-const ANALOG_TICK_HOUR: i32 = 4;
-const ANALOG_TICK_CARDINAL: i32 = 7;
-const HOUR_HAND_LEN: i32 = 25;
-const MINUTE_HAND_LEN: i32 = 38;
+const ANALOG_CY: i32 = 84;
+const ANALOG_R: i32 = 64;
+const ANALOG_TICK_HOUR: i32 = 5;
+const ANALOG_TICK_CARDINAL: i32 = 9;
+const HOUR_HAND_LEN: i32 = 36;
+const MINUTE_HAND_LEN: i32 = 55;
 const HOUR_HAND_W: u32 = 4;
 const MINUTE_HAND_W: u32 = 2;
-const CENTER_DOT_R: u32 = 7; // diameter
+const CENTER_DOT_R: u32 = 9; // diameter
+/// Date complication (12 o'clock) — pulled toward centre so it sits well
+/// clear of the 12 tick.
+const DATE_COMPL_Y: i32 = ANALOG_CY - 40;
+/// Day complication (6 o'clock) — pulled toward centre so it sits well
+/// clear of the 6 tick.
+const DAY_COMPL_Y: i32 = ANALOG_CY + 40;
 
 // ── Date label ───────────────────────────────────────────────────────────────
 const DATE_X: i32 = 76;
-const DATE_Y: i32 = 122;
+// Centred between the bottom of the digit pair (y=95) and the top of the
+// day strip (y=136) so the date sits in the visual middle of the band.
+const DATE_Y: i32 = 115;
 
 // ── Day-of-week strip (bottom of screen) ─────────────────────────────────────
 const DAY_NAMES: [&str; 7] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
@@ -412,11 +426,67 @@ where
     .into_styled(minute_style)
     .draw(display)?;
 
+    // Day-Date complications — `DD MON` at 12 o'clock, `TUE` at 6 o'clock.
+    // Drawn before the hands so the minute hand (which crosses each one
+    // about once an hour) reads on top in black; the complications are
+    // red, so the two planes coexist legibly.
+    draw_analog_date_complication(display, clock)?;
+    draw_analog_day_complication(display, clock)?;
+
     // Centre dot covers the hand pivot.
     Circle::with_center(Point::new(ANALOG_CX, ANALOG_CY), CENTER_DOT_R)
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
+    Ok(())
+}
+
+const MONTH_ABBR: [&str; 12] = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+];
+
+fn draw_analog_day_complication<D>(display: &mut D, clock: &Clock) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+
+    let weekday_idx = (clock.weekday as usize).min(6);
+    Text::with_text_style(
+        DAY_NAMES[weekday_idx],
+        Point::new(ANALOG_CX, DAY_COMPL_Y),
+        MonoTextStyle::new(&FONT_8X13_BOLD, RED),
+        centered,
+    )
+    .draw(display)?;
+    Ok(())
+}
+
+fn draw_analog_date_complication<D>(display: &mut D, clock: &Clock) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+
+    let month_idx = (clock.month as usize).saturating_sub(1).min(11);
+    let mon = MONTH_ABBR[month_idx];
+
+    let mut buf: heapless::String<8> = heapless::String::new();
+    let _ = core::fmt::write(&mut buf, format_args!("{:02} {}", clock.day, mon));
+
+    Text::with_text_style(
+        &buf,
+        Point::new(ANALOG_CX, DATE_COMPL_Y),
+        MonoTextStyle::new(&FONT_8X13_BOLD, RED),
+        centered,
+    )
+    .draw(display)?;
     Ok(())
 }
 
@@ -437,7 +507,7 @@ where
     Text::with_text_style(
         &date_buf,
         Point::new(DATE_X, DATE_Y),
-        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+        MonoTextStyle::new(&FONT_9X18_BOLD, BLACK),
         centered,
     )
     .draw(display)?;
@@ -498,13 +568,17 @@ where
         return Ok(());
     };
 
+    // Analog has its own Day-Date complications inside the dial (and fills
+    // the body all the way down to the screen edge), so the digital-style
+    // date row + bottom weekday strip apply to the digital face only.
     match current_face() {
-        WatchFace::Digital => draw_digital(display, &clock)?,
+        WatchFace::Digital => {
+            draw_digital(display, &clock)?;
+            draw_date(display, &clock)?;
+            draw_day_strip(display, clock.weekday)?;
+        }
         WatchFace::Analog => draw_analog(display, &clock)?,
     }
-
-    draw_date(display, &clock)?;
-    draw_day_strip(display, clock.weekday)?;
     Ok(())
 }
 

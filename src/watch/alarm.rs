@@ -7,10 +7,17 @@
 //! 7-segment digit primitives live in [`super::clock`]; we reuse those
 //! primitives for the alarm-edit `HH:MM` display.
 //!
-//! Edit-mode buttons:
-//!   * Left/Right    — cycle selected field (Hour → Minute → Days → Tone → Enabled → …)
-//!   * Up/Down       — increment / decrement the selected field
-//!   * Fire/Cancel   — exit edit mode (changes are live, no save needed)
+//! Edit-mode buttons mirror the Settings-menu stepper pattern:
+//!
+//!   Row-nav (default after entering edit mode):
+//!     * Up/Down       — move between fields (Hour → Minute → Days → Tone → Enabled)
+//!     * Fire/Execute  — drill into the selected field, or just toggle Enabled
+//!     * Cancel        — exit edit mode (changes are live, no save needed)
+//!
+//!   Field active (after Fire on a steppable field):
+//!     * Up/Down       — increment / decrement the value
+//!     * Fire/Execute  — exit field editing, back to row-nav
+//!     * Cancel        — exit field editing, back to row-nav
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -45,6 +52,9 @@ enum EditField {
 
 static WATCH_MODE: AtomicU8 = AtomicU8::new(WatchMode::Normal as u8);
 static EDIT_FIELD: AtomicU8 = AtomicU8::new(EditField::Hour as u8);
+/// True while the user has drilled into the selected field with Fire.
+/// Up/Down step the value; Fire or Cancel pops back to row-nav.
+static EDIT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub fn current_mode() -> WatchMode {
     match WATCH_MODE.load(Ordering::Relaxed) {
@@ -66,20 +76,28 @@ fn current_field() -> EditField {
 pub(super) fn enter_edit() {
     WATCH_MODE.store(WatchMode::AlarmEdit as u8, Ordering::Relaxed);
     EDIT_FIELD.store(EditField::Hour as u8, Ordering::Relaxed);
+    EDIT_ACTIVE.store(false, Ordering::Relaxed);
 }
 
 fn exit_edit() {
     WATCH_MODE.store(WatchMode::Normal as u8, Ordering::Relaxed);
+    EDIT_ACTIVE.store(false, Ordering::Relaxed);
 }
 
-fn cycle_field(forward: bool) {
-    let next = match (current_field(), forward) {
+pub(super) fn is_edit_active() -> bool {
+    EDIT_ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Move the row-selection one step toward the next/prev field.  Stops at the
+/// ends — no wraparound — so it matches `menu_up`/`menu_down`.
+fn nav_field(down: bool) {
+    let next = match (current_field(), down) {
         (EditField::Hour, true) => EditField::Minute,
         (EditField::Minute, true) => EditField::Days,
         (EditField::Days, true) => EditField::Tone,
         (EditField::Tone, true) => EditField::Enabled,
-        (EditField::Enabled, true) => EditField::Hour,
-        (EditField::Hour, false) => EditField::Enabled,
+        (EditField::Enabled, true) => EditField::Enabled, // bottom — stop
+        (EditField::Hour, false) => EditField::Hour,      // top — stop
         (EditField::Minute, false) => EditField::Hour,
         (EditField::Days, false) => EditField::Minute,
         (EditField::Tone, false) => EditField::Days,
@@ -118,13 +136,35 @@ fn step_current_field(up: bool) {
 
 /// Handle a button press while in alarm-edit mode.  Always consumes
 /// the event (returns `true`).
+///
+/// Two layers of state inside this mode:
+///  * row-nav (default) — Up/Left moves to the previous field, Down/Right
+///    to the next.  Fire/Execute drills into a steppable field (or just
+///    toggles Enabled).  Cancel exits alarm-edit entirely.
+///  * field active — Up/Right increment the value, Down/Left decrement.
+///    Fire/Execute or Cancel pops back to row-nav.
 pub(super) fn dispatch_edit(btn: ButtonId) -> bool {
+    if EDIT_ACTIVE.load(Ordering::Relaxed) {
+        match btn {
+            ButtonId::Up | ButtonId::Right => step_current_field(true),
+            ButtonId::Down | ButtonId::Left => step_current_field(false),
+            ButtonId::Fire | ButtonId::Execute | ButtonId::Cancel => {
+                EDIT_ACTIVE.store(false, Ordering::Relaxed);
+            }
+        }
+        return true;
+    }
+
+    // Row-nav (default).
     match btn {
-        ButtonId::Up => step_current_field(true),
-        ButtonId::Down => step_current_field(false),
-        ButtonId::Left => cycle_field(false),
-        ButtonId::Right => cycle_field(true),
-        ButtonId::Fire | ButtonId::Execute | ButtonId::Cancel => exit_edit(),
+        ButtonId::Up | ButtonId::Left => nav_field(false),
+        ButtonId::Down | ButtonId::Right => nav_field(true),
+        ButtonId::Fire | ButtonId::Execute => match current_field() {
+            // Enabled is a binary toggle — just flip it inline, no extra Fire.
+            EditField::Enabled => alarm_toggle_enabled(),
+            _ => EDIT_ACTIVE.store(true, Ordering::Relaxed),
+        },
+        ButtonId::Cancel => exit_edit(),
     }
     true
 }
@@ -442,6 +482,8 @@ where
 {
     let h = alarm_hour();
     let m = alarm_minute();
+    let active = is_edit_active();
+    let field = current_field();
 
     clock::draw_digit(display, clock::HH_TENS_X, clock::DIGIT_Y, h / 10)?;
     clock::draw_digit(display, clock::HH_ONES_X, clock::DIGIT_Y, h % 10)?;
@@ -454,61 +496,79 @@ where
         .alignment(Alignment::Center)
         .build();
 
-    // Three info rows: Days, Tone, Enabled. FONT_6X10 keeps them tight so
-    // there's room for an underline beneath each without overlapping the
-    // next row's text.
+    // Three info rows below the digits.  FONT_6X10 keeps them tight enough
+    // that there's room for an underline / inverted bar beneath each without
+    // overlapping the next row's text.
     const ROW_DAYS_Y: i32 = 108;
     const ROW_TONE_Y: i32 = 124;
     const ROW_ENABLED_Y: i32 = 140;
-    const ROW_UL_X: i32 = 26;
-    const ROW_UL_W: u32 = 100;
-    const DIGIT_UL_THICK: u32 = 3;
+    const ROW_BAR_X: i32 = 13;
+    const ROW_BAR_W: u32 = 126;
+    const ROW_BAR_H: u32 = 13; // covers the 10 px text + 1 px above/below
+    const DIGIT_UL_THIN: u32 = 3;
+    const DIGIT_UL_THICK: u32 = 6;
     const ROW_UL_THICK: u32 = 2;
 
-    let row_style = MonoTextStyle::new(&FONT_6X10, BLACK);
-    Text::with_text_style(
-        alarm_days_label(),
-        Point::new(76, ROW_DAYS_Y),
-        row_style,
-        centered,
-    )
-    .draw(display)?;
-    Text::with_text_style(
-        alarm_tone_label(),
-        Point::new(76, ROW_TONE_Y),
-        row_style,
-        centered,
-    )
-    .draw(display)?;
-    Text::with_text_style(
-        alarm_enabled_label(),
-        Point::new(76, ROW_ENABLED_Y),
-        row_style,
-        centered,
-    )
-    .draw(display)?;
+    // Helper closure: render one info row, with optional inverted background
+    // when the user has drilled into this row.
+    let mut draw_row = |label: &str, y: i32, this_field: EditField| -> Result<(), D::Error> {
+        let drilled = active && field == this_field;
+        if drilled {
+            Rectangle::new(
+                Point::new(ROW_BAR_X, y - (ROW_BAR_H as i32) / 2),
+                Size::new(ROW_BAR_W, ROW_BAR_H),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        }
+        let fg = if drilled { WHITE } else { BLACK };
+        Text::with_text_style(
+            label,
+            Point::new(76, y),
+            MonoTextStyle::new(&FONT_6X10, fg),
+            centered,
+        )
+        .draw(display)?;
+        Ok(())
+    };
 
-    // Underline beneath the active field.
-    let (ul_x, ul_y, ul_w, ul_h) = match current_field() {
-        EditField::Hour => (
+    draw_row(alarm_days_label(), ROW_DAYS_Y, EditField::Days)?;
+    draw_row(alarm_tone_label(), ROW_TONE_Y, EditField::Tone)?;
+    draw_row(alarm_enabled_label(), ROW_ENABLED_Y, EditField::Enabled)?;
+
+    // Underline marks the selected row.  For text rows the inverted bar
+    // already says "drilled in", so the underline is only drawn while in
+    // row-nav (selected but not active).  For digit rows the underline
+    // thickens when drilled in.
+    let digit_ul_thick = if active {
+        DIGIT_UL_THICK
+    } else {
+        DIGIT_UL_THIN
+    };
+    let underline = match field {
+        EditField::Hour => Some((
             clock::HH_TENS_X,
             clock::DIGIT_Y + clock::DIGIT_H + 2,
             clock::PAIR_W as u32,
-            DIGIT_UL_THICK,
-        ),
-        EditField::Minute => (
+            digit_ul_thick,
+        )),
+        EditField::Minute => Some((
             clock::MM_TENS_X,
             clock::DIGIT_Y + clock::DIGIT_H + 2,
             clock::PAIR_W as u32,
-            DIGIT_UL_THICK,
-        ),
-        EditField::Days => (ROW_UL_X, ROW_DAYS_Y + 7, ROW_UL_W, ROW_UL_THICK),
-        EditField::Tone => (ROW_UL_X, ROW_TONE_Y + 7, ROW_UL_W, ROW_UL_THICK),
-        EditField::Enabled => (ROW_UL_X, ROW_ENABLED_Y + 7, ROW_UL_W, ROW_UL_THICK),
+            digit_ul_thick,
+        )),
+        EditField::Days if !active => Some((ROW_BAR_X, ROW_DAYS_Y + 7, ROW_BAR_W, ROW_UL_THICK)),
+        EditField::Tone if !active => Some((ROW_BAR_X, ROW_TONE_Y + 7, ROW_BAR_W, ROW_UL_THICK)),
+        // Enabled is a binary toggle — no drill-in, just keep the underline.
+        EditField::Enabled => Some((ROW_BAR_X, ROW_ENABLED_Y + 7, ROW_BAR_W, ROW_UL_THICK)),
+        _ => None,
     };
-    Rectangle::new(Point::new(ul_x, ul_y), Size::new(ul_w, ul_h))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
+    if let Some((x, y, w, h)) = underline {
+        Rectangle::new(Point::new(x, y), Size::new(w, h))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+    }
 
     Ok(())
 }
