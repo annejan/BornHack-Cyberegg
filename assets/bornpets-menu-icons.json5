@@ -1,0 +1,98 @@
+{
+  // Bornpets sprite sheet config for the on-screen menu icons.
+  // Generate template:  asset-gen template assets/bornpets-menu-icons.json5
+  // Encode sprites:     asset-gen encode-config assets/bornpets-menu-icons.json5
+  //
+  // Six menu icons live on the game screen — two on the top row
+  // (Stats, Hibernate) and four on the bottom row (Feed, Heal, Play,
+  // Rest).  Each is rendered inside a 26×26 px selection circle when
+  // active, so cells match that size exactly: the selected (F2) frame
+  // can fully *replace* the firmware-drawn circle without leaving a
+  // visible ring.  Normal (F1) frames typically only use the central
+  // ~22×22 area with transparent corners so the white game background
+  // shows through, but you have the full 26×26 to play with.
+  //
+  // Each icon has TWO frames:
+  //   F1 — normal: the badge isn't selected.  Drawn on the white game
+  //                background.  Use BLACK pixels for the icon outline
+  //                / fill; leave the rest TRANSPARENT (palette 11) so
+  //                the background shows through.  Optional RED accent
+  //                allowed.
+  //   F2 — selected: the badge is selected (cursor is on it).  This
+  //                frame REPLACES the firmware's filled-black
+  //                selection circle.  It can be a literal inversion
+  //                (white icon on black filled circle), or anything
+  //                else artistic — animated tilt, accent colour swap,
+  //                badge-style highlight — provided it visibly reads
+  //                as "selected" to the user.  Same 24×24 footprint.
+  //
+  // 2bpp PCX format: 00=black, 01=red, 10=white, 11=transparent.
+  //
+  // IMPORTANT: finalise this config before starting artwork.
+  // Adding or reordering assets shifts all cell positions in the PNG
+  // and breaks any code that references icons by their PCX filename.
+
+  image: "bornpets-menu-icons.png",
+  output: "src/fw/game/menu_icons.rs",
+  format: "rle",
+
+  assets: [
+    // ─────────────────────────────────────────────────────────────────
+    // TOP ROW — info / meta icons
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "menu_stats",
+      comment: "Top row, col 0 — opens the Stats modal (View / Rolled stats).  Suggested motif: gauge or stacked bars.  F1 normal, F2 selected.",
+      frames: 2,
+      frame_width: 26,
+      frame_height: 26,
+    },
+    {
+      type: "sequence",
+      name: "menu_hibernate",
+      comment: "Top row, col 1 — opens the Hibernate modal (Hibernate / Wake up).  Suggested motif: snowflake or sleeping cap.  F1 normal, F2 selected.",
+      frames: 2,
+      frame_width: 26,
+      frame_height: 26,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // BOTTOM ROW — action icons
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "menu_feed",
+      comment: "Bottom row, col 0 — opens the Feed modal.  Suggested motif: fork or food bowl.  F1 normal, F2 selected.",
+      frames: 2,
+      frame_width: 26,
+      frame_height: 26,
+    },
+    {
+      type: "sequence",
+      name: "menu_heal",
+      comment: "Bottom row, col 1 — opens the Heal modal (Give medicine).  Suggested motif: heart with a '+' carved in.  F1 normal, F2 selected.",
+      frames: 2,
+      frame_width: 26,
+      frame_height: 26,
+    },
+    {
+      type: "sequence",
+      name: "menu_play",
+      comment: "Bottom row, col 2 — opens the Play modal (Play now / Tic Tac Toe / Lights Out / Music).  Suggested motif: ball, paddle, joystick or controller.  F1 normal, F2 selected.",
+      frames: 2,
+      frame_width: 26,
+      frame_height: 26,
+    },
+    {
+      type: "sequence",
+      name: "menu_rest",
+      comment: "Bottom row, col 3 — opens the Rest modal (Sleep / Relax).  Suggested motif: crescent moon with Z's.  F1 normal, F2 selected.",
+      frames: 2,
+      frame_width: 26,
+      frame_height: 26,
+    },
+  ],
+}
