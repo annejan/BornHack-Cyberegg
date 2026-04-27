@@ -125,15 +125,29 @@ static EXITS: [AtomicU32; MAX_EXITS] = {
     [INIT; MAX_EXITS]
 };
 
+// ── Maze source ───────────────────────────────────────────────────────────────
+//
+// Set MAZE_BASE64 to a non-empty base64 string exported from the maze editor
+// to load that specific maze instead of generating a random one.
+// Leave it as "" to always generate a random maze.
+//const MAZE_BASE64: &str = "TVoBEhICEQoAAf////8JCVRkqqqqysbGxvc9qqqqWFVVVVWnqqqqODk5WVVlqqrqqqrqXNdVpqr6qqpYVVXTZar6qijaVVVUFab6qkxUVVVVRWX+ylVVVTVZUVVR0lFVVeN4/vv6+v7bVfJYVXRYVFVUVVRUVTX6m1XXVVVVFaPaollVVfNdRaL6qppVVdZVcap4qqpZVVU1uqq6qqq6XVWjqqqqbKqqWTGqqqqKNaqqmg==";
+const MAZE_BASE64: &str = "";
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
-/// Open the maze: generate a new random maze and reset player state.
+/// Open the maze.  If MAZE_BASE64 is non-empty the editor-created maze is
+/// decoded and loaded; otherwise a fresh random maze is generated.
 pub fn open() {
-    generate();
+    if MAZE_BASE64.is_empty() {
+        generate();
+    } else if !load_from_base64(MAZE_BASE64) {
+        // Decoding failed — fall back to random so the game still works.
+        generate();
+    }
     WON.store(false, Ordering::Relaxed);
     STEPS.store(0, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
@@ -150,29 +164,53 @@ pub fn close() {
 
 // ── Movement ──────────────────────────────────────────────────────────────────
 
-// ── Cheat code ───────────────────────────────────────────────────────────────
+// ── Cheat codes ───────────────────────────────────────────────────────────────
 //
-// Sequence: Up Up Down Execute Left Left Right
-// Encoded as: 0=Up, 1=Down, 2=Left, 3=Right, 4=Execute
+// Two independent sequences are tracked simultaneously using separate position
+// counters so entering one can't accidentally interfere with the other.
+//
+// Sequence A — Reveal:     Up Up Down Execute Left Left Right
+// Sequence B — New random: Up Execute Execute Down
+//
+// Button codes: 0=Up  1=Down  2=Left  3=Right  4=Execute
 
-const CHEAT_SEQ: [u8; 7] = [0, 0, 1, 4, 2, 2, 3];
+const CHEAT_SEQ_REVEAL: [u8; 7] = [0, 0, 1, 4, 2, 2, 3];
+const CHEAT_SEQ_REGEN:  [u8; 4] = [0, 4, 4, 1];
 
-/// Feed the next button code into the cheat detector.
-/// If the full sequence is completed, reveals the whole maze.
-fn check_cheat(code: u8) {
-    let pos = CHEAT_POS.load(Ordering::Relaxed) as usize;
-    if CHEAT_SEQ[pos] == code {
+/// Position within the REGEN sequence (0 = not started).
+static REGEN_POS: AtomicU8 = AtomicU8::new(0);
+
+/// Advance a cheat sequence tracker.  Returns true when the sequence completes.
+/// `pos_atomic` is the AtomicU8 tracking progress; `seq` is the target sequence.
+fn advance_seq(pos_atomic: &AtomicU8, seq: &[u8], code: u8) -> bool {
+    let pos = pos_atomic.load(Ordering::Relaxed) as usize;
+    if seq[pos] == code {
         let next = pos + 1;
-        if next == CHEAT_SEQ.len() {
-            // Sequence complete — reveal everything.
-            REVEALED.store(true, Ordering::Relaxed);
-            CHEAT_POS.store(0, Ordering::Relaxed);
-        } else {
-            CHEAT_POS.store(next as u8, Ordering::Relaxed);
+        if next == seq.len() {
+            pos_atomic.store(0, Ordering::Relaxed);
+            return true;
         }
+        pos_atomic.store(next as u8, Ordering::Relaxed);
     } else {
-        // Wrong button — reset, but check if this button starts the sequence.
-        CHEAT_POS.store(if CHEAT_SEQ[0] == code { 1 } else { 0 }, Ordering::Relaxed);
+        // Wrong button — restart, but credit it if it starts the sequence.
+        pos_atomic.store(if seq[0] == code { 1 } else { 0 }, Ordering::Relaxed);
+    }
+    false
+}
+
+/// Feed the next button code into both cheat detectors.
+fn check_cheat(code: u8) {
+    // Sequence A: Reveal full maze.
+    if advance_seq(&CHEAT_POS, &CHEAT_SEQ_REVEAL, code) {
+        REVEALED.store(true, Ordering::Relaxed);
+    }
+
+    // Sequence B: Generate a brand-new random maze immediately.
+    if advance_seq(&REGEN_POS, &CHEAT_SEQ_REGEN, code) {
+        generate();
+        // Reset round state but keep the game active.
+        WON.store(false, Ordering::Relaxed);
+        STEPS.store(0, Ordering::Relaxed);
     }
 }
 
@@ -380,6 +418,147 @@ fn gen_clear() {
 }
 
 /// Generate a new perfect maze using iterative Recursive Backtracker DFS.
+// ── Load maze from base64 ─────────────────────────────────────────────────────
+
+/// Decode a base64 string produced by the maze editor and populate the maze
+/// state from it.  Returns false and leaves state unchanged if decoding fails.
+///
+/// Expected binary layout (178 bytes for 18×18):
+///   [0..1]  b"MZ"
+///   [2]     version = 1
+///   [3]     width
+///   [4]     height
+///   [5]     n_exits
+///   [6..13] 4 × (exit_row, exit_col), 0xFF = unused
+///   [14]    start_row (0xFF = not set)
+///   [15]    start_col
+///   [16..]  wall nibbles, 2 cells/byte (low nibble = even cell index)
+fn load_from_base64(encoded: &str) -> bool {
+    // ── Base64 decode (no_std, no alloc) ─────────────────────────────────
+    // Maximum decoded size for an 18×18 maze is 178 bytes; 256 is plenty.
+    let mut buf = [0u8; 256];
+    let decoded_len = match base64_decode(encoded.as_bytes(), &mut buf) {
+        Some(n) => n,
+        None    => return false,
+    };
+    let data = &buf[..decoded_len];
+
+    // ── Validate header ───────────────────────────────────────────────────
+    if decoded_len < 17 { return false; }
+    if &data[0..2] != b"MZ" { return false; }
+    if data[2] != 1 { return false; }   // version
+
+    let w        = data[3] as usize;
+    let h        = data[4] as usize;
+    let n_exits  = data[5] as usize;
+
+    if w == 0 || h == 0 || w > 32 || h > 32 { return false; }
+    if n_exits > MAX_EXITS { return false; }
+
+    let wall_start  = 16usize;
+    let cells       = w * h;
+    let wall_bytes  = (cells + 1) / 2;
+    if decoded_len < wall_start + wall_bytes { return false; }
+
+    // ── Load into statics ─────────────────────────────────────────────────
+    // Clear everything first.
+    clear_walls();
+    clear_visited();
+    CHEAT_POS.store(0, Ordering::Relaxed);
+    REGEN_POS.store(0, Ordering::Relaxed);
+    REVEALED.store(false, Ordering::Relaxed);
+    for slot in &EXITS { slot.store(0xFFFF, Ordering::Relaxed); }
+
+    // Wall data
+    for idx in 0..cells {
+        let byte   = data[wall_start + idx / 2];
+        let nibble = if idx % 2 == 0 { byte & 0xF } else { (byte >> 4) & 0xF };
+        let r = idx / w;
+        let c = idx % w;
+        if r < H && c < W {
+            WALLS[r * W + c].store(nibble, Ordering::Relaxed);
+        }
+    }
+
+    // Exits
+    let mut exit_count = 0usize;
+    for i in 0..MAX_EXITS {
+        let er = data[6 + i * 2];
+        let ec = data[7 + i * 2];
+        if er == 0xFF || exit_count >= n_exits { break; }
+        if (er as usize) < H && (ec as usize) < W {
+            EXITS[exit_count].store(((er as u32) << 8) | ec as u32, Ordering::Relaxed);
+            exit_count += 1;
+        }
+    }
+
+    // Start position
+    let sr = data[14];
+    let sc = data[15];
+    let (start_r, start_c) = if sr != 0xFF && (sr as usize) < H && (sc as usize) < W {
+        (sr as usize, sc as usize)
+    } else {
+        find_start_pos()
+    };
+    PLAYER.store(((start_r as u32) << 8) | start_c as u32, Ordering::Relaxed);
+    mark_visited(start_r, start_c);
+
+    true
+}
+
+/// Minimal base64 decoder (standard alphabet, with or without '=' padding).
+/// Writes decoded bytes into `out`, returns number of bytes written or None on error.
+fn base64_decode(input: &[u8], out: &mut [u8]) -> Option<usize> {
+    #[inline(always)]
+    fn dec(c: u8) -> u8 {
+        match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+'        => 62,
+            b'/'        => 63,
+            _           => 0xFF,
+        }
+    }
+
+    // Strip trailing '=' padding.
+    let mut end = input.len();
+    while end > 0 && input[end - 1] == b'=' { end -= 1; }
+    let input = &input[..end];
+
+    let mut out_pos = 0usize;
+    let mut i = 0usize;
+
+    while i + 1 < input.len() {
+        let a = dec(input[i]);
+        let b = dec(input[i + 1]);
+        if a == 0xFF || b == 0xFF { return None; }
+
+        if out_pos >= out.len() { return None; }
+        out[out_pos] = (a << 2) | (b >> 4);
+        out_pos += 1;
+
+        if i + 2 < input.len() {
+            let c = dec(input[i + 2]);
+            if c == 0xFF { return None; }
+            if out_pos >= out.len() { return None; }
+            out[out_pos] = ((b & 0x0F) << 4) | (c >> 2);
+            out_pos += 1;
+
+            if i + 3 < input.len() {
+                let d = dec(input[i + 3]);
+                if d == 0xFF { return None; }
+                if out_pos >= out.len() { return None; }
+                out[out_pos] = ((c & 0x03) << 6) | d;
+                out_pos += 1;
+            }
+        }
+
+        i += 4;
+    }
+    Some(out_pos)
+}
+
 // ── Exit reachability validation ─────────────────────────────────────────────
 
 /// BFS/flood-fill scratch queue — fixed size, allocated on the call stack.
@@ -504,6 +683,7 @@ fn generate() {
     gen_clear();
     clear_visited();
     CHEAT_POS.store(0, Ordering::Relaxed);
+    REGEN_POS.store(0, Ordering::Relaxed);
     REVEALED.store(false, Ordering::Relaxed);
 
     // Pick a random start cell for DFS.
