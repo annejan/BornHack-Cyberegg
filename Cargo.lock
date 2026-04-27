@@ -1030,6 +1030,7 @@ dependencies = [
  "cortex-m-rt",
  "defmt 1.0.1",
  "defmt-rtt",
+ "ed25519-compact",
  "ekv",
  "embassy-executor",
  "embassy-futures",

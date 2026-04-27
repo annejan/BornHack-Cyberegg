@@ -79,6 +79,14 @@ trouble-host = { version = "0.6", features = [
 rand_core = { version = "0.6", default-features = false, optional = true }
 meshcore = { path = "./vendor/meshcore", optional = true }
 meshcore-companion = { path = "./vendor/meshcore-companion", optional = true }
+# Direct dep on ed25519-compact (also pulled in via meshcore) so we can
+# add the `opt_size` feature.  Cargo unifies features across the dep
+# graph, so meshcore's required `x25519` stays enabled and our `opt_size`
+# is added on top — `inline(never)` on the field25519 arithmetic, smaller
+# binary at the cost of some sign/verify throughput.
+ed25519-compact = { version = "2", default-features = false, features = [
+    "opt_size",
+], optional = true }
 ekv = { git = "https://github.com/embassy-rs/ekv.git", rev = "a7d0ce35", optional = true }
 embassy-usb = { version = "0.6.0", default-features = false, optional = true }
 
@@ -128,6 +136,7 @@ mesh = [
     "rand_core",
     "meshcore",
     "meshcore-companion",
+    "ed25519-compact",
 ]
 usb-storage = ["embassy-usb"]
 simulator = ["embedded-graphics-simulator", "heapless", "game", "watch"]

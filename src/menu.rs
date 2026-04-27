@@ -592,46 +592,10 @@ fn action_factory_reset() {
 
 // ── TX power ────────────────────────────────────────────────────────────────
 
-/// Pre-rendered labels for every valid TX power value (−9..=22 dBm).
-/// Indexed by `(dbm + 9) as usize`.
-static TX_POWER_LABELS: [&str; 32] = [
-    "TX: -9 dBm",
-    "TX: -8 dBm",
-    "TX: -7 dBm",
-    "TX: -6 dBm",
-    "TX: -5 dBm",
-    "TX: -4 dBm",
-    "TX: -3 dBm",
-    "TX: -2 dBm",
-    "TX: -1 dBm",
-    "TX: 0 dBm",
-    "TX: 1 dBm",
-    "TX: 2 dBm",
-    "TX: 3 dBm",
-    "TX: 4 dBm",
-    "TX: 5 dBm",
-    "TX: 6 dBm",
-    "TX: 7 dBm",
-    "TX: 8 dBm",
-    "TX: 9 dBm",
-    "TX: 10 dBm",
-    "TX: 11 dBm",
-    "TX: 12 dBm",
-    "TX: 13 dBm",
-    "TX: 14 dBm",
-    "TX: 15 dBm",
-    "TX: 16 dBm",
-    "TX: 17 dBm",
-    "TX: 18 dBm",
-    "TX: 19 dBm",
-    "TX: 20 dBm",
-    "TX: 21 dBm",
-    "TX: 22 dBm",
-];
-
-fn label_tx_power() -> &'static str {
+fn fmt_tx_power(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
     let v = crate::LORA_TX_POWER.load(Ordering::Relaxed).clamp(-9, 22);
-    TX_POWER_LABELS[(v + 9) as usize]
+    let _ = write!(buf, "TX: {} dBm", v);
 }
 
 fn action_tx_power_inc() {
@@ -1276,8 +1240,9 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
         kind: MenuItemKind::Submenu(&LORA_RADIO_ITEMS),
     },
     MenuItem {
-        label: label_tx_power,
-        kind: MenuItemKind::Stepper {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_tx_power,
             inc: action_tx_power_inc,
             dec: action_tx_power_dec,
         },
