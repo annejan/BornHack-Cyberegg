@@ -332,11 +332,12 @@ where
             let anim = lifecycle::display_anim();
             let count = anim_files::frame_count(kind, anim);
             if count > 0 {
-                // ~1.5 s per sprite frame, matching the firmware sprite
-                // tick.  Hatching clamps to the last frame instead of
-                // wrapping (same rule as embassy.rs::display_loop).
+                // 10 s per sprite frame — matches the firmware default
+                // sprite-tick interval (`embassy.rs::wait_display_event`,
+                // the `_ => 10` branch).  Hatching clamps to the last
+                // frame instead of wrapping (same rule as embassy.rs).
                 let elapsed_ms = lifecycle::sim_elapsed_ms();
-                let raw = (elapsed_ms / 1500) as u32;
+                let raw = (elapsed_ms / 10_000) as u32;
                 let frame = if matches!(anim, engine::DisplayAnim::Hatching { .. }) {
                     raw.min(count.saturating_sub(1) as u32) as u8
                 } else {

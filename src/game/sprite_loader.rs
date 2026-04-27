@@ -56,6 +56,7 @@ impl<T> SyncCell<T> {
 static FRAMES: SyncCell<[FileRef; MAX_FRAMES]> = SyncCell::new([FileRef::EMPTY; MAX_FRAMES]);
 #[cfg(feature = "embassy-base")]
 static NAMES: SyncCell<[[u8; 11]; MAX_FRAMES]> = SyncCell::new([[0; 11]; MAX_FRAMES]);
+#[cfg(not(feature = "simulator"))]
 static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 // ---------------------------------------------------------------------------
@@ -114,9 +115,28 @@ pub async fn init() {
     defmt::info!("sprite: found {} PCX frame(s)", count);
 }
 
-/// Number of PCX sprite files found at init.
+/// Number of PCX sprite files available.
+///
+/// On hardware this reflects the FAT12 partition scan done in
+/// [`init`] — zero means the badge was flashed without art assets,
+/// which the game UI surfaces as a "No sprites on flash" placeholder
+/// in the pet area.
+///
+/// In the simulator there's no FAT12 to scan, but PCX files are
+/// resolved at draw time from `assets/to-badge/` via
+/// [`blit_pcx_sim`].  We therefore report `u8::MAX` so the firmware
+/// "no sprites" fallback message doesn't fire under `make sim`; if a
+/// specific PCX is actually missing the simulator silently shows
+/// nothing in the pet area, matching the embedded fail-soft.
 pub fn frame_count() -> u8 {
-    FRAME_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+    #[cfg(feature = "simulator")]
+    {
+        u8::MAX
+    }
+    #[cfg(not(feature = "simulator"))]
+    {
+        FRAME_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 // ---------------------------------------------------------------------------

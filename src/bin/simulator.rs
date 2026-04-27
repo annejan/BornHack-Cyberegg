@@ -38,6 +38,11 @@ impl OriginDimensions for TriColorDisplay<'_> {
 }
 
 /// Map SDL keycode to ButtonId.
+///
+/// Note: Escape is intercepted by `embedded-graphics-simulator` itself
+/// and surfaces as `SimulatorEvent::Quit` — it never reaches this
+/// match — so it isn't usable as an in-app key.  Use Backspace for
+/// Cancel.
 fn key_to_button(k: Keycode) -> Option<ButtonId> {
     match k {
         Keycode::Up => Some(ButtonId::Up),
@@ -101,9 +106,6 @@ fn main() -> Result<(), core::convert::Infallible> {
             match event {
                 SimulatorEvent::Quit => break 'running,
                 SimulatorEvent::KeyDown { keycode, .. } => {
-                    if keycode == Keycode::Escape {
-                        break 'running;
-                    }
                     if let Some(btn) = key_to_button(keycode) {
                         handle_button(btn);
                         need_redraw = true;
