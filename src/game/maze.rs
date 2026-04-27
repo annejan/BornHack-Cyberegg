@@ -306,7 +306,16 @@ fn rng_next() -> u32 {
 fn rng_seed() -> u32 {
     #[cfg(feature = "embassy-base")]
     { embassy_time::Instant::now().as_ticks() as u32 }
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(feature = "simulator")]
+    {
+        // Use wall-clock nanoseconds so each run gets a different maze.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
+            .unwrap_or(0xFEED_FACE)
+    }
+    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
     { 0xFEED_FACE }
 }
 
