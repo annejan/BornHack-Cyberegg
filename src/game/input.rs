@@ -88,6 +88,21 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
+    // ── Black Hole mini-game ──────────────────────────────────────────
+    if super::blackhole::is_active() {
+        match btn {
+            ButtonId::Cancel => super::blackhole::close(),
+            ButtonId::Up => super::blackhole::cursor_up(),
+            ButtonId::Down => super::blackhole::cursor_down(),
+            ButtonId::Left => super::blackhole::cursor_left(),
+            ButtonId::Right => super::blackhole::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => {
+                super::blackhole::activate();
+            }
+        }
+        return true;
+    }
+
     // ── Tic-tac-toe mini-game ──────────────────────────────────────────
     if super::tictactoe::is_active() {
         match btn {

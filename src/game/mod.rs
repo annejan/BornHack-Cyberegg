@@ -14,6 +14,7 @@
 //! └───────────────────────────────────────┘  y = 152
 //! ```
 
+pub mod blackhole;
 pub mod engine;
 pub mod input;
 pub mod lifecycle;
@@ -184,6 +185,9 @@ where
     }
     if lightsout::is_active() {
         return lightsout::draw(display);
+    }
+    if blackhole::is_active() {
+        return blackhole::draw(display);
     }
 
     // Battery icon — top-right.

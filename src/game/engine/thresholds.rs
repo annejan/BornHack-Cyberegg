@@ -165,8 +165,12 @@ pub const PLAY_DRAINED_COST: u16 = 1965;
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-/// Hatching duration (ticks).  6 ticks = 1 minute.
+/// Hatching duration (ticks).  6 ticks = 1 minute on hardware.
+/// Simulator: 1 tick = 10 s, fast enough to debug without waiting.
+#[cfg(not(feature = "simulator"))]
 pub const HATCHING_TICKS: u16 = 6;
+#[cfg(feature = "simulator")]
+pub const HATCHING_TICKS: u16 = 1;
 
 /// Ticks of maxed stats before pet leaves, indexed by count of maxed stats.
 /// Index 0 unused, 1 = one maxed stat, etc.

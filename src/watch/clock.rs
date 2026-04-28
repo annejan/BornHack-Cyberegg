@@ -220,7 +220,8 @@ pub(super) fn wall_clock() -> Option<Clock> {
 pub(super) fn wall_clock() -> Option<Clock> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as u32;
-    build_clock(unix, 0)
+    let tz = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
+    build_clock(unix, tz)
 }
 
 #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
