@@ -378,13 +378,38 @@ fn check_severity_transition(state: &GameState) {
     }
 }
 
+/// Tick at which the sleep animation should stop being shown.  When
+/// the player taps Sleep, the engine may auto-wake within a single
+/// tick (10 s) if `tired` was already low — too short for the 4-frame
+/// sleep animation to cycle visibly.  We pin a display floor of 4
+/// ticks (40 s = full animation cycle) here so the user always sees
+/// the sleep loop after invoking the action.
+static SLEEP_ANIM_UNTIL_TICK: AtomicU32 = AtomicU32::new(0);
+
 /// Get the current display animation (cheap, no update).
 pub fn display_anim() -> DisplayAnim {
     let state = unsafe { (*GAME.get()).as_ref() };
-    match state {
+    let raw = match state {
         Some(s) => s.display_anim(),
-        None => DisplayAnim::Gone, // no game state loaded
+        None => return DisplayAnim::Gone,
+    };
+    // Display-layer floor for the sleep animation — see
+    // `SLEEP_ANIM_UNTIL_TICK`.  Only override the "neutral" idle
+    // states; never mask hatching / leaving / gone / actions.
+    if matches!(
+        raw,
+        DisplayAnim::Idle
+            | DisplayAnim::Happy
+            | DisplayAnim::WarningTired
+            | DisplayAnim::WarningSick
+            | DisplayAnim::WarningHungry
+            | DisplayAnim::WarningDrained
+            | DisplayAnim::WarningMiserable
+    ) && now_tick() < SLEEP_ANIM_UNTIL_TICK.load(Ordering::Relaxed)
+    {
+        return DisplayAnim::Sleeping;
     }
+    raw
 }
 
 /// Get the tick at which the engine wants to be woken next.
@@ -418,7 +443,11 @@ pub fn play() -> bool {
 }
 
 pub fn sleep() -> bool {
-    with_state(|s| s.sleep())
+    let started = with_state(|s| s.sleep());
+    if started {
+        SLEEP_ANIM_UNTIL_TICK.store(now_tick().saturating_add(4), Ordering::Relaxed);
+    }
+    started
 }
 
 pub fn wake() -> bool {

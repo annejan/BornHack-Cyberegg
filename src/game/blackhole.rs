@@ -20,6 +20,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
+use crate::ui;
 use crate::{BLACK, TriColor, WHITE};
 
 // ── Layout ────────────────────────────────────────────────────────────────────
@@ -58,6 +59,14 @@ static BOARD: [AtomicU8; CELLS] = [const { AtomicU8::new(0) }; CELLS];
 /// PRNG state for AI tie-breaking.
 static RNG: AtomicU32 = AtomicU32::new(0xDEAD_BEEF);
 
+/// Difficulty: 0 = Easy (positional only), 1 = Hard (full heuristic).
+const DIFFICULTY_HARD: u8 = 1;
+static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_HARD);
+/// Difficulty-picker overlay open at the start of each game.
+static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+/// Difficulty-picker selection (0 = Easy, 1 = Hard).
+static MENU_POS: AtomicU8 = AtomicU8::new(DIFFICULTY_HARD);
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
@@ -75,6 +84,9 @@ pub fn open() {
     SCORE_A.store(0, Ordering::Relaxed);
     SCORE_B.store(0, Ordering::Relaxed);
     RNG.store(seed(), Ordering::Relaxed);
+    // Show the difficulty picker first; play starts after Fire.
+    MENU_POS.store(DIFFICULTY_HARD, Ordering::Relaxed);
+    MENU_OPEN.store(true, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
@@ -115,6 +127,9 @@ fn cell_centre(idx: u8) -> Point {
 // ── Cursor navigation ─────────────────────────────────────────────────────────
 
 pub fn cursor_left() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
     let i = CURSOR.load(Ordering::Relaxed);
     let c = col_of(i);
     if c > 0 {
@@ -123,6 +138,9 @@ pub fn cursor_left() {
 }
 
 pub fn cursor_right() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
     let i = CURSOR.load(Ordering::Relaxed);
     let r = row_of(i);
     let c = col_of(i);
@@ -132,6 +150,13 @@ pub fn cursor_right() {
 }
 
 pub fn cursor_up() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        let p = MENU_POS.load(Ordering::Relaxed);
+        if p > 0 {
+            MENU_POS.store(p - 1, Ordering::Relaxed);
+        }
+        return;
+    }
     let i = CURSOR.load(Ordering::Relaxed);
     let r = row_of(i);
     if r == 0 {
@@ -146,6 +171,13 @@ pub fn cursor_up() {
 }
 
 pub fn cursor_down() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        let p = MENU_POS.load(Ordering::Relaxed);
+        if p < 1 {
+            MENU_POS.store(p + 1, Ordering::Relaxed);
+        }
+        return;
+    }
     let i = CURSOR.load(Ordering::Relaxed);
     let r = row_of(i);
     if r >= ROWS - 1 {
@@ -158,6 +190,13 @@ pub fn cursor_down() {
 // ── Activate (Fire) ───────────────────────────────────────────────────────────
 
 pub fn activate() {
+    // Difficulty picker open: confirm selection and start the game.
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        DIFFICULTY.store(MENU_POS.load(Ordering::Relaxed), Ordering::Relaxed);
+        MENU_OPEN.store(false, Ordering::Relaxed);
+        return;
+    }
+
     let result = RESULT.load(Ordering::Relaxed);
     if result != 0 {
         // Game over: any Fire closes.  Award inspiration on win or tie.
@@ -308,6 +347,24 @@ fn scores_around(board: &[u8; CELLS], hole: u8) -> (u8, u8) {
 
 // ── AI ────────────────────────────────────────────────────────────────────────
 
+/// Threshold dividing "low" numbers (≤) from "high" numbers (>).  Low
+/// numbers prefer well-connected cells (their small contribution to a
+/// hole's score is cheap to risk and uses up central spots); high
+/// numbers prefer corners/edges so they're less likely to neighbour
+/// the eventual hole.
+const CONNECTIVITY_THRESHOLD: u8 = 5;
+/// Per-neighbour weight added (low n) or subtracted (high n) from a
+/// candidate's main score.  Tuned to be comparable in magnitude to
+/// the [-1000, 1000] range of the normalised positional score so it
+/// influences ties and close calls but doesn't override clear wins.
+const CONNECTIVITY_BONUS: i32 = 60;
+/// Weight on the per-candidate territory delta (player adj sum minus
+/// AI adj sum, scaled by the AI's current number).  Pulls the AI's
+/// big tokens toward cells where the player has concentrated tokens
+/// — those cells have fewer empty neighbours that could become the
+/// black hole, so a big AI number is safe there.
+const TERRITORY_BONUS: i32 = 2;
+
 fn xorshift(mut x: u32) -> u32 {
     x ^= x << 13;
     x ^= x >> 17;
@@ -336,6 +393,7 @@ fn seed() -> u32 {
 fn ai_play(m: u8) {
     let n = m / 2 + 1;
     let board = read_board();
+    let hard = DIFFICULTY.load(Ordering::Relaxed) == DIFFICULTY_HARD;
 
     let mut best_score: i32 = i32::MIN;
     let mut best_cells = [0u8; CELLS];
@@ -367,12 +425,41 @@ fn ai_play(m: u8) {
             0
         };
 
-        if norm > best_score {
-            best_score = norm;
+        // Connectivity + territory bonuses only apply on Hard.  Easy
+        // mode uses the positional score only — beatable with
+        // straightforward play.
+        let total = if hard {
+            let mut nb_buf = [0u8; 6];
+            let nb_count = neighbours(cand, &mut nb_buf);
+            let connectivity = if n <= CONNECTIVITY_THRESHOLD {
+                CONNECTIVITY_BONUS * nb_count as i32
+            } else {
+                -CONNECTIVITY_BONUS * nb_count as i32
+            };
+
+            let mut a_adj: i32 = 0;
+            let mut b_adj: i32 = 0;
+            for &i in &nb_buf[..nb_count] {
+                let v = board[i as usize];
+                if cell_is_a(v) {
+                    a_adj += cell_value(v) as i32;
+                } else if cell_is_b(v) {
+                    b_adj += cell_value(v) as i32;
+                }
+            }
+            let territory = (a_adj - b_adj) * n as i32 * TERRITORY_BONUS;
+
+            norm + connectivity + territory
+        } else {
+            norm
+        };
+
+        if total > best_score {
+            best_score = total;
             best_count = 0;
             best_cells[best_count] = cand;
             best_count += 1;
-        } else if norm == best_score && best_count < best_cells.len() {
+        } else if total == best_score && best_count < best_cells.len() {
             best_cells[best_count] = cand;
             best_count += 1;
         }
@@ -482,7 +569,7 @@ where
         }
         1 => {
             let mut s: heapless::String<24> = heapless::String::new();
-            let _ = core::fmt::Write::write_fmt(&mut s, format_args!("You {} - {} AI", sa, sb));
+            let _ = core::fmt::Write::write_fmt(&mut s, format_args!("You {} - {} EI", sa, sb));
             Text::with_text_style(s.as_str(), Point::new(76, 124), footer_font, centred_top)
                 .draw(display)?;
             Text::with_text_style(
@@ -495,10 +582,10 @@ where
         }
         2 => {
             let mut s: heapless::String<24> = heapless::String::new();
-            let _ = core::fmt::Write::write_fmt(&mut s, format_args!("You {} - {} AI", sa, sb));
+            let _ = core::fmt::Write::write_fmt(&mut s, format_args!("You {} - {} EI", sa, sb));
             Text::with_text_style(s.as_str(), Point::new(76, 124), footer_font, centred_top)
                 .draw(display)?;
-            Text::with_text_style("AI wins", Point::new(76, 138), footer_font, centred_top)
+            Text::with_text_style("EI wins", Point::new(76, 138), footer_font, centred_top)
                 .draw(display)?;
         }
         _ => {
@@ -516,6 +603,70 @@ where
         }
     }
 
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        draw_difficulty_menu(display)?;
+    }
+
+    Ok(())
+}
+
+/// Difficulty picker overlay — popover with two items, drawn over the
+/// playing field at the start of every game.  Reuses the popover
+/// frame, title bar, and inverted-row item style from [`crate::ui`]
+/// and [`super::modal`] for visual consistency.
+fn draw_difficulty_menu<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    const MARGIN: i32 = 16;
+    const W: u32 = 120; // 152 - 2 × 16
+    const H: u32 = 80;
+    const BORDER: u32 = 2;
+    const ITEM_H: i32 = 18;
+
+    ui::draw_popover_frame(
+        display,
+        Point::new(MARGIN, 36),
+        Size::new(W, H),
+        BORDER,
+    )?;
+    let inner_x = MARGIN + BORDER as i32;
+    let inner_y = 36 + BORDER as i32;
+    let inner_w = W - BORDER * 2;
+    ui::draw_title_bar(display, "Difficulty", Point::new(inner_x, inner_y), inner_w)?;
+
+    let items = ["Easy", "Hard"];
+    let pos = MENU_POS.load(Ordering::Relaxed) as usize;
+    let list_y = inner_y + ui::TITLE_BAR_H as i32 + 4;
+    let left_style = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Left)
+        .build();
+
+    for (i, label) in items.iter().enumerate() {
+        let row_top = list_y + i as i32 * ITEM_H;
+        let row_mid = row_top + ITEM_H / 2;
+        if i == pos {
+            Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
+                .into_styled(PrimitiveStyle::with_fill(BLACK))
+                .draw(display)?;
+            Text::with_text_style(
+                label,
+                Point::new(inner_x + 6, row_mid),
+                ui::TEXT_WHITE,
+                left_style,
+            )
+            .draw(display)?;
+        } else {
+            Text::with_text_style(
+                label,
+                Point::new(inner_x + 6, row_mid),
+                ui::TEXT_BLACK,
+                left_style,
+            )
+            .draw(display)?;
+        }
+    }
     Ok(())
 }
 

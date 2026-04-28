@@ -205,7 +205,15 @@ where
     // multi-frame animations actually cycle.
     #[cfg(feature = "simulator")]
     {
+        use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
         use engine::anim_files;
+        // Per-animation start delta: when the anim id changes we pin
+        // the wall-clock origin so the new anim begins at frame 0.
+        // The free-running clock keeps ticking — we just subtract.
+        static LAST_ANIM_ID: AtomicU8 = AtomicU8::new(0xFF);
+        static ANIM_START_MS: AtomicU64 = AtomicU64::new(0);
+
         if !lifecycle::is_started() {
             sprite_loader::blit_pcx_sim(display, &anim_files::start_screen_filename(), 0, 0);
         } else {
@@ -213,12 +221,16 @@ where
             let anim = lifecycle::display_anim();
             let count = anim_files::frame_count(kind, anim);
             if count > 0 {
-                // 10 s per sprite frame — matches the firmware default
-                // sprite-tick interval (`embassy.rs::wait_display_event`,
-                // the `_ => 10` branch).  Hatching clamps to the last
-                // frame instead of wrapping (same rule as embassy.rs).
                 let elapsed_ms = lifecycle::sim_elapsed_ms();
-                let raw = (elapsed_ms / 10_000) as u32;
+                let id = anim_files::anim_id_for(anim);
+                if LAST_ANIM_ID.load(Ordering::Relaxed) != id {
+                    LAST_ANIM_ID.store(id, Ordering::Relaxed);
+                    ANIM_START_MS.store(elapsed_ms, Ordering::Relaxed);
+                }
+                let delta_ms = elapsed_ms.saturating_sub(ANIM_START_MS.load(Ordering::Relaxed));
+                // 10 s per frame — matches the firmware default sprite
+                // tick interval.  Hatching clamps to the last frame.
+                let raw = (delta_ms / 10_000) as u32;
                 let frame = if matches!(anim, engine::DisplayAnim::Hatching { .. }) {
                     raw.min(count.saturating_sub(1) as u32) as u8
                 } else {

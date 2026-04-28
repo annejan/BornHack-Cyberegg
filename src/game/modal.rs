@@ -23,7 +23,7 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::nav::Row;
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_WHITE};
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor};
 
 // ── Modal kind
 // ────────────────────────────────────────────────────────────────
@@ -437,12 +437,10 @@ where
 // Disabled-state dimming
 // ---------------------------------------------------------------------------
 
-/// Overdraw a rectangle with a 1-in-2 white checkerboard, halftoning
-/// any black pixels underneath into a perceived "grey".  Used to mark
-/// menu rows whose action is currently on cooldown or otherwise
-/// unavailable — solid black fills become 50 % black, black text on
-/// white becomes 50 % black on white, both reading visibly dimmer
-/// than their available siblings.
+/// Overdraw a rectangle with a 1-in-3 black diagonal stripe pattern,
+/// darkening the white background of disabled menu rows so they read
+/// as "unavailable" on a low-contrast EPD.  Black text on top stays
+/// black; the surrounding background drops to ~33 % black.
 fn dim_rect<D>(display: &mut D, rect: Rectangle) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -453,8 +451,8 @@ where
     let y1 = y0 + rect.size.height as i32;
     let pixels = (y0..y1).flat_map(move |y| {
         (x0..x1).filter_map(move |x| {
-            if (x + y) & 1 == 0 {
-                Some(Pixel(Point::new(x, y), WHITE))
+            if (x + y).rem_euclid(3) == 0 {
+                Some(Pixel(Point::new(x, y), BLACK))
             } else {
                 None
             }

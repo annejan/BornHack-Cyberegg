@@ -370,6 +370,12 @@ async fn display_loop(
 
     #[cfg(feature = "game")]
     let mut sprite_frame: u8 = 0;
+    // Last animation id observed by the sprite-frame advance.  When
+    // it changes, `sprite_frame` resets to 0 so each new animation
+    // starts at its first frame regardless of where the previous one
+    // left the counter.
+    #[cfg(feature = "game")]
+    let mut last_anim_id: u8 = 0xFF;
 
     loop {
         // Process any pending sponsor flag clear request from the menu.
@@ -435,7 +441,13 @@ async fn display_loop(
             let anim = hello_graphics::game::lifecycle::display_anim();
             let kind = hello_graphics::game::lifecycle::pet_kind();
             let count = hello_graphics::game::engine::anim_files::frame_count(kind, anim);
-            if count > 0 {
+            // Reset to frame 0 whenever the animation changes so each
+            // new anim starts at its first frame.
+            let id = hello_graphics::game::engine::anim_files::anim_id_for(anim);
+            if id != last_anim_id {
+                last_anim_id = id;
+                sprite_frame = 0;
+            } else if count > 0 {
                 let next = sprite_frame + 1;
                 // During hatching, clamp to the last frame instead of wrapping.
                 let is_hatching = matches!(

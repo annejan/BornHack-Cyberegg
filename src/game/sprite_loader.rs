@@ -16,7 +16,7 @@
 #[cfg(feature = "embassy-base")]
 use crate::fw::epd::EpdGfx;
 #[cfg(feature = "embassy-base")]
-use crate::fw::fat12::{self, FileRef};
+use crate::fw::fat12;
 
 /// Display dimensions.
 #[cfg(feature = "embassy-base")]
@@ -30,32 +30,35 @@ const DISP_ROW_STRIDE: usize = DISP_WIDTH / 8;
 /// PCX header size.
 const PCX_HEADER_SIZE: usize = 128;
 
-/// Maximum number of sprite files.
-#[cfg(feature = "embassy-base")]
-const MAX_FRAMES: usize = 32;
-
 // ---------------------------------------------------------------------------
-// Static state
+// Static state — per-(pp, aa) presence bitmap
 // ---------------------------------------------------------------------------
+//
+// Each entry is a u32 bitmap; bit `ff` set means file `PPAAFF.PCX`
+// exists on the FAT12 partition.  Populated once at boot by [`init`]
+// and queried synchronously by [`count_anim_frames`].  Way leaner
+// than caching every filename — at 4 × 21 × 4 = 336 bytes it accepts
+// any number of sprite files without a hardcoded cap.
+
+/// Pet/category-prefix range covered by the catalogue.  PP=0 snail,
+/// 1 cat, 2 sponsors, 3 menu icons.  Animations queried via
+/// [`count_anim_frames`] today only use 0..=1, but the bitmap is sized
+/// for all four prefixes so the same scan can answer for any future
+/// caller.
+#[cfg(feature = "embassy-base")]
+const PP_MAX: usize = 4;
+/// Anim-id range covered.  Anim ids go 0x00..=0x14 (start screen +
+/// 20 lifecycle anims) — 21 entries.
+#[cfg(feature = "embassy-base")]
+const AA_MAX: usize = 21;
+/// Maximum frame index per animation (bit position in the u32).
+#[cfg(feature = "embassy-base")]
+const FF_MAX: u8 = 32;
 
 #[cfg(feature = "embassy-base")]
-struct SyncCell<T>(core::cell::UnsafeCell<T>);
-#[cfg(feature = "embassy-base")]
-unsafe impl<T> Sync for SyncCell<T> {}
-#[cfg(feature = "embassy-base")]
-impl<T> SyncCell<T> {
-    const fn new(v: T) -> Self {
-        Self(core::cell::UnsafeCell::new(v))
-    }
-    fn get(&self) -> *mut T {
-        self.0.get()
-    }
-}
+static ANIM_PRESENCE: [[core::sync::atomic::AtomicU32; AA_MAX]; PP_MAX] =
+    [const { [const { core::sync::atomic::AtomicU32::new(0) }; AA_MAX] }; PP_MAX];
 
-#[cfg(feature = "embassy-base")]
-static FRAMES: SyncCell<[FileRef; MAX_FRAMES]> = SyncCell::new([FileRef::EMPTY; MAX_FRAMES]);
-#[cfg(feature = "embassy-base")]
-static NAMES: SyncCell<[[u8; 11]; MAX_FRAMES]> = SyncCell::new([[0; 11]; MAX_FRAMES]);
 #[cfg(not(feature = "simulator"))]
 static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
@@ -63,7 +66,23 @@ static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8:
 // Init
 // ---------------------------------------------------------------------------
 
-/// Discover PCX files on the FAT12 partition and store their handles.
+/// Decode `b"AB"` (two ASCII hex digits) into a 0..=255 byte.
+#[cfg(feature = "embassy-base")]
+fn parse_hex_pair(hi: u8, lo: u8) -> Option<u8> {
+    fn d(c: u8) -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            _ => None,
+        }
+    }
+    Some((d(hi)? << 4) | d(lo)?)
+}
+
+/// Discover PCX files on the FAT12 partition and record per-animation
+/// presence in [`ANIM_PRESENCE`].  Walks the entire directory — no
+/// catalogue size cap.
 #[cfg(feature = "embassy-base")]
 pub async fn init() {
     let mut dir = match fat12::DirReader::open().await {
@@ -74,45 +93,39 @@ pub async fn init() {
         }
     };
 
-    let frames = unsafe { &mut *FRAMES.get() };
-    let names = unsafe { &mut *NAMES.get() };
-    let mut count = 0u8;
-
-    while (count as usize) < MAX_FRAMES {
+    let mut total: u8 = 0;
+    loop {
         match dir.next().await {
-            Ok(Some((name, file))) => {
-                if &name[8..11] == b"PCX" {
-                    names[count as usize] = name;
-                    frames[count as usize] = file;
-                    count += 1;
+            Ok(Some((name, _file))) => {
+                if &name[8..11] != b"PCX" {
+                    continue;
+                }
+                total = total.saturating_add(1);
+                let Some(pp) = parse_hex_pair(name[0], name[1]) else {
+                    continue;
+                };
+                let Some(aa) = parse_hex_pair(name[2], name[3]) else {
+                    continue;
+                };
+                let Some(ff) = parse_hex_pair(name[4], name[5]) else {
+                    continue;
+                };
+                if (pp as usize) < PP_MAX && (aa as usize) < AA_MAX && ff < FF_MAX {
+                    let mask = 1u32 << ff;
+                    ANIM_PRESENCE[pp as usize][aa as usize]
+                        .fetch_or(mask, core::sync::atomic::Ordering::Relaxed);
                 }
             }
             _ => break,
         }
     }
 
-    if count == 0 {
+    FRAME_COUNT.store(total, core::sync::atomic::Ordering::Relaxed);
+    if total == 0 {
         defmt::info!("sprite: no PCX files found on FAT12");
-        return;
+    } else {
+        defmt::info!("sprite: catalogued {} PCX file(s)", total);
     }
-
-    // Sort by filename so frame order is deterministic regardless of
-    // the order files were written to the FAT directory.
-    for i in 0..count as usize {
-        for j in (i + 1)..count as usize {
-            if names[j] < names[i] {
-                names.swap(i, j);
-                frames.swap(i, j);
-            }
-        }
-    }
-
-    for i in 0..count as usize {
-        defmt::info!("sprite: [{}] {=[u8]:a}", i, &names[i][..8]);
-    }
-
-    FRAME_COUNT.store(count, core::sync::atomic::Ordering::Relaxed);
-    defmt::info!("sprite: found {} PCX frame(s)", count);
 }
 
 /// Number of PCX sprite files available.
@@ -136,6 +149,63 @@ pub fn frame_count() -> u8 {
     #[cfg(not(feature = "simulator"))]
     {
         FRAME_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Count the contiguous run of frames available for an animation,
+/// starting at frame `00`.  `prefix` is the 4-byte `PPAA` portion of
+/// the FAT12 8.3 filename.
+///
+/// Firmware: read directly from the [`ANIM_PRESENCE`] bitmap built at
+/// boot.  Simulator: probes `assets/to-badge/` directly.
+///
+/// Frame `00` missing → returns 0 (no animation available).
+pub fn count_anim_frames(prefix: &[u8; 4]) -> u8 {
+    #[cfg(feature = "embassy-base")]
+    {
+        let pp = match parse_hex_pair(prefix[0], prefix[1]) {
+            Some(v) if (v as usize) < PP_MAX => v as usize,
+            _ => return 0,
+        };
+        let aa = match parse_hex_pair(prefix[2], prefix[3]) {
+            Some(v) if (v as usize) < AA_MAX => v as usize,
+            _ => return 0,
+        };
+        let bitmap = ANIM_PRESENCE[pp][aa].load(core::sync::atomic::Ordering::Relaxed);
+        bitmap.trailing_ones().min(FF_MAX as u32) as u8
+    }
+    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    {
+        const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+        const MAX_ANIM_FRAMES: u8 = 32;
+        use std::path::Path;
+        let mut count = 0u8;
+        while count < MAX_ANIM_FRAMES {
+            let name: [u8; 11] = [
+                prefix[0],
+                prefix[1],
+                prefix[2],
+                prefix[3],
+                HEX_DIGITS[(count >> 4) as usize],
+                HEX_DIGITS[(count & 0xF) as usize],
+                b' ',
+                b' ',
+                b'P',
+                b'C',
+                b'X',
+            ];
+            let path = std::format!("{}{}", SIM_ASSET_DIR, fat_name_to_dotted(&name));
+            if !Path::new(&path).exists() {
+                break;
+            }
+            count += 1;
+        }
+        count
+    }
+    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+    {
+        let _ = prefix;
+        0
     }
 }
 
@@ -233,17 +303,6 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 // ---------------------------------------------------------------------------
 // Blit
 // ---------------------------------------------------------------------------
-
-/// Blit PCX frame `index` (from the init-time file list) onto the display.
-#[cfg(feature = "embassy-base")]
-pub async fn blit(display: &mut EpdGfx<'_>, index: u8, x: i32, y: i32) {
-    let count = frame_count();
-    if count == 0 || index >= count {
-        return;
-    }
-    let file = unsafe { &(*FRAMES.get())[index as usize] };
-    blit_file(display, file, x, y).await;
-}
 
 /// Blit a PCX file (by [`FileRef`]) onto the display at position (`x`, `y`).
 ///

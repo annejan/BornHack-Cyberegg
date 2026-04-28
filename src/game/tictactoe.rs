@@ -332,7 +332,7 @@ where
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let msg = match result {
         1 => "You win! +inspired",
-        2 => "AI wins!",
+        2 => "EI wins!",
         3 => "Draw! +inspired",
         _ => "Your turn (X)",
     };
