@@ -48,6 +48,9 @@ pub const TIRED_PASSIVE_INTERVAL: u32 = 120;
 pub const SLEEP_RECOVERY_SLOW: u16 = 3275; // tired ≥ 76%
 pub const SLEEP_RECOVERY_MEDIUM: u16 = 6550; // tired ≥ 46%
 pub const SLEEP_RECOVERY_FAST: u16 = 9825; // tired < 46%
+/// Extra per-tick hunger increase while sleeping, on top of [`HUNGER_RATE`].
+/// Models metabolism continuing while the pet rests.
+pub const SLEEP_HUNGER_COST: u16 = 3100;
 /// Tired threshold for slow sleep recovery.
 pub const SLEEP_TIER_SLOW: u16 = 49807; // 76%
 /// Tired threshold for medium sleep recovery.
@@ -143,7 +146,7 @@ pub const RELAX_COOLDOWN: u16 = 24;
 /// Relax: drained reduction per action tick.
 pub const RELAX_DRAINED_RELIEF: u16 = 6550;
 /// Relax: hunger increase per action tick (costs energy).
-pub const RELAX_HUNGER_COST: u16 = 13100;
+pub const RELAX_HUNGER_COST: u16 = 6550;
 
 /// Play: duration, cooldown.
 pub const PLAY_DURATION: u8 = 4;
@@ -152,10 +155,11 @@ pub const PLAY_COOLDOWN: u16 = 48;
 /// Mini-game cooldown (Tic Tac Toe / Lights Out).
 ///
 /// Triggered when `award_inspiration` runs, i.e. when the player
-/// successfully completes either mini-game.  Same magnitude as the
-/// `Play` action's cooldown for parity — both award the same kind of
-/// reward (drained relief) on the same Play menu.
-pub const MINIGAME_COOLDOWN: u16 = 48;
+/// successfully completes either mini-game.  18 ticks = 180 s.
+pub const MINIGAME_COOLDOWN: u16 = 18;
+/// One-shot hunger increase applied when `award_inspiration` runs —
+/// playing a mini-game burns calories.
+pub const MINIGAME_HUNGER_COST: u16 = 3000;
 /// Play: base costs per action tick (modified by curiosity).
 pub const PLAY_HUNGER_COST: u16 = 655;
 pub const PLAY_TIRED_COST: u16 = 1310;
@@ -165,8 +169,12 @@ pub const PLAY_DRAINED_COST: u16 = 1965;
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-/// Hatching duration (ticks).  6 ticks = 1 minute.
+/// Hatching duration (ticks).  6 ticks = 1 minute on hardware.
+/// Simulator: 1 tick = 10 s, fast enough to debug without waiting.
+#[cfg(not(feature = "simulator"))]
 pub const HATCHING_TICKS: u16 = 6;
+#[cfg(feature = "simulator")]
+pub const HATCHING_TICKS: u16 = 1;
 
 /// Ticks of maxed stats before pet leaves, indexed by count of maxed stats.
 /// Index 0 unused, 1 = one maxed stat, etc.

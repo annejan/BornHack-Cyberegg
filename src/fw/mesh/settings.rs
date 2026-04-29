@@ -458,8 +458,8 @@ fn dk_bornhack_default_scope() -> [u8; 16] {
 ///
 /// Returns:
 /// - `Some(key)` when a non-zero key is stored or the default is just seeded.
-/// - `None` when an all-zero "explicitly cleared" value is stored (set by
-///   the BLE companion when the operator clears the scope).
+/// - `None` when an all-zero "explicitly cleared" value is stored (set by the
+///   BLE companion when the operator clears the scope).
 pub async fn get_flood_scope_or_init_default() -> Option<[u8; 16]> {
     let mut b = [0u8; 16];
     match ns().get("flood_scope", &mut b).await {

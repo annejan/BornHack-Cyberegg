@@ -46,6 +46,10 @@ pub type EpdGfx<'a> = GraphicDisplay<
 >;
 
 static OTP_LUT: StaticCell<[u8; 107]> = StaticCell::new();
+/// Un-patched copy of the probed OTP LUT, registered with the driver via
+/// `set_full_lut` so `update_bw(Mode2)` can run the real full waveform
+/// (with inversion / erase phases intact) instead of the patched fast LUT.
+static OTP_LUT_FULL: StaticCell<[u8; 107]> = StaticCell::new();
 static OTP_LUT_PTR: AtomicPtr<[u8; 107]> = AtomicPtr::new(core::ptr::null_mut());
 
 fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
@@ -244,18 +248,20 @@ pub async fn init_epd<'a>(
 ) -> Result<EpdGfx<'a>, Infallible> {
     // Read OTP LUT via stolen peripherals before consuming the real tokens.
     // Move raw bytes into static storage immediately — keeps the 107-byte buffer
-    // off the stack.
-    let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(
-        probe_lut(
-            &sck_pin,
-            &mosi_pin,
-            &csn_pin,
-            &dc_pin,
-            &resetn_pin,
-            &busy_pin,
-        )
-        .await,
-    );
+    // off the stack.  Two copies: `otp_lut` will be patched in-place by
+    // `set_otp_lut` (per `lut_mode`) for fast Mode 1 refreshes; `otp_full`
+    // stays raw for Mode 2 full refreshes.
+    let raw = probe_lut(
+        &sck_pin,
+        &mosi_pin,
+        &csn_pin,
+        &dc_pin,
+        &resetn_pin,
+        &busy_pin,
+    )
+    .await;
+    let otp_full: &'static [u8; 107] = OTP_LUT_FULL.init(raw);
+    let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(raw);
     OTP_LUT_PTR.store(otp_lut as *mut _, Ordering::Relaxed);
 
     // Build the SPI bus.
@@ -279,6 +285,9 @@ pub async fn init_epd<'a>(
         .unwrap();
     let display = Display::new(controller, config);
     let mut gfx = GraphicDisplay::new(display, black_buffer, red_buffer, work_buffer);
+    // Register the un-patched OTP first; `set_otp_lut` may then mutate
+    // its buffer in place when `lut_mode == NoInvert`.
+    gfx.set_full_lut(otp_full);
     gfx.set_otp_lut(otp_lut, lut_mode);
     defmt::info!(
         "Display controller: {}",

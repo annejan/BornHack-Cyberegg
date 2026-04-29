@@ -24,31 +24,33 @@ The firmware runs three concurrent Embassy tasks:
 
 ### Bootloader
 
-`embassy-boot-nrf` replaces the factory Adafruit UF2 bootloader.\
+A custom USB-DFU bootloader (`nrf-aegg-bootloader`) replaces the factory Adafruit UF2 bootloader.\
 The `bootloader/` directory is a standalone Cargo project (not in the workspace, not tracked in git).
 
-Flash partition layout:
+Flash partition layout — single app region, no DFU staging:
 
-| Region       | Start        | End          | Size  |
-| ------------ | ------------ | ------------ | ----- |
-| Bootloader   | `0x00000000` | `0x0000BFFF` | 48 K  |
-| State        | `0x0000C000` | `0x0000CFFF` | 4 K   |
-| Active (app) | `0x0000D000` | `0x00084FFF` | 480 K |
-| DFU          | `0x00085000` | `0x000FEFFF` | 480 K |
+| Region     | Start        | End          | Size  |
+| ---------- | ------------ | ------------ | ----- |
+| Bootloader | `0x00000000` | `0x0000FFFF` | 64 K  |
+| App        | `0x00010000` | `0x000FFFFF` | 960 K |
 
-The main app's `memory.x` sets `FLASH ORIGIN = 0x0000D000`.
+The main app's `memory-fw.x` sets `FLASH ORIGIN = 0x00010000` and `LENGTH = 960K`.\
+The bootloader exports `APP_START = 0x00010000` for the post-boot jump.
 
 ### Vendor libraries
 
 | Library              | Location                     | Notes                                                                                                                 |
 | -------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `meshcore`           | `vendor/meshcore/`           | MeshCore packet codec (no_std)                                                                                        |
-| `meshcore-companion` | `vendor/meshcore-companion/` | BLE companion protocol encoder/decoder                                                                                |
+| `meshcore-companion` | `vendor/meshcore-companion/` | BLE companion protocol encoder/decoder (no_std)                                                                       |
 | `ssd1675`            | `vendor/ssd1675/`            | Async Embassy SSD1675 driver with OTP LUT readback, variant detection (A/B), `UpdateMode`, `BorderWaveform`, fast LUT |
 
 ## Connecting with MeshCore
 
-The badge is compatible with the MeshCore companion app, available for Android/iOS and as a web app.
+The badge is compatible with the MeshCore companion app:
+
+- **Android / iOS** — install the **MeshCore** app from the Google Play Store / App Store.
+- **Browser** — open <https://app.meshcore.nz/> (works in any browser that supports Web Bluetooth, e.g. Chrome / Edge on desktop or Android).
 
 When the badge boots, it begins advertising over BLE. On first pairing a numeric passkey is shown on the e-paper display — enter this in the app to complete the bond.
 
@@ -475,11 +477,21 @@ cargo run -- export \
     ../hello-graphics/assets/bornpets-sponsors.json5 \
     ../hello-graphics/assets/bornpets-sponsors-cat.json5 \
     ../hello-graphics/assets/sponsors.json5 \
+    ../hello-graphics/assets/bornpets-menu-icons.json5 \
     --output-dir ../hello-graphics/assets/to-badge \
     --format pcx
 ```
 
 This reads the source PNGs referenced in each JSON5 config, slices them into individual frames, and encodes them as 2bpp PCX files with the correct palette. The output filenames match the `PPAAFF.PCX` convention expected by the firmware.
+
+Each JSON5 file contributes a separate `PP` prefix range:
+
+| Config | Prefix | Purpose |
+| --- | --- | --- |
+| `bornpets-sponsors.json5` | `00xx` | Snail pet animations + shared icons / placeholders |
+| `bornpets-sponsors-cat.json5` | `01xx` | Cat pet animations |
+| `sponsors.json5` | `02xx` | First-boot sponsor slideshow images |
+| `bornpets-menu-icons.json5` | `03xx` | On-screen menu icons (top + bottom rows, normal + selected) |
 
 After generating, copy all `.PCX` files from `assets/to-badge/` to the badge's USB drive.
 
@@ -494,6 +506,7 @@ The firmware maps animation states to filenames in code. If you add new animatio
 | Animation ID assignment    | [`anim_files.rs`](src/game/engine/anim_files.rs) — `anim_id()` function              |
 | Sponsor slide filenames    | [`sponsors.rs`](src/fw/sponsors.rs) — `sponsor_filename()` and `MAX_SPONSORS`        |
 | Start screen filename      | [`anim_files.rs`](src/game/engine/anim_files.rs) — `start_screen_filename()`         |
+| Menu icons (top/bottom row)| [`anim_files.rs`](src/game/engine/anim_files.rs) — `menu_icon_filename()`, `MENU_ICON_COUNT` |
 
 The filename convention is `PPAAFF.PCX` where `PP` = pet prefix (hex), `AA` = animation ID (hex), `FF` = frame number (hex). This is encoded in `anim_files.rs::build_filename()`.
 

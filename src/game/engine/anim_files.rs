@@ -48,62 +48,9 @@ fn anim_id(anim: DisplayAnim) -> u8 {
 
 // ── Frame counts per animation ───────────────────────────────────────────────
 
-/// Frame counts for snail animations.
-const SNAIL_FRAMES: [u8; 21] = [
-    0, // 0x00: start screen (not used here)
-    1, // 0x01: idle
-    2, // 0x02: happy
-    1, // 0x03: critical sick
-    1, // 0x04: critical tired
-    1, // 0x05: critical hungry
-    1, // 0x06: critical drained
-    1, // 0x07: warning sick
-    1, // 0x08: warning tired
-    1, // 0x09: warning hungry
-    1, // 0x0A: warning drained
-    1, // 0x0B: warning miserable
-    2, // 0x0C: feeding
-    2, // 0x0D: healing
-    1, // 0x0E: relaxing
-    1, // 0x0F: playing
-    2, // 0x10: sleeping
-    1, // 0x11: leaving
-    1, // 0x12: gone
-    1, // 0x13: hibernating
-    4, // 0x14: hatching
-];
-
-/// Frame counts for cat animations.
-const CAT_FRAMES: [u8; 21] = [
-    0, // 0x00: start screen
-    2, // 0x01: idle
-    2, // 0x02: happy
-    1, // 0x03: critical sick
-    2, // 0x04: critical tired
-    2, // 0x05: critical hungry
-    2, // 0x06: critical drained
-    1, // 0x07: warning sick
-    2, // 0x08: warning tired
-    2, // 0x09: warning hungry
-    2, // 0x0A: warning drained
-    2, // 0x0B: warning miserable
-    2, // 0x0C: feeding
-    2, // 0x0D: healing
-    2, // 0x0E: relaxing
-    4, // 0x0F: playing
-    2, // 0x10: sleeping
-    1, // 0x11: leaving
-    1, // 0x12: gone
-    1, // 0x13: hibernating
-    4, // 0x14: hatching
-];
-
-fn frames_for(kind: PetKind) -> &'static [u8; 21] {
-    match kind {
-        PetKind::Snail => &SNAIL_FRAMES,
-        PetKind::Cat => &CAT_FRAMES,
-    }
-}
+// Frame counts are now derived from the runtime catalogue — see
+// [`frame_count`] below.  Firmware queries the FAT12 directory list
+// populated at boot; the simulator probes `assets/to-badge/`.
 
 // ── Filename generation ──────────────────────────────────────────────────────
 
@@ -136,16 +83,79 @@ pub fn start_screen_filename() -> [u8; 11] {
     *b"000000  PCX"
 }
 
-// ── Public API (compatible with old interface) ───────────────────────────────
+/// Six menu icons live under prefix `0x03`, one sequence per icon:
+///
+/// | slot | sequence | name           | row, col   |
+/// |------|----------|----------------|------------|
+/// |   0  | `0x00`   | `MENU_STATS`   | top, 0     |
+/// |   1  | `0x01`   | `MENU_HIBERNATE` | top, 1   |
+/// |   2  | `0x02`   | `MENU_FEED`    | bottom, 0  |
+/// |   3  | `0x03`   | `MENU_HEAL`    | bottom, 1  |
+/// |   4  | `0x04`   | `MENU_PLAY`    | bottom, 2  |
+/// |   5  | `0x05`   | `MENU_REST`    | bottom, 3  |
+///
+/// `selected` selects between frame 0 (normal, drawn over the white
+/// background) and frame 1 (selected — replaces the firmware-drawn
+/// black selection circle entirely).
+pub fn menu_icon_filename(slot: u8, selected: bool) -> [u8; 11] {
+    let aa = slot;
+    let ff: u8 = if selected { 1 } else { 0 };
+    [
+        b'0',
+        b'3',
+        HEX[(aa >> 4) as usize],
+        HEX[(aa & 0xF) as usize],
+        HEX[(ff >> 4) as usize],
+        HEX[(ff & 0xF) as usize],
+        b' ',
+        b' ',
+        b'P',
+        b'C',
+        b'X',
+    ]
+}
 
-/// Maximum frames per animation sequence.
-pub const MAX_FRAMES: u8 = 5;
+/// Number of menu-icon slots (top-row 2 + bottom-row 4).
+pub const MENU_ICON_COUNT: u8 = 6;
+
+/// Map (row=Top, col 0..1) and (row=Bottom, col 0..3) to the
+/// `slot` argument of [`menu_icon_filename`].  Returns `None` for
+/// the empty top-row cells (cols 2, 3).
+pub fn menu_icon_slot(top_row: bool, col: u8) -> Option<u8> {
+    if top_row {
+        if col < 2 { Some(col) } else { None }
+    } else if col < 4 {
+        Some(2 + col)
+    } else {
+        None
+    }
+}
+
+/// Public accessor for the animation-id byte used in the FAT12
+/// filename.  Callers track the last id seen to detect animation
+/// changes (so they can reset their frame counter).
+pub fn anim_id_for(anim: DisplayAnim) -> u8 {
+    anim_id(anim)
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
 
 /// Number of frames available for the given pet kind and animation.
+///
+/// Counts the contiguous run of `PPAAFF.PCX` files starting at frame
+/// `00` in the runtime sprite catalogue (FAT12 directory in firmware,
+/// `assets/to-badge/` on the simulator).  No frame `00` → returns 0
+/// → callers treat as "no animation available".
 pub fn frame_count(kind: PetKind, anim: DisplayAnim) -> u8 {
-    let id = anim_id(anim) as usize;
-    let table = frames_for(kind);
-    if id < table.len() { table[id] } else { 1 }
+    let pp = kind as u8;
+    let aa = anim_id(anim);
+    let prefix = [
+        HEX[(pp >> 4) as usize],
+        HEX[(pp & 0xF) as usize],
+        HEX[(aa >> 4) as usize],
+        HEX[(aa & 0xF) as usize],
+    ];
+    super::super::sprite_loader::count_anim_frames(&prefix)
 }
 
 /// Get the 8.3 filename for animation `anim` at frame `frame_index`.

@@ -89,6 +89,19 @@ use embassy_sync::signal::Signal;
 #[cfg(feature = "simulator")]
 pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
+/// Player-menu song indices into [`crate::fw::buzzer::MELODIES`].
+/// Defined here, not in `fw::buzzer`, so the `game::modal` music menu
+/// can reference them on simulator builds (which don't link
+/// `fw::buzzer`) without re-declaring the values.  `fw::buzzer` keeps
+/// its `MELODIES` array in this order; reorder one and reorder the
+/// other.
+pub const SONG_STARTUP_INDEX: u8 = 0;
+pub const SONG_RICKROLL_INDEX: u8 = 1;
+pub const SONG_IMPERIAL_MARCH_INDEX: u8 = 2;
+pub const SONG_SANDSTORM_INDEX: u8 = 3;
+pub const SONG_PINK_PANTHER_INDEX: u8 = 4;
+pub const SONG_TROLOLO_INDEX: u8 = 5;
+
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
@@ -156,6 +169,14 @@ pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 /// Fired when the menu's text entry submits a new node name.
 #[cfg(feature = "embassy-base")]
 pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// One-shot request for the next EPD refresh to use the slow full
+/// waveform ([`ssd1675::UpdateMode::Mode2`]) instead of the fast LUT
+/// ([`ssd1675::UpdateMode::Mode1`]).  The display loop in `embassy.rs`
+/// `swap`s the flag back to `false` after consuming it, so a mini-game
+/// can simply set this to `true` on close to clear residual ghosting
+/// from its many fast updates in one full-cycle refresh.
+pub static FULL_REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// When true, #blinkme channel LED commands are ignored.
 pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);
@@ -475,7 +496,6 @@ where
     Ok(())
 }
 
-/// Format battery percentage with charging indicator prefix.
 /// Draw a standard screen frame with optional header and footer.
 ///
 /// Returns `(body_y_start, body_y_end)` — the vertical pixel range available
@@ -546,6 +566,8 @@ where
 /// - Body: 20w × 12h, 2px border
 /// - Fill: proportional to `pct`, fills right-to-left (full = all black)
 /// - Below 5%: rendered in red
+/// - Charging: a lightning bolt drawn in the centre of the body in inverted
+///   pixels (white over the black fill, black over the empty white interior)
 pub fn draw_battery_icon<D>(display: &mut D, x: i32, y: i32, pct: u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -566,11 +588,43 @@ where
     // Interior: 16×8 (body minus 2px border). Fill from right to left.
     let interior_w = 16u32;
     let fill_w = ((pct as u32).min(100) * interior_w / 100) as u32;
+    let fill_x = bx + 2 + (interior_w - fill_w) as i32;
     if fill_w > 0 {
-        let fill_x = bx + 2 + (interior_w - fill_w) as i32;
         Rectangle::new(Point::new(fill_x, y + 2), Size::new(fill_w, 8))
             .into_styled(PrimitiveStyle::with_fill(color))
             .draw(display)?;
+    }
+
+    // Charging indicator: lightning bolt in the centre of the body,
+    // drawn as inverted pixels — WHITE where fill is BLACK, BLACK
+    // where the interior is empty (WHITE).  Visible regardless of
+    // current charge level.
+    #[cfg(feature = "embassy-base")]
+    let charging = fw::battery::is_charging();
+    #[cfg(not(feature = "embassy-base"))]
+    let charging = false;
+
+    if charging {
+        // 4×8 lightning bolt mask — top bit = leftmost pixel.
+        const BOLT: [u8; 8] = [
+            0b0110, 0b1100, 0b1100, 0b1110, 0b0111, 0b0011, 0b0011, 0b0110,
+        ];
+        // Centre 4-wide bolt in 16-wide interior.
+        let bolt_x = bx + 2 + 6;
+        let bolt_y = y + 2;
+        let pixels = (0..8i32).flat_map(|row| {
+            (0..4i32).filter_map(move |col| {
+                if (BOLT[row as usize] >> (3 - col)) & 1 == 0 {
+                    return None;
+                }
+                let px = bolt_x + col;
+                let py = bolt_y + row;
+                let underlying_black = fill_w > 0 && px >= fill_x;
+                let inverted = if underlying_black { WHITE } else { BLACK };
+                Some(Pixel(Point::new(px, py), inverted))
+            })
+        });
+        display.draw_iter(pixels)?;
     }
 
     Ok(())

@@ -156,7 +156,7 @@ pub fn open() {
 /// Close the maze (and award inspiration if the player won).
 pub fn close() {
     if WON.load(Ordering::Relaxed) {
-        super::lifecycle::award_inspiration();
+        super::lifecycle::award_inspiration(super::engine::MiniGame::Maze);
         super::show_toast(super::Toast::Inspired);
     }
     ACTIVE.store(false, Ordering::Relaxed);

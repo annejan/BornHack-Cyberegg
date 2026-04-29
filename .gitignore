@@ -4,3 +4,6 @@ src/main.rs.bak
 
 bootloader/target
 docs
+.claude
+*.txt
+.rules

@@ -10,7 +10,8 @@
 //! Edit-mode buttons mirror the Settings-menu stepper pattern:
 //!
 //!   Row-nav (default after entering edit mode):
-//!     * Up/Down       — move between fields (Hour → Minute → Days → Tone → Enabled)
+//!     * Up/Down       — move between fields (Hour → Minute → Days → Tone →
+//!       Enabled)
 //!     * Fire/Execute  — drill into the selected field, or just toggle Enabled
 //!     * Cancel        — exit edit mode (changes are live, no save needed)
 //!
@@ -138,9 +139,9 @@ fn step_current_field(up: bool) {
 /// the event (returns `true`).
 ///
 /// Two layers of state inside this mode:
-///  * row-nav (default) — Up/Left moves to the previous field, Down/Right
-///    to the next.  Fire/Execute drills into a steppable field (or just
-///    toggles Enabled).  Cancel exits alarm-edit entirely.
+///  * row-nav (default) — Up/Left moves to the previous field, Down/Right to
+///    the next.  Fire/Execute drills into a steppable field (or just toggles
+///    Enabled).  Cancel exits alarm-edit entirely.
 ///  * field active — Up/Right increment the value, Down/Left decrement.
 ///    Fire/Execute or Cancel pops back to row-nav.
 pub(super) fn dispatch_edit(btn: ButtonId) -> bool {

@@ -14,12 +14,14 @@
 //! └───────────────────────────────────────┘  y = 152
 //! ```
 
+pub mod blackhole;
 pub mod engine;
 pub mod input;
 pub mod lifecycle;
 pub mod lightsout;
 pub mod modal;
 pub mod nav;
+pub mod nim;
 pub mod pet_select;
 pub mod realm_view;
 pub mod sprite_loader;
@@ -32,10 +34,10 @@ pub mod maze;
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 pub use nav::{GameNav, Row};
 
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor};
 
 /// Action feedback shown briefly after an action.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,138 +143,9 @@ const BOT_CY: i32 = 131;
 const SEP_TOP: i32 = 34;
 /// Y of the separator above the bottom icon row.
 const SEP_BOT: i32 = 111;
-/// Radius of the selection circle background (diameter = 26 px).
-const SEL_RADIUS: i32 = 13;
 
 /// First display row of the pet/sprite area.
 pub const PET_AREA_TOP: usize = SEP_TOP as usize + 1;
-
-// ── Selection highlight
-// ───────────────────────────────────────────────────────
-
-fn draw_selection_bg<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    Circle::new(
-        Point::new(cx - SEL_RADIUS, cy - SEL_RADIUS),
-        (SEL_RADIUS * 2) as u32,
-    )
-    .into_styled(PrimitiveStyle::with_fill(BLACK))
-    .draw(display)
-}
-
-// ── Icon drawing functions
-// ────────────────────────────────────────────────────
-
-fn icon_fork<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let fill = PrimitiveStyle::with_fill(color);
-    Rectangle::new(Point::new(cx - 1, cy - 8), Size::new(2, 16))
-        .into_styled(fill)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 4, cy - 8), Size::new(2, 8))
-        .into_styled(fill)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx + 2, cy - 8), Size::new(2, 8))
-        .into_styled(fill)
-        .draw(display)?;
-    Ok(())
-}
-
-fn icon_bulb<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let stroke = PrimitiveStyle::with_stroke(color, 1);
-    let fill = PrimitiveStyle::with_fill(color);
-    Circle::new(Point::new(cx - 5, cy - 7), 10)
-        .into_styled(stroke)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 2, cy + 3), Size::new(4, 4))
-        .into_styled(fill)
-        .draw(display)?;
-    Ok(())
-}
-
-fn icon_bat<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let fill = PrimitiveStyle::with_fill(color);
-    Rectangle::new(Point::new(cx - 1, cy - 8), Size::new(2, 16))
-        .into_styled(fill)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 6, cy + 2), Size::new(12, 3))
-        .into_styled(fill)
-        .draw(display)?;
-    Circle::new(Point::new(cx - 3, cy - 5), 6)
-        .into_styled(PrimitiveStyle::with_stroke(color, 1))
-        .draw(display)?;
-    Ok(())
-}
-
-fn icon_syringe<D>(
-    display: &mut D,
-    cx: i32,
-    cy: i32,
-    _active: bool,
-    color: TriColor,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let fill = PrimitiveStyle::with_fill(color);
-    let stroke = PrimitiveStyle::with_stroke(color, 1);
-    Rectangle::new(Point::new(cx - 2, cy - 8), Size::new(4, 12))
-        .into_styled(stroke)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy - 10), Size::new(2, 3))
-        .into_styled(fill)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy + 4), Size::new(2, 4))
-        .into_styled(fill)
-        .draw(display)?;
-    Ok(())
-}
-
-fn icon_meter<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let stroke = PrimitiveStyle::with_stroke(color, 1);
-    let fill = PrimitiveStyle::with_fill(color);
-    Circle::new(Point::new(cx - 7, cy - 7), 14)
-        .into_styled(stroke)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy - 5), Size::new(2, 6))
-        .into_styled(fill)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx - 1, cy - 5), Size::new(5, 2))
-        .into_styled(fill)
-        .draw(display)?;
-    Ok(())
-}
-
-fn icon_duck<D>(display: &mut D, cx: i32, cy: i32, color: TriColor) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let stroke = PrimitiveStyle::with_stroke(color, 1);
-    let fill = PrimitiveStyle::with_fill(color);
-    Circle::new(Point::new(cx - 3, cy - 7), 8)
-        .into_styled(stroke)
-        .draw(display)?;
-    Circle::new(Point::new(cx - 6, cy), 12)
-        .into_styled(stroke)
-        .draw(display)?;
-    Rectangle::new(Point::new(cx + 2, cy - 4), Size::new(4, 2))
-        .into_styled(fill)
-        .draw(display)?;
-    Ok(())
-}
 
 // ── Public entry point
 // ────────────────────────────────────────────────────────
@@ -293,6 +166,12 @@ where
     use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
     use engine::to_display::DisplayAnim;
 
+    // `nav` only drives the simulator's in-line icon blit (firmware
+    // does that work in the async pre-pass `render()` instead).  Suppress
+    // the unused-variable warning for non-simulator builds.
+    #[cfg(not(feature = "simulator"))]
+    let _ = &nav;
+
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
@@ -312,6 +191,12 @@ where
     if lightsout::is_active() {
         return lightsout::draw(display);
     }
+    if blackhole::is_active() {
+        return blackhole::draw(display);
+    }
+    if nim::is_active() {
+        return nim::draw(display);
+    }
 
     // Battery icon — top-right.
     #[cfg(feature = "embassy-base")]
@@ -328,7 +213,15 @@ where
     // multi-frame animations actually cycle.
     #[cfg(feature = "simulator")]
     {
+        use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
         use engine::anim_files;
+        // Per-animation start delta: when the anim id changes we pin
+        // the wall-clock origin so the new anim begins at frame 0.
+        // The free-running clock keeps ticking — we just subtract.
+        static LAST_ANIM_ID: AtomicU8 = AtomicU8::new(0xFF);
+        static ANIM_START_MS: AtomicU64 = AtomicU64::new(0);
+
         if !lifecycle::is_started() {
             sprite_loader::blit_pcx_sim(display, &anim_files::start_screen_filename(), 0, 0);
         } else {
@@ -336,11 +229,16 @@ where
             let anim = lifecycle::display_anim();
             let count = anim_files::frame_count(kind, anim);
             if count > 0 {
-                // ~1.5 s per sprite frame, matching the firmware sprite
-                // tick.  Hatching clamps to the last frame instead of
-                // wrapping (same rule as embassy.rs::display_loop).
                 let elapsed_ms = lifecycle::sim_elapsed_ms();
-                let raw = (elapsed_ms / 1500) as u32;
+                let id = anim_files::anim_id_for(anim);
+                if LAST_ANIM_ID.load(Ordering::Relaxed) != id {
+                    LAST_ANIM_ID.store(id, Ordering::Relaxed);
+                    ANIM_START_MS.store(elapsed_ms, Ordering::Relaxed);
+                }
+                let delta_ms = elapsed_ms.saturating_sub(ANIM_START_MS.load(Ordering::Relaxed));
+                // 10 s per frame — matches the firmware default sprite
+                // tick interval.  Hatching clamps to the last frame.
+                let raw = (delta_ms / 10_000) as u32;
                 let frame = if matches!(anim, engine::DisplayAnim::Hatching { .. }) {
                     raw.min(count.saturating_sub(1) as u32) as u8
                 } else {
@@ -390,18 +288,28 @@ where
 
     // ── Active game ──────────────────────────────────────────────────────
 
-    // Top icon row: Stats, Hibernate.
-    for (i, &cx) in ICON_CX.iter().enumerate() {
-        let selected = nav.row == Row::Top && nav.col == i as u8;
-        let fg = if selected { WHITE } else { BLACK };
-        if selected {
-            draw_selection_bg(display, cx, TOP_CY)?;
-        }
-        match i {
-            0 => icon_meter(display, cx, TOP_CY, fg)?,
-            1 => icon_bulb(display, cx, TOP_CY, fg)?,
-            _ => {}
-        }
+    // Menu icons — sprite-based.  In firmware the async `render()`
+    // pre-pass already blitted the six 26×26 PCX icons before this
+    // function ran (one per slot, F1 = normal, F2 = selected, the
+    // selected variant replaces the firmware-drawn selection circle
+    // entirely).  In simulator we don't have an async pre-pass, so
+    // resolve them here from `assets/to-badge/`.
+    #[cfg(feature = "simulator")]
+    for slot in 0..engine::anim_files::MENU_ICON_COUNT {
+        let (row_kind, col) = if slot < 2 {
+            (Row::Top, slot)
+        } else {
+            (Row::Bottom, slot - 2)
+        };
+        let cy = if matches!(row_kind, Row::Top) {
+            TOP_CY
+        } else {
+            BOT_CY
+        };
+        let cx = ICON_CX[col as usize];
+        let selected = nav.row == row_kind && nav.col == col;
+        let name = engine::anim_files::menu_icon_filename(slot, selected);
+        sprite_loader::blit_pcx_sim(display, &name, cx - 13, cy - 13);
     }
 
     Rectangle::new(Point::new(0, SEP_TOP), Size::new(152, 1))
@@ -422,21 +330,6 @@ where
     Rectangle::new(Point::new(0, SEP_BOT), Size::new(152, 1))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
-
-    // Bottom icon row: Feed, Heal, Play, Rest.
-    for (i, &cx) in ICON_CX.iter().enumerate() {
-        let selected = nav.row == Row::Bottom && nav.col == i as u8;
-        let fg = if selected { WHITE } else { BLACK };
-        if selected {
-            draw_selection_bg(display, cx, BOT_CY)?;
-        }
-        match i {
-            0 => icon_fork(display, cx, BOT_CY, fg)?,
-            1 => icon_syringe(display, cx, BOT_CY, true, fg)?,
-            2 => icon_bat(display, cx, BOT_CY, fg)?,
-            _ => icon_duck(display, cx, BOT_CY, fg)?,
-        }
-    }
 
     // Action feedback toast — shown briefly after an action.
     let ttl = TOAST_TTL.load(Ordering::Relaxed);
@@ -521,6 +414,28 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             if let Ok(file) = fat12::find_file(&name).await {
                 sprite_loader::blit_file(display, &file, 0, PET_AREA_TOP as i32).await;
                 has_sprite = true;
+            }
+        }
+
+        // Menu icons (top + bottom rows) — six 26×26 PCX sprites under
+        // prefix `0x03`.  The selected variant fully replaces the
+        // firmware-drawn selection circle so we don't call
+        // `draw_selection_bg` for those slots.  Missing PCX files fail
+        // soft (cell stays whatever the EPD was cleared to).
+        let nav = nav::get_nav();
+        for slot in 0..anim_files::MENU_ICON_COUNT {
+            let (top_row, col) = if slot < 2 {
+                (true, slot)
+            } else {
+                (false, slot - 2)
+            };
+            let cy = if top_row { TOP_CY } else { BOT_CY };
+            let cx = ICON_CX[col as usize];
+            let row_kind = if top_row { Row::Top } else { Row::Bottom };
+            let selected = nav.row == row_kind && nav.col == col;
+            let name = anim_files::menu_icon_filename(slot, selected);
+            if let Ok(file) = fat12::find_file(&name).await {
+                sprite_loader::blit_file(display, &file, cx - 13, cy - 13).await;
             }
         }
     }

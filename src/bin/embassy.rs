@@ -262,6 +262,15 @@ async fn main(spawner: Spawner) {
     .unwrap();
     defmt::info!("EPD initialized");
 
+    // Boot-time full blank: clear both planes to white and push with the
+    // tri-color waveform so red ink particles get cycled too.  Wipes any
+    // residual ghosting from the previous power-on session before the
+    // first fast-LUT refresh paints over it.
+    let _ = display.clear(Color::White);
+    let _ = display.reset().await;
+    let _ = display.update_tc().await;
+    let _ = display.deep_sleep().await;
+
     // LEDs are initialised earlier (above the mesh stack) so the led_task is
     // already running when the contact store needs to blink the green LED
     // during a legacy-format wipe.
@@ -360,6 +369,12 @@ async fn display_loop(
 
     #[cfg(feature = "game")]
     let mut sprite_frame: u8 = 0;
+    // Last animation id observed by the sprite-frame advance.  When
+    // it changes, `sprite_frame` resets to 0 so each new animation
+    // starts at its first frame regardless of where the previous one
+    // left the counter.
+    #[cfg(feature = "game")]
+    let mut last_anim_id: u8 = 0xFF;
 
     loop {
         // Process any pending sponsor flag clear request from the menu.
@@ -369,8 +384,17 @@ async fn display_loop(
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 
         // ── Game cycle: update engine, render animation ────────────────
+        // Reset the sprite-frame counter on animation change *before*
+        // the render so the new anim shows frame 0 immediately rather
+        // than waiting for the next sprite-tick fire.
         #[cfg(feature = "game")]
         if active_screen == hello_graphics::SCREEN_GAME {
+            let anim = hello_graphics::game::lifecycle::display_anim();
+            let id = hello_graphics::game::engine::anim_files::anim_id_for(anim);
+            if id != last_anim_id {
+                last_anim_id = id;
+                sprite_frame = 0;
+            }
             hello_graphics::game::render(display, sprite_frame).await;
         }
 
@@ -386,10 +410,24 @@ async fn display_loop(
             health_err!(epd, "Failed to draw graphics");
         }
 
+        // Mini-games set `FULL_REFRESH_PENDING` on close so the next
+        // refresh clears any residual ghosting from their many fast
+        // updates.  We use `update_tc` for that path because plain
+        // `update_bw` only cycles the B/W waveform — any red pixels
+        // left in the panel (e.g. minigame cursor before it was
+        // changed to dithered B/W) would otherwise stick around.
+        // Consume the flag with `swap` so the upgrade applies once.
+        let do_full =
+            hello_graphics::FULL_REFRESH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
+
         let sprite_advance = match select(
             async {
                 let _ = display.reset().await;
-                let _ = display.update_bw(UpdateMode::Mode1).await;
+                if do_full {
+                    let _ = display.update_tc().await;
+                } else {
+                    let _ = display.update_bw(UpdateMode::Mode1).await;
+                }
                 let _ = display.deep_sleep().await;
             },
             wait_display_event(button_rcvr, active_screen),
@@ -406,6 +444,8 @@ async fn display_loop(
         led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
 
         // Advance animation frame only when the sprite timer fired.
+        // Anim-change detection lives just before `render()` above so
+        // the reset is visible on the same frame as the change.
         #[cfg(feature = "game")]
         if sprite_advance {
             let anim = hello_graphics::game::lifecycle::display_anim();

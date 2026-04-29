@@ -13,9 +13,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{
-    PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment,
-};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, TriColor, WHITE};
@@ -45,6 +43,30 @@ static BOARD: AtomicU32 = AtomicU32::new(0);
 static MOVES: AtomicU8 = AtomicU8::new(0);
 /// True when the puzzle is solved (all lights off).
 static SOLVED: AtomicBool = AtomicBool::new(false);
+/// True when the board is in an unsolvable equivalence class.  Set
+/// defensively after every move (in theory unreachable from a solvable
+/// `open()` start, but acts as an assert if `toggle()` is ever broken).
+static UNSOLVABLE: AtomicBool = AtomicBool::new(false);
+
+// ── Solvability test (Jaap Scherphuis 5×5 quiet-pattern parity)
+// ───────────────
+//
+// 5×5 Lights Out's null-space has dimension 2.  Two row-major bitmasks
+// pick the cells whose XOR-parity must be even for the board to be
+// solvable.  See <https://www.jaapsch.net/puzzles/lomath.htm#solvtest>.
+//
+// `SOLVE_MASK_ROWS`: rows {0, 2, 4} × cols {0, 1, 3, 4}  →  12 cells.
+// `SOLVE_MASK_COLS`: cols {0, 2, 4} × rows {0, 1, 3, 4}  →  12 cells.
+const SOLVE_MASK_ROWS: u32 = 0x01B0_6C1B;
+const SOLVE_MASK_COLS: u32 = 0x015A_82B5;
+
+const _: () = assert!(SOLVE_MASK_ROWS.count_ones() == 12);
+const _: () = assert!(SOLVE_MASK_COLS.count_ones() == 12);
+
+fn is_solvable(board: u32) -> bool {
+    (board & SOLVE_MASK_ROWS).count_ones() & 1 == 0
+        && (board & SOLVE_MASK_COLS).count_ones() & 1 == 0
+}
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -73,11 +95,17 @@ pub fn open() {
     CURSOR.store(12, Ordering::Relaxed);
     MOVES.store(0, Ordering::Relaxed);
     SOLVED.store(false, Ordering::Relaxed);
+    UNSOLVABLE.store(false, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
 pub fn close() {
     ACTIVE.store(false, Ordering::Relaxed);
+    // Many fast LUT (Mode 1) refreshes happen during play; switch the
+    // next refresh to the full OTP waveform (Mode 2) so any residual
+    // ghosting from the cell grid is cleared in one cycle when we
+    // return to the game screen.
+    crate::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
 // ── Input handling ───────────────────────────────────────────────────────────
@@ -114,8 +142,13 @@ pub fn cursor_right() {
 pub fn activate() {
     if SOLVED.load(Ordering::Relaxed) {
         // Puzzle already solved — Fire closes and awards reward.
-        super::lifecycle::award_inspiration();
+        super::lifecycle::award_inspiration(super::engine::MiniGame::LightsOut);
         super::show_toast(super::Toast::Inspired);
+        close();
+        return;
+    }
+    if UNSOLVABLE.load(Ordering::Relaxed) {
+        // Defensive end-state — Fire just closes, no reward.
         close();
         return;
     }
@@ -133,6 +166,11 @@ pub fn activate() {
 
     if board == 0 {
         SOLVED.store(true, Ordering::Relaxed);
+    } else if !is_solvable(board) {
+        // Should be unreachable from a `open()` start, but if it
+        // ever happens (toggle bug, cosmic-ray bit-flip, future
+        // change), don't strand the player on an unwinnable puzzle.
+        UNSOLVABLE.store(true, Ordering::Relaxed);
     }
 }
 
@@ -217,21 +255,29 @@ where
             .draw(display)?;
         }
 
-        // Cursor: thick red border.  Drawn with `Inside` alignment so
-        // the 6 px stroke sits inside the rectangle, leaving the black
-        // cell outline visible around it.
+        // Cursor: 6 px dithered (50 % checkerboard) border.  Pure B&W so it
+        // survives the fast LUT refresh — the previous red stroke needed a
+        // tri-colour update that's too slow for an interactive cursor.
         if i == cursor && !solved {
-            let cursor_style = PrimitiveStyleBuilder::new()
-                .stroke_color(crate::RED)
-                .stroke_width(6)
-                .stroke_alignment(StrokeAlignment::Inside)
-                .build();
-            Rectangle::new(
-                Point::new(x + 1, y + 1),
-                Size::new((CELL - 2) as u32, (CELL - 2) as u32),
-            )
-            .into_styled(cursor_style)
-            .draw(display)?;
+            const THICK: i32 = 6;
+            let outer_x = x + 1;
+            let outer_y = y + 1;
+            let outer_w = CELL - 2;
+            let outer_h = CELL - 2;
+            let pixels = (0..outer_h).flat_map(move |dy| {
+                (0..outer_w).filter_map(move |dx| {
+                    let on_border =
+                        dx < THICK || dy < THICK || dx >= outer_w - THICK || dy >= outer_h - THICK;
+                    if !on_border {
+                        return None;
+                    }
+                    let px = outer_x + dx;
+                    let py = outer_y + dy;
+                    let color = if (px + py) & 1 == 0 { BLACK } else { WHITE };
+                    Some(Pixel(Point::new(px, py), color))
+                })
+            });
+            display.draw_iter(pixels)?;
         }
     }
 
@@ -242,10 +288,19 @@ where
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
 
+    let unsolvable = UNSOLVABLE.load(Ordering::Relaxed);
     if solved {
         let mut buf: heapless::String<32> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Solved in {} moves!", moves));
         Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered).draw(display)?;
+    } else if unsolvable {
+        Text::with_text_style(
+            "Unsolvable — Fire to exit",
+            Point::new(76, 134),
+            font,
+            centered,
+        )
+        .draw(display)?;
     } else {
         let mut buf: heapless::String<24> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Moves: {}", moves));

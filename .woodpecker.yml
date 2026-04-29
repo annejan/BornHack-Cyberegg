@@ -1,0 +1,36 @@
+when:
+  - event: [push, pull_request]
+
+# The vendored crates under vendor/* are git submodules; without
+# recursive clone the path-based deps would be empty and cargo build
+# would fail.
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      recursive: true
+
+steps:
+  checks:
+    image: rust:latest
+    commands:
+      - apt-get update
+      # libsdl2-dev: simulator (host SDL2 window).
+      # gcc-arm-none-eabi: arm-none-eabi-* utilities (for size reporting).
+      # libclang-dev: nrf-mpsl-sys / nrf-sdc-sys use bindgen, which links libclang.
+      - apt-get install -y libsdl2-dev gcc-arm-none-eabi libclang-dev
+      # `.rustfmt.toml` opts into nightly-only features (imports_granularity,
+      # group_imports, wrap_comments, …), so the fmt check needs the nightly
+      # toolchain.  The build steps still use stable.
+      - rustup toolchain install nightly --profile minimal --component rustfmt
+      - rustup target add thumbv7em-none-eabihf
+      # Format check on the main package only — vendored crates under
+      # vendor/* are third-party copies we don't own.
+      - cargo +nightly fmt -p hello-graphics --check
+      # Build the host simulator (SDL2-driven) and the nRF52840 firmware
+      # in the same `embassy` configuration the egg actually flashes.
+      - cargo build --bin simulator --features simulator
+      - cargo build --bin embassy --no-default-features --features embassy --target thumbv7em-none-eabihf
+      # Clippy is intentionally not run yet — the existing codebase has
+      # ~25 correctness-deny lints and ~80 warnings that need a separate
+      # cleanup pass before we can wire it in.

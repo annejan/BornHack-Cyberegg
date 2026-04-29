@@ -23,7 +23,7 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::nav::Row;
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_WHITE};
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor};
 
 // ── Modal kind
 // ────────────────────────────────────────────────────────────────
@@ -76,58 +76,225 @@ impl ModalKind {
         }
     }
 
-    fn items(self) -> &'static [&'static str] {
+    fn items(self) -> &'static [Item] {
         match self {
-            Self::Stats => &["View stats", "Rolled stats", "Cancel"],
-            Self::Hibernate => &["Hibernate", "Wake up", "Cancel"],
-            Self::Feed => &["Feed now", "Cancel"],
-            Self::Heal => &["Give medicine", "Cancel"],
+            Self::Stats => &[Item::ViewStats, Item::RolledStats, Item::Cancel],
+            Self::Hibernate => &[Item::Hibernate, Item::WakeUp, Item::Cancel],
+            Self::Feed => &[Item::FeedNow, Item::Cancel],
+            Self::Heal => &[Item::GiveMedicine, Item::Cancel],
             Self::Play => &[
-                "Play now",
-                "Tic Tac Toe",
-                "Lights Out",
-                "Maze",
-                "Play music",
-                "Cancel",
+                Item::PlayNow,
+                Item::TicTacToe,
+                Item::LightsOut,
+                Item::BlackHole,
+                Item::Nim,
+                Item::Maze,
+                Item::PlayMusic,
+                Item::Cancel,
             ],
             Self::Music => &[
-                "Startup",
-                "Rickroll",
-                "Imp. March",
-                "Sandstorm",
-                "Pink Panther",
-                "Trololo",
-                "Cancel",
+                Item::Song(crate::SONG_STARTUP_INDEX),
+                Item::Song(crate::SONG_RICKROLL_INDEX),
+                Item::Song(crate::SONG_IMPERIAL_MARCH_INDEX),
+                Item::Song(crate::SONG_SANDSTORM_INDEX),
+                Item::Song(crate::SONG_PINK_PANTHER_INDEX),
+                Item::Song(crate::SONG_TROLOLO_INDEX),
+                Item::Cancel,
             ],
-            Self::Rest => &["Sleep", "Relax", "Cancel"],
+            Self::Rest => &[Item::Sleep, Item::Relax, Item::Cancel],
             Self::None => &[],
         }
     }
 }
 
-/// Check if a menu item action is currently available (not on cooldown).
-/// "Cancel", "View stats", and other non-action items are always available.
-fn is_item_available(label: &str) -> bool {
-    use super::lifecycle;
+// ── Items
+// ──────────────────────────────────────────────────────────────────────
 
-    let stats = match lifecycle::cycle() {
-        Some(s) => s,
-        None => return false,
-    };
+/// One row in the modal's item list.  Each variant carries its own
+/// label, availability check, cooldown source, and activation handler
+/// — no string matching anywhere else in the file.
+#[derive(Clone, Copy)]
+enum Item {
+    Cancel,
+    ViewStats,
+    RolledStats,
+    FeedNow,
+    GiveMedicine,
+    Sleep,
+    Relax,
+    PlayNow,
+    TicTacToe,
+    LightsOut,
+    BlackHole,
+    Nim,
+    Maze,
+    PlayMusic,
+    /// Buzzer song index passed to [`crate::fw::buzzer::play`].
+    Song(u8),
+    Hibernate,
+    WakeUp,
+}
 
-    match label {
-        "Feed now" => stats.can_feed,
-        "Give medicine" => stats.can_heal,
-        "Sleep" => stats.can_sleep,
-        "Relax" => stats.can_relax,
-        "Play now" => stats.can_play,
-        "Play music" => true,
-        "Tic Tac Toe" | "Lights Out" | "Maze" => stats.can_play_minigame,
-        "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" | "Trololo" => true,
-        "Hibernate" => !stats.hibernating,
-        "Wake up" => stats.hibernating,
-        _ => true, // Cancel, View stats, etc.
+impl Item {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Cancel => "Cancel",
+            Self::ViewStats => "View stats",
+            Self::RolledStats => "Rolled stats",
+            Self::FeedNow => "Feed now",
+            Self::GiveMedicine => "Give medicine",
+            Self::Sleep => "Sleep",
+            Self::Relax => "Relax",
+            Self::PlayNow => "Play now",
+            Self::TicTacToe => "Tic Tac Toe",
+            Self::LightsOut => "Lights Out",
+            Self::BlackHole => "Black Hole",
+            Self::Nim => "Nim",
+            Self::Maze => "Maze",
+            Self::PlayMusic => "Play music",
+            Self::Song(crate::SONG_STARTUP_INDEX) => "Startup",
+            Self::Song(crate::SONG_RICKROLL_INDEX) => "Rickroll",
+            Self::Song(crate::SONG_IMPERIAL_MARCH_INDEX) => "Imp. March",
+            Self::Song(crate::SONG_SANDSTORM_INDEX) => "Sandstorm",
+            Self::Song(crate::SONG_PINK_PANTHER_INDEX) => "Pink Panther",
+            Self::Song(crate::SONG_TROLOLO_INDEX) => "Trololo",
+            Self::Song(_) => "?",
+            Self::Hibernate => "Hibernate",
+            Self::WakeUp => "Wake up",
+        }
     }
+
+    /// Is the action currently available?  Cooldown-gated items
+    /// return false until the cooldown decays to 0.
+    fn available(self, stats: &super::engine::PetStats) -> bool {
+        match self {
+            Self::Cancel
+            | Self::ViewStats
+            | Self::RolledStats
+            | Self::PlayMusic
+            | Self::Song(_) => true,
+            Self::FeedNow => stats.can_feed,
+            Self::GiveMedicine => stats.can_heal,
+            Self::Sleep => stats.can_sleep,
+            Self::Relax => stats.can_relax,
+            Self::PlayNow => stats.can_play,
+            Self::TicTacToe => stats.can_play_tictactoe,
+            Self::LightsOut => stats.can_play_lightsout,
+            Self::BlackHole => stats.can_play_blackhole,
+            Self::Nim => stats.can_play_nim,
+            Self::Maze => stats.can_play_maze,
+            Self::Hibernate => !stats.hibernating,
+            Self::WakeUp => stats.hibernating,
+        }
+    }
+
+    /// Time-until-ready in 10-second ticks for a disabled item.
+    /// During the in-progress action this is `action_ticks_remaining`;
+    /// after the action ends, the post-action cooldown takes over and
+    /// is reported instead.  0 = ready / not gated by a cooldown.
+    fn cooldown_ticks(self, stats: &super::engine::PetStats) -> u16 {
+        use super::engine::Action;
+        let action_remaining = |a: Action| -> u16 {
+            if stats.active_action == Some(a) {
+                stats.action_ticks_remaining as u16
+            } else {
+                0
+            }
+        };
+        match self {
+            Self::FeedNow => action_remaining(Action::Feed).max(stats.cooldown_feed),
+            Self::GiveMedicine => action_remaining(Action::Heal).max(stats.cooldown_heal),
+            Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
+            Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
+            Self::TicTacToe => stats.cooldown_tictactoe,
+            Self::LightsOut => stats.cooldown_lightsout,
+            Self::BlackHole => stats.cooldown_blackhole,
+            Self::Nim => stats.cooldown_nim,
+            Self::Maze => stats.cooldown_maze,
+            _ => 0,
+        }
+    }
+
+    fn activate(self) {
+        use super::lifecycle;
+        match self {
+            Self::Cancel => close(),
+            Self::ViewStats => STATS_VIEW.store(true, Ordering::Relaxed),
+            Self::RolledStats => {
+                super::traits_view::open();
+                close();
+            }
+            Self::FeedNow => {
+                lifecycle::feed();
+                super::show_toast(super::Toast::Feed);
+                close();
+            }
+            Self::GiveMedicine => {
+                lifecycle::heal();
+                super::show_toast(super::Toast::Heal);
+                close();
+            }
+            Self::Sleep => {
+                lifecycle::sleep();
+                super::show_toast(super::Toast::Sleep);
+                close();
+            }
+            Self::Relax => {
+                lifecycle::relax();
+                super::show_toast(super::Toast::Relax);
+                close();
+            }
+            Self::PlayNow => {
+                lifecycle::play();
+                super::show_toast(super::Toast::Play);
+                close();
+            }
+            Self::TicTacToe => {
+                super::tictactoe::open();
+                close();
+            }
+            Self::LightsOut => {
+                super::lightsout::open();
+                close();
+            }
+            Self::BlackHole => {
+                super::blackhole::open();
+                close();
+            }
+            Self::Nim => {
+                super::nim::open();
+                close();
+            }
+            Self::Maze => {
+                super::maze::open();
+                close();
+            }
+            Self::PlayMusic => open(ModalKind::Music),
+            Self::Song(idx) => play_song(idx as usize),
+            Self::Hibernate => {
+                lifecycle::hibernate();
+                super::show_toast(super::Toast::Hibernate);
+                close();
+            }
+            Self::WakeUp => {
+                lifecycle::wake_from_hibernation();
+                super::show_toast(super::Toast::Wake);
+                close();
+            }
+        }
+    }
+}
+
+/// Format a cooldown count (ticks of 10 s each) as a " (Ns)" suffix
+/// for a disabled menu row.  Returns `None` when the cooldown is 0.
+fn cooldown_string(ticks: u16) -> Option<heapless::String<10>> {
+    if ticks == 0 {
+        return None;
+    }
+    let secs = ticks.saturating_mul(10);
+    let mut s = heapless::String::new();
+    let _ = core::fmt::Write::write_fmt(&mut s, format_args!(" ({}s)", secs));
+    Some(s)
 }
 
 /// Map an icon (row, col) to the modal it should open.
@@ -203,100 +370,23 @@ pub fn activate() {
     let kind = ModalKind::from_u8(MODAL_KIND.load(Ordering::Relaxed));
     let pos = MODAL_POS.load(Ordering::Relaxed) as usize;
     let items = kind.items();
-    let Some(&label) = items.get(pos) else {
+    let Some(&item) = items.get(pos) else {
         return;
     };
 
-    if label == "Cancel" {
-        close();
-        return;
+    // Cancel is always allowed.  Everything else gates on the item's
+    // own availability check.
+    if !matches!(item, Item::Cancel) {
+        let stats = match super::lifecycle::cycle() {
+            Some(s) => s,
+            None => return,
+        };
+        if !item.available(&stats) {
+            return;
+        }
     }
 
-    // Block actions that are on cooldown.
-    if !is_item_available(label) {
-        return;
-    }
-
-    use super::lifecycle;
-
-    match label {
-        "View stats" => {
-            STATS_VIEW.store(true, Ordering::Relaxed);
-        }
-        "Rolled stats" => {
-            super::traits_view::open();
-            close();
-        }
-        "Feed now" => {
-            lifecycle::feed();
-            super::show_toast(super::Toast::Feed);
-            close();
-        }
-        "Give medicine" => {
-            lifecycle::heal();
-            super::show_toast(super::Toast::Heal);
-            close();
-        }
-        "Sleep" => {
-            lifecycle::sleep();
-            super::show_toast(super::Toast::Sleep);
-            close();
-        }
-        "Relax" => {
-            lifecycle::relax();
-            super::show_toast(super::Toast::Relax);
-            close();
-        }
-        "Play now" => {
-            lifecycle::play();
-            super::show_toast(super::Toast::Play);
-            close();
-        }
-        "Tic Tac Toe" => {
-            super::tictactoe::open();
-            close();
-        }
-        "Lights Out" => {
-            super::lightsout::open();
-            close();
-        }
-        "Maze" => {
-            super::maze::open();
-            close(); 
-        }
-        "Play music" => {
-            open(ModalKind::Music);
-        }
-        "Startup" => {
-            play_song(0);
-        }
-        "Rickroll" => {
-            play_song(1);
-        }
-        "Imp. March" => {
-            play_song(2);
-        }
-        "Sandstorm" => {
-            play_song(3);
-        }
-        "Pink Panther" => {
-            play_song(4);
-        }
-        "Trololo" => {
-            play_song(5);
-        }
-        "Hibernate" => {
-            lifecycle::hibernate();
-            super::show_toast(super::Toast::Hibernate);
-            close();
-        }
-        "Wake up" => {
-            lifecycle::wake_from_hibernation();
-            super::show_toast(super::Toast::Wake);
-            close();
-        }
-        _ => {}
-    }
+    item.activate();
 }
 
 fn play_song(_index: usize) {
@@ -358,20 +448,38 @@ where
     let list_y = inner_y + TITLE_H;
     let list_bottom = MARGIN + MODAL_H as i32 - BORDER as i32;
 
-    for (i, label) in items.iter().enumerate() {
+    let stats = super::lifecycle::cycle();
+
+    for (i, item) in items.iter().enumerate() {
         let row_top = list_y + i as i32 * ITEM_H;
         let row_mid = row_top + ITEM_H / 2;
         if row_top + ITEM_H > list_bottom {
             break;
         }
 
-        let available = is_item_available(label);
+        // Cancel is always available; other items defer to the engine
+        // snapshot.  When the snapshot is missing (very early boot)
+        // treat everything-but-Cancel as locked out.
+        let available =
+            matches!(item, Item::Cancel) || stats.as_ref().is_some_and(|s| item.available(s));
 
-        // Build display text: append " (wait)" for cooldown items.
+        // Build display text: append " (Ns)" with the remaining
+        // cooldown seconds when the item has a known cooldown source,
+        // " (wait)" for anything else that's just disabled.
         let mut display_label: heapless::String<24> = heapless::String::new();
-        let _ = display_label.push_str(label);
+        let _ = display_label.push_str(item.label());
         if !available {
-            let _ = display_label.push_str(" (wait)");
+            let suffix = stats
+                .as_ref()
+                .and_then(|s| cooldown_string(item.cooldown_ticks(s)));
+            match suffix {
+                Some(s) => {
+                    let _ = display_label.push_str(s.as_str());
+                }
+                None => {
+                    let _ = display_label.push_str(" (wait)");
+                }
+            }
         }
 
         if i == pos && available {
@@ -437,12 +545,10 @@ where
 // Disabled-state dimming
 // ---------------------------------------------------------------------------
 
-/// Overdraw a rectangle with a 1-in-2 white checkerboard, halftoning
-/// any black pixels underneath into a perceived "grey".  Used to mark
-/// menu rows whose action is currently on cooldown or otherwise
-/// unavailable — solid black fills become 50 % black, black text on
-/// white becomes 50 % black on white, both reading visibly dimmer
-/// than their available siblings.
+/// Overdraw a rectangle with a 1-in-3 black diagonal stripe pattern,
+/// darkening the white background of disabled menu rows so they read
+/// as "unavailable" on a low-contrast EPD.  Black text on top stays
+/// black; the surrounding background drops to ~33 % black.
 fn dim_rect<D>(display: &mut D, rect: Rectangle) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -453,8 +559,8 @@ where
     let y1 = y0 + rect.size.height as i32;
     let pixels = (y0..y1).flat_map(move |y| {
         (x0..x1).filter_map(move |x| {
-            if (x + y) & 1 == 0 {
-                Some(Pixel(Point::new(x, y), WHITE))
+            if (x + y).rem_euclid(3) == 0 {
+                Some(Pixel(Point::new(x, y), BLACK))
             } else {
                 None
             }

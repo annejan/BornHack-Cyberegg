@@ -24,25 +24,22 @@
 mod alarm;
 mod clock;
 
-use embedded_graphics::prelude::*;
-
-use crate::menu::ButtonId;
-use crate::{TriColor, draw_frame};
-
 // ── Public re-exports — keep external paths stable ──────────────────────────
 //
 // `crate::watch::*` already exposes these; menu.rs and embassy.rs reference
 // them by their unqualified names.  The submodules are kept private so the
 // only entry points are the ones below.
-
 pub use alarm::{
     alarm_day_enabled, alarm_days_label, alarm_dec_hour, alarm_dec_melody, alarm_dec_minute,
     alarm_enabled_label, alarm_hour, alarm_inc_hour, alarm_inc_melody, alarm_inc_minute,
     alarm_minute, alarm_toggle_day, alarm_toggle_enabled, alarm_tone_label,
 };
-
 #[cfg(feature = "embassy-base")]
 pub use alarm::{alarm_ring_timeout_task, check_and_fire_alarm, dismiss_alarm_if_ringing};
+use embedded_graphics::prelude::*;
+
+use crate::menu::ButtonId;
+use crate::{TriColor, draw_frame};
 
 // ── Settings-dirty signalling ───────────────────────────────────────────────
 //

@@ -14,6 +14,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
+use crate::ui;
 use crate::{BLACK, TriColor, WHITE};
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -55,6 +56,18 @@ static RESULT: AtomicU8 = AtomicU8::new(0);
 /// Whose turn: true = player, false = AI.
 static PLAYER_TURN: AtomicBool = AtomicBool::new(true);
 
+/// Difficulty: 0 = Normal (mistakes possible), 1 = Impossible (perfect minimax).
+const DIFFICULTY_IMPOSSIBLE: u8 = 1;
+static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
+/// Difficulty-picker overlay open at the start of each game.
+static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+/// Difficulty-picker selection (0 = Normal, 1 = Impossible).
+static MENU_POS: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
+/// Probability (out of 100) that the Normal AI ignores minimax and
+/// plays a random legal move instead.  35 % gives the player a real
+/// shot at winning without making the AI feel completely braindead.
+const NORMAL_MISTAKE_PCT: u32 = 35;
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
@@ -69,6 +82,9 @@ pub fn open() {
     CURSOR.store(4, Ordering::Relaxed);
     RESULT.store(0, Ordering::Relaxed);
     PLAYER_TURN.store(true, Ordering::Relaxed);
+    // Difficulty picker first; play starts after Fire confirms.
+    MENU_POS.store(DIFFICULTY_IMPOSSIBLE, Ordering::Relaxed);
+    MENU_OPEN.store(true, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
@@ -79,6 +95,13 @@ pub fn close() {
 // ── Input handling ───────────────────────────────────────────────────────────
 
 pub fn cursor_up() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        let p = MENU_POS.load(Ordering::Relaxed);
+        if p > 0 {
+            MENU_POS.store(p - 1, Ordering::Relaxed);
+        }
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c >= 3 {
         CURSOR.store(c - 3, Ordering::Relaxed);
@@ -86,6 +109,13 @@ pub fn cursor_up() {
 }
 
 pub fn cursor_down() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        let p = MENU_POS.load(Ordering::Relaxed);
+        if p < 1 {
+            MENU_POS.store(p + 1, Ordering::Relaxed);
+        }
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c <= 5 {
         CURSOR.store(c + 3, Ordering::Relaxed);
@@ -93,6 +123,9 @@ pub fn cursor_down() {
 }
 
 pub fn cursor_left() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c % 3 > 0 {
         CURSOR.store(c - 1, Ordering::Relaxed);
@@ -100,6 +133,9 @@ pub fn cursor_left() {
 }
 
 pub fn cursor_right() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c % 3 < 2 {
         CURSOR.store(c + 1, Ordering::Relaxed);
@@ -108,12 +144,19 @@ pub fn cursor_right() {
 
 /// Player places their mark. Returns true if the game ended (win/draw).
 pub fn place() -> bool {
+    // Difficulty picker open: confirm selection and start the game.
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        DIFFICULTY.store(MENU_POS.load(Ordering::Relaxed), Ordering::Relaxed);
+        MENU_OPEN.store(false, Ordering::Relaxed);
+        return false;
+    }
+
     // If game is over, any Fire press closes.
     if RESULT.load(Ordering::Relaxed) != 0 {
         // Award inspiration on win or draw.
         let r = RESULT.load(Ordering::Relaxed);
         if r == 1 || r == 3 {
-            super::lifecycle::award_inspiration();
+            super::lifecycle::award_inspiration(super::engine::MiniGame::TicTacToe);
             super::show_toast(super::Toast::Inspired);
         }
         close();
@@ -190,7 +233,44 @@ fn check_board() -> Option<u8> {
 
 // ── AI (minimax) ─────────────────────────────────────────────────────────────
 
+/// Pseudo-random byte derived from the current uptime — good enough for
+/// the Normal-mode coin flip; no persistent state needed.
+fn entropy_byte() -> u8 {
+    #[cfg(feature = "embassy-base")]
+    {
+        embassy_time::Instant::now().as_ticks() as u8
+    }
+    #[cfg(not(feature = "embassy-base"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u8)
+            .unwrap_or(0xCB)
+    }
+}
+
 fn ai_move(board: &[u8; 9]) -> Option<usize> {
+    let perfect = DIFFICULTY.load(Ordering::Relaxed) == DIFFICULTY_IMPOSSIBLE;
+
+    // Normal mode: roll a die.  On a "mistake" outcome, pick a random
+    // legal cell instead of the minimax best.  Threats the player has
+    // built up may go unblocked — that's the player's chance to win.
+    if !perfect && (entropy_byte() as u32 * 100 / 256) < NORMAL_MISTAKE_PCT {
+        let empties = board.iter().filter(|&&c| c == EMPTY).count();
+        if empties == 0 {
+            return None;
+        }
+        let pick = (entropy_byte() as usize) % empties;
+        return board
+            .iter()
+            .enumerate()
+            .filter(|&(_, &c)| c == EMPTY)
+            .nth(pick)
+            .map(|(i, _)| i);
+    }
+
+    // Otherwise: full minimax — perfect play.
     let mut best_score = i8::MIN;
     let mut best_pos = None;
     for i in 0..9 {
@@ -307,14 +387,11 @@ where
         let x = BOARD_X + col * CELL;
         let y = BOARD_Y + row * CELL;
 
-        // Cursor highlight (red border).
+        // Cursor highlight: dithered B/W ring tracing the same 3 px
+        // box the red stroke previously drew.  Pure B&W so it survives
+        // the fast LUT refresh.
         if i == cursor && result == 0 {
-            Rectangle::new(
-                Point::new(x + 2, y + 2),
-                Size::new((CELL - 4) as u32, (CELL - 4) as u32),
-            )
-            .into_styled(PrimitiveStyle::with_stroke(crate::RED, 3))
-            .draw(display)?;
+            draw_cursor_ring(display, x + 2, y + 2, CELL - 4)?;
         }
 
         match board[i] {
@@ -332,21 +409,30 @@ where
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let msg = match result {
         1 => "You win! +inspired",
-        2 => "AI wins!",
+        2 => "EI wins!",
         3 => "Draw! +inspired",
         _ => "Your turn (X)",
     };
     Text::with_text_style(msg, Point::new(76, 134), font, centered).draw(display)?;
 
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        ui::draw_picker_menu(
+            display,
+            "Difficulty",
+            &["Normal", "Impossible"],
+            MENU_POS.load(Ordering::Relaxed) as usize,
+        )?;
+    }
+
     Ok(())
 }
 
-/// Draw an X mark (two diagonal lines, red).
+/// Draw an X mark (two diagonal black lines).
 fn draw_x<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let style = PrimitiveStyle::with_stroke(crate::RED, 3);
+    let style = PrimitiveStyle::with_stroke(BLACK, 3);
     Line::new(Point::new(x, y), Point::new(x + size, y + size))
         .into_styled(style)
         .draw(display)?;
@@ -356,7 +442,7 @@ where
     Ok(())
 }
 
-/// Draw an O mark (rectangle outline, black).
+/// Draw an O mark (black rectangle outline).
 fn draw_o<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -365,4 +451,27 @@ where
         .into_styled(PrimitiveStyle::with_stroke(BLACK, 3))
         .draw(display)?;
     Ok(())
+}
+
+/// Dithered (50 % checkerboard) B/W ring around a cell — same 3 px
+/// border thickness as the previous red stroke, but pure black/white
+/// so the fast LUT refresh keeps it visible during play.
+fn draw_cursor_ring<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    const THICK: i32 = 3;
+    let pixels = (0..size).flat_map(move |dy| {
+        (0..size).filter_map(move |dx| {
+            let on_border = dx < THICK || dy < THICK || dx >= size - THICK || dy >= size - THICK;
+            if !on_border {
+                return None;
+            }
+            let px = x + dx;
+            let py = y + dy;
+            let color = if (px + py) & 1 == 0 { BLACK } else { WHITE };
+            Some(Pixel(Point::new(px, py), color))
+        })
+    });
+    display.draw_iter(pixels)
 }

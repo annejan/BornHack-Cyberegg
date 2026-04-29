@@ -100,6 +100,36 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
+    // ── Black Hole mini-game ──────────────────────────────────────────
+    if super::blackhole::is_active() {
+        match btn {
+            ButtonId::Cancel => super::blackhole::close(),
+            ButtonId::Up => super::blackhole::cursor_up(),
+            ButtonId::Down => super::blackhole::cursor_down(),
+            ButtonId::Left => super::blackhole::cursor_left(),
+            ButtonId::Right => super::blackhole::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => {
+                super::blackhole::activate();
+            }
+        }
+        return true;
+    }
+
+    // ── Nim mini-game ──────────────────────────────────────────────────
+    if super::nim::is_active() {
+        match btn {
+            ButtonId::Cancel => super::nim::close(),
+            ButtonId::Up => super::nim::cursor_up(),
+            ButtonId::Down => super::nim::cursor_down(),
+            ButtonId::Left => super::nim::cursor_left(),
+            ButtonId::Right => super::nim::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => {
+                super::nim::activate();
+            }
+        }
+        return true;
+    }
+
     // ── Tic-tac-toe mini-game ──────────────────────────────────────────
     if super::tictactoe::is_active() {
         match btn {

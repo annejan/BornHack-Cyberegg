@@ -282,8 +282,16 @@ impl DirReader {
     /// - `0x0F` attribute: long filename (LFN) entry
     /// - Volume label and subdirectory entries
     ///
-    /// Returns `Ok(None)` when a `0x00` first-byte is hit (end of directory)
-    /// or all entries have been scanned.
+    /// Returns `Ok(None)` when all entries in the root directory have
+    /// been scanned.  Skips empty (`0x00`), deleted (`0xE5`), LFN, and
+    /// volume / directory entries.
+    ///
+    /// The FAT spec defines `0x00` as the end-of-directory marker, but
+    /// some hosts leave stale `0x00` slots between valid entries when
+    /// files are added/removed via USB mass storage.  Stopping at the
+    /// first `0x00` would hide every valid entry past such a hole, so
+    /// we walk the full pre-allocated range instead and just skip the
+    /// empty slots.
     pub async fn next(&mut self) -> Result<Option<([u8; 11], FileRef)>, FatError> {
         let mut raw = [0u8; 32];
         while self.index < self.total {
@@ -295,8 +303,8 @@ impl DirReader {
                 .map_err(|_| FatError::FlashError)?;
 
             if raw[0] == 0x00 {
-                return Ok(None);
-            } // end marker
+                continue;
+            } // empty slot — keep scanning, more files may follow
             if raw[0] == 0xE5 {
                 continue;
             } // deleted
