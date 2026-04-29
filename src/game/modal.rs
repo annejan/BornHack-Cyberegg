@@ -87,6 +87,7 @@ impl ModalKind {
                 Item::TicTacToe,
                 Item::LightsOut,
                 Item::BlackHole,
+                Item::Nim,
                 Item::PlayMusic,
                 Item::Cancel,
             ],
@@ -124,6 +125,7 @@ enum Item {
     TicTacToe,
     LightsOut,
     BlackHole,
+    Nim,
     PlayMusic,
     /// Buzzer song index passed to [`crate::fw::buzzer::play`].
     Song(u8),
@@ -145,6 +147,7 @@ impl Item {
             Self::TicTacToe => "Tic Tac Toe",
             Self::LightsOut => "Lights Out",
             Self::BlackHole => "Black Hole",
+            Self::Nim => "Nim",
             Self::PlayMusic => "Play music",
             Self::Song(crate::SONG_STARTUP_INDEX) => "Startup",
             Self::Song(crate::SONG_RICKROLL_INDEX) => "Rickroll",
@@ -175,6 +178,7 @@ impl Item {
             Self::TicTacToe => stats.can_play_tictactoe,
             Self::LightsOut => stats.can_play_lightsout,
             Self::BlackHole => stats.can_play_blackhole,
+            Self::Nim => stats.can_play_nim,
             Self::Hibernate => !stats.hibernating,
             Self::WakeUp => stats.hibernating,
         }
@@ -201,6 +205,7 @@ impl Item {
             Self::TicTacToe => stats.cooldown_tictactoe,
             Self::LightsOut => stats.cooldown_lightsout,
             Self::BlackHole => stats.cooldown_blackhole,
+            Self::Nim => stats.cooldown_nim,
             _ => 0,
         }
     }
@@ -249,6 +254,10 @@ impl Item {
             }
             Self::BlackHole => {
                 super::blackhole::open();
+                close();
+            }
+            Self::Nim => {
+                super::nim::open();
                 close();
             }
             Self::PlayMusic => open(ModalKind::Music),

@@ -21,6 +21,7 @@ pub mod lifecycle;
 pub mod lightsout;
 pub mod modal;
 pub mod nav;
+pub mod nim;
 pub mod pet_select;
 pub mod realm_view;
 pub mod sprite_loader;
@@ -188,6 +189,9 @@ where
     }
     if blackhole::is_active() {
         return blackhole::draw(display);
+    }
+    if nim::is_active() {
+        return nim::draw(display);
     }
 
     // Battery icon — top-right.

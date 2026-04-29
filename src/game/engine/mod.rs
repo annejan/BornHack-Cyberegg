@@ -86,6 +86,7 @@ pub enum MiniGame {
     TicTacToe,
     LightsOut,
     BlackHole,
+    Nim,
 }
 
 /// The complete game state.  Serialisable to ekv for save/restore.
@@ -129,6 +130,7 @@ pub struct GameState {
     pub cooldown_tictactoe: u16,
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
+    pub cooldown_nim: u16,
 
     // Interval counters (track ticks since last interval fire).
     drained_interval_counter: u32,
@@ -214,6 +216,7 @@ impl GameState {
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
+            cooldown_nim: 0,
 
             drained_interval_counter: 0,
             miserable_interval_counter: 0,
@@ -641,6 +644,7 @@ impl GameState {
         self.cooldown_tictactoe = self.cooldown_tictactoe.saturating_sub(d);
         self.cooldown_lightsout = self.cooldown_lightsout.saturating_sub(d);
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
+        self.cooldown_nim = self.cooldown_nim.saturating_sub(d);
     }
 
     /// Apply stat decay while awake for `delta` ticks.
@@ -916,6 +920,7 @@ impl GameState {
             MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN,
             MiniGame::LightsOut => self.cooldown_lightsout = MINIGAME_COOLDOWN,
             MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN,
+            MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN,
         }
     }
 
@@ -1089,6 +1094,7 @@ pub struct PetStats {
     pub can_play_tictactoe: bool,
     pub can_play_lightsout: bool,
     pub can_play_blackhole: bool,
+    pub can_play_nim: bool,
 
     /// Remaining action cooldowns in ticks (1 tick = 10 s).  0 = ready.
     /// Mirrored from the matching `GameState` fields so the modal can
@@ -1100,6 +1106,7 @@ pub struct PetStats {
     pub cooldown_tictactoe: u16,
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
+    pub cooldown_nim: u16,
 
     /// Whether the pet is hibernating (all progression frozen).
     pub hibernating: bool,
@@ -1153,6 +1160,7 @@ impl GameState {
             can_play_tictactoe: awake_active && action_idle && self.cooldown_tictactoe == 0,
             can_play_lightsout: awake_active && action_idle && self.cooldown_lightsout == 0,
             can_play_blackhole: awake_active && action_idle && self.cooldown_blackhole == 0,
+            can_play_nim: awake_active && action_idle && self.cooldown_nim == 0,
 
             cooldown_feed: self.cooldown_feed,
             cooldown_heal: self.cooldown_heal,
@@ -1161,6 +1169,7 @@ impl GameState {
             cooldown_tictactoe: self.cooldown_tictactoe,
             cooldown_lightsout: self.cooldown_lightsout,
             cooldown_blackhole: self.cooldown_blackhole,
+            cooldown_nim: self.cooldown_nim,
 
             hibernating: self.hibernating,
             hibernate_hours: self.hibernate_hours(),
@@ -1377,6 +1386,7 @@ impl GameState {
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
+            cooldown_nim: 0,
             drained_interval_counter,
             miserable_interval_counter,
             tired_passive_counter,

@@ -595,67 +595,14 @@ where
     }
 
     if MENU_OPEN.load(Ordering::Relaxed) {
-        draw_difficulty_menu(display)?;
+        ui::draw_picker_menu(
+            display,
+            "Difficulty",
+            &["Easy", "Hard"],
+            MENU_POS.load(Ordering::Relaxed) as usize,
+        )?;
     }
 
-    Ok(())
-}
-
-/// Difficulty picker overlay — popover with two items, drawn over the
-/// playing field at the start of every game.  Reuses the popover
-/// frame, title bar, and inverted-row item style from [`crate::ui`]
-/// and [`super::modal`] for visual consistency.
-fn draw_difficulty_menu<D>(display: &mut D) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    const MARGIN: i32 = 16;
-    const W: u32 = 120; // 152 - 2 × 16
-    const H: u32 = 80;
-    const BORDER: u32 = 2;
-    const ITEM_H: i32 = 18;
-
-    ui::draw_popover_frame(display, Point::new(MARGIN, 36), Size::new(W, H), BORDER)?;
-    let inner_x = MARGIN + BORDER as i32;
-    let inner_y = 36 + BORDER as i32;
-    let inner_w = W - BORDER * 2;
-    ui::draw_title_bar(display, "Difficulty", Point::new(inner_x, inner_y), inner_w)?;
-
-    let items = ["Easy", "Hard"];
-    let pos = MENU_POS.load(Ordering::Relaxed) as usize;
-    let list_y = inner_y + ui::TITLE_BAR_H as i32 + 4;
-    let left_style = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Left)
-        .build();
-
-    for (i, label) in items.iter().enumerate() {
-        let row_top = list_y + i as i32 * ITEM_H;
-        let row_mid = row_top + ITEM_H / 2;
-        if i == pos {
-            Rectangle::new(
-                Point::new(inner_x, row_top),
-                Size::new(inner_w, ITEM_H as u32),
-            )
-            .into_styled(PrimitiveStyle::with_fill(BLACK))
-            .draw(display)?;
-            Text::with_text_style(
-                label,
-                Point::new(inner_x + 6, row_mid),
-                ui::TEXT_WHITE,
-                left_style,
-            )
-            .draw(display)?;
-        } else {
-            Text::with_text_style(
-                label,
-                Point::new(inner_x + 6, row_mid),
-                ui::TEXT_BLACK,
-                left_style,
-            )
-            .draw(display)?;
-        }
-    }
     Ok(())
 }
 

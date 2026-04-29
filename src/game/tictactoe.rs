@@ -14,6 +14,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
+use crate::ui;
 use crate::{BLACK, TriColor, WHITE};
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -55,6 +56,18 @@ static RESULT: AtomicU8 = AtomicU8::new(0);
 /// Whose turn: true = player, false = AI.
 static PLAYER_TURN: AtomicBool = AtomicBool::new(true);
 
+/// Difficulty: 0 = Normal (mistakes possible), 1 = Impossible (perfect minimax).
+const DIFFICULTY_IMPOSSIBLE: u8 = 1;
+static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
+/// Difficulty-picker overlay open at the start of each game.
+static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+/// Difficulty-picker selection (0 = Normal, 1 = Impossible).
+static MENU_POS: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
+/// Probability (out of 100) that the Normal AI ignores minimax and
+/// plays a random legal move instead.  35 % gives the player a real
+/// shot at winning without making the AI feel completely braindead.
+const NORMAL_MISTAKE_PCT: u32 = 35;
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
@@ -69,6 +82,9 @@ pub fn open() {
     CURSOR.store(4, Ordering::Relaxed);
     RESULT.store(0, Ordering::Relaxed);
     PLAYER_TURN.store(true, Ordering::Relaxed);
+    // Difficulty picker first; play starts after Fire confirms.
+    MENU_POS.store(DIFFICULTY_IMPOSSIBLE, Ordering::Relaxed);
+    MENU_OPEN.store(true, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
@@ -79,6 +95,13 @@ pub fn close() {
 // ── Input handling ───────────────────────────────────────────────────────────
 
 pub fn cursor_up() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        let p = MENU_POS.load(Ordering::Relaxed);
+        if p > 0 {
+            MENU_POS.store(p - 1, Ordering::Relaxed);
+        }
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c >= 3 {
         CURSOR.store(c - 3, Ordering::Relaxed);
@@ -86,6 +109,13 @@ pub fn cursor_up() {
 }
 
 pub fn cursor_down() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        let p = MENU_POS.load(Ordering::Relaxed);
+        if p < 1 {
+            MENU_POS.store(p + 1, Ordering::Relaxed);
+        }
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c <= 5 {
         CURSOR.store(c + 3, Ordering::Relaxed);
@@ -93,6 +123,9 @@ pub fn cursor_down() {
 }
 
 pub fn cursor_left() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c % 3 > 0 {
         CURSOR.store(c - 1, Ordering::Relaxed);
@@ -100,6 +133,9 @@ pub fn cursor_left() {
 }
 
 pub fn cursor_right() {
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
     let c = CURSOR.load(Ordering::Relaxed);
     if c % 3 < 2 {
         CURSOR.store(c + 1, Ordering::Relaxed);
@@ -108,6 +144,13 @@ pub fn cursor_right() {
 
 /// Player places their mark. Returns true if the game ended (win/draw).
 pub fn place() -> bool {
+    // Difficulty picker open: confirm selection and start the game.
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        DIFFICULTY.store(MENU_POS.load(Ordering::Relaxed), Ordering::Relaxed);
+        MENU_OPEN.store(false, Ordering::Relaxed);
+        return false;
+    }
+
     // If game is over, any Fire press closes.
     if RESULT.load(Ordering::Relaxed) != 0 {
         // Award inspiration on win or draw.
@@ -190,7 +233,44 @@ fn check_board() -> Option<u8> {
 
 // ── AI (minimax) ─────────────────────────────────────────────────────────────
 
+/// Pseudo-random byte derived from the current uptime — good enough for
+/// the Normal-mode coin flip; no persistent state needed.
+fn entropy_byte() -> u8 {
+    #[cfg(feature = "embassy-base")]
+    {
+        embassy_time::Instant::now().as_ticks() as u8
+    }
+    #[cfg(not(feature = "embassy-base"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u8)
+            .unwrap_or(0xCB)
+    }
+}
+
 fn ai_move(board: &[u8; 9]) -> Option<usize> {
+    let perfect = DIFFICULTY.load(Ordering::Relaxed) == DIFFICULTY_IMPOSSIBLE;
+
+    // Normal mode: roll a die.  On a "mistake" outcome, pick a random
+    // legal cell instead of the minimax best.  Threats the player has
+    // built up may go unblocked — that's the player's chance to win.
+    if !perfect && (entropy_byte() as u32 * 100 / 256) < NORMAL_MISTAKE_PCT {
+        let empties = board.iter().filter(|&&c| c == EMPTY).count();
+        if empties == 0 {
+            return None;
+        }
+        let pick = (entropy_byte() as usize) % empties;
+        return board
+            .iter()
+            .enumerate()
+            .filter(|&(_, &c)| c == EMPTY)
+            .nth(pick)
+            .map(|(i, _)| i);
+    }
+
+    // Otherwise: full minimax — perfect play.
     let mut best_score = i8::MIN;
     let mut best_pos = None;
     for i in 0..9 {
@@ -334,6 +414,15 @@ where
         _ => "Your turn (X)",
     };
     Text::with_text_style(msg, Point::new(76, 134), font, centered).draw(display)?;
+
+    if MENU_OPEN.load(Ordering::Relaxed) {
+        ui::draw_picker_menu(
+            display,
+            "Difficulty",
+            &["Normal", "Impossible"],
+            MENU_POS.load(Ordering::Relaxed) as usize,
+        )?;
+    }
 
     Ok(())
 }
