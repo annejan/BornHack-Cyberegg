@@ -477,6 +477,7 @@ pub const SCREEN_PM: u8 = ScreenId::Pm as u8;
 pub const SCREEN_CHANNEL: u8 = ScreenId::Channel as u8;
 pub const SCREEN_ADVERT: u8 = ScreenId::Advert as u8;
 pub const SCREEN_WATCH: u8 = ScreenId::Watch as u8;
+pub const SCREEN_CALENDAR: u8 = ScreenId::Calendar as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
@@ -533,6 +534,8 @@ where
         SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
         #[cfg(feature = "watch")]
         SCREEN_WATCH => watch::draw(display),
+        #[cfg(feature = "watch")]
+        SCREEN_CALENDAR => watch::calendar::draw(display),
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 

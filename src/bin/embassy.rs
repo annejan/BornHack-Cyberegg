@@ -27,7 +27,8 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH, board,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_CALENDAR, SCREEN_MAIN, SCREEN_WATCH,
+    board,
     draw_graphics, health_err, unix_now, with_health,
 };
 use ssd1675::UpdateMode;
@@ -585,7 +586,7 @@ async fn wait_display_event(
                 Either::First(Either3::First(_)) => return false,
                 Either::First(Either3::Second(_)) => return false,
                 Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
-                Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
+                Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH || active_screen == SCREEN_CALENDAR => return false,
                 Either::Second(Either4::Second(_)) if active_screen == SCREEN_PM => return false,
                 Either::Second(Either4::Third(_)) if active_screen == SCREEN_CHANNEL => {
                     return false;
@@ -608,7 +609,11 @@ async fn wait_display_event(
             Either::First(Either3::First(_)) => return false,
             Either::First(Either3::Second(_)) => return false,
             Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
-            Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
+            Either::First(Either3::Third(_))
+                if active_screen == SCREEN_WATCH || active_screen == SCREEN_CALENDAR =>
+            {
+                return false;
+            }
             _ => {}
         }
     }

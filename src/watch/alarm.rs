@@ -33,16 +33,19 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, Triangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
 use crate::menu::ButtonId;
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, RED, TriColor, WHITE};
 
 /// Maximum number of independent alarm slots.  Slot 0 is the user-editable
-/// "primary" alarm; slots 1..7 are reserved for things like calendar imports.
-pub const N_ALARMS: usize = 8;
+/// "primary" alarm; slots 1..N_ALARMS-1 hold imported calendar events and
+/// other automation.  At ~11 bytes of atomics per slot, 32 slots cost
+/// ~352 bytes of RAM — comfortable for an unfiltered Bornhack day's worth
+/// of events.
+pub const N_ALARMS: usize = 32;
 
 // ── Edit-mode state ─────────────────────────────────────────────────────────
 
@@ -590,39 +593,118 @@ pub async fn alarm_ring_timeout_task() {
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-/// Black box with white text in the header showing `ALM HH:MM` when an alarm
-/// is armed. Uses pure B&W so it survives the fast minute-tick refresh.
+/// Returns `true` if any slot has an enabled alarm.
+fn any_alarm_enabled() -> bool {
+    (0..N_ALARMS).any(alarm_enabled_n)
+}
+
+/// Find the soonest enabled alarm whose firing is still in the future *today*.
+/// Recurring alarms count if the day mask covers today; one-shot alarms count
+/// if their date matches today.  Returns `(hour, minute)` or `None`.
+fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
+    let mut earliest: Option<(u8, u8)> = None;
+    for slot in 0..N_ALARMS {
+        if !alarm_enabled_n(slot) {
+            continue;
+        }
+        let active_today = if alarm_is_one_shot_n(slot) {
+            alarm_year_n(slot) == c.year
+                && alarm_month_n(slot) == c.month
+                && alarm_day_n(slot) == c.day
+        } else {
+            alarm_day_enabled_n(slot, c.weekday)
+        };
+        if !active_today {
+            continue;
+        }
+        let h = alarm_hour_n(slot);
+        let m = alarm_minute_n(slot);
+        // Only future-today: strictly after the current minute.
+        if h < c.hour || (h == c.hour && m <= c.minute) {
+            continue;
+        }
+        let better = match earliest {
+            None => true,
+            Some((eh, em)) => h < eh || (h == eh && m < em),
+        };
+        if better {
+            earliest = Some((h, m));
+        }
+    }
+    earliest
+}
+
+/// Render a small red bell, centred at `(cx, cy)`.  Roughly 13×11 pixels:
+/// triangular body, wider rim along the bottom, and a tiny clapper dot
+/// hanging below.
+fn draw_bell<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let red = PrimitiveStyle::with_fill(RED);
+    // Body — flat-bottomed triangle.
+    Triangle::new(
+        Point::new(cx, cy - 5),
+        Point::new(cx - 5, cy + 4),
+        Point::new(cx + 5, cy + 4),
+    )
+    .into_styled(red)
+    .draw(display)?;
+    // Rim — wider rectangle along the body's bottom.
+    Rectangle::new(Point::new(cx - 6, cy + 4), Size::new(13, 2))
+        .into_styled(red)
+        .draw(display)?;
+    // Clapper.
+    Rectangle::new(Point::new(cx - 1, cy + 7), Size::new(2, 2))
+        .into_styled(red)
+        .draw(display)?;
+    Ok(())
+}
+
+/// Header indicator: a small red bell, optionally followed by the time of
+/// the next alarm scheduled for later today (`HH:MM` in black).
+///
+/// Visibility:
+///   * No alarms enabled anywhere → nothing rendered.
+///   * Alarm(s) enabled but none firing later today → bell only.
+///   * Alarm enabled with a future firing today → bell + that `HH:MM`.
+///
+/// The bell uses the red plane, which only refreshes on a full
+/// tri-color update, so toggling alarms while sitting on the watch face
+/// can leave the bell stale until the next full refresh.  The `HH:MM` is
+/// drawn in black and updates on every redraw.
 pub(super) fn draw_indicator<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    if !alarm_enabled() {
+    if !any_alarm_enabled() {
         return Ok(());
     }
-    let mut buf: heapless::String<12> = heapless::String::new();
-    let _ = core::fmt::write(
-        &mut buf,
-        format_args!("ALM {:02}:{:02}", alarm_hour(), alarm_minute()),
-    );
 
-    let box_x = 44i32;
-    let box_y = 1i32;
-    let box_w = 62u32;
-    let box_h = 14u32;
-    Rectangle::new(Point::new(box_x, box_y), Size::new(box_w, box_h))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
+    // Bell — fixed position in the header band.
+    let bell_cx = 56i32;
+    let bell_cy = 8i32;
+    draw_bell(display, bell_cx, bell_cy)?;
+
+    // Time — only if there's an upcoming firing today.
+    let Some(c) = clock::wall_clock() else {
+        return Ok(());
+    };
+    if let Some((h, m)) = next_alarm_today(&c) {
+        let mut buf: heapless::String<8> = heapless::String::new();
+        let _ = core::fmt::write(&mut buf, format_args!("{:02}:{:02}", h, m));
+        let left = TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Left)
+            .build();
+        Text::with_text_style(
+            &buf,
+            Point::new(bell_cx + 10, bell_cy),
+            MonoTextStyle::new(&FONT_6X10, BLACK),
+            left,
+        )
         .draw(display)?;
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    Text::with_text_style(
-        &buf,
-        Point::new(box_x + box_w as i32 / 2, box_y + box_h as i32 / 2),
-        MonoTextStyle::new(&FONT_6X10, WHITE),
-        centered,
-    )
-    .draw(display)?;
+    }
     Ok(())
 }
 

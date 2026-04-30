@@ -22,6 +22,7 @@
 //! highlight may look stale until the next full refresh.
 
 mod alarm;
+pub mod calendar;
 mod clock;
 mod ics;
 

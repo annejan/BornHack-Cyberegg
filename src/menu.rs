@@ -22,13 +22,14 @@ pub enum ScreenId {
     Channel = 3,
     Advert = 4,
     Watch = 5,
+    Calendar = 6,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -499,6 +500,16 @@ impl<const M: usize> DisplayState<M> {
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]
         if self.active_screen == crate::SCREEN_WATCH && crate::watch::dispatch(btn) {
+            return;
+        }
+
+        // Calendar screen consumes Up/Down (and Left/Right) for list scrolling.
+        // Cancel/Fire/Execute fall through to the normal handler so screen-nav
+        // and the BLE PIN dialog still work.
+        #[cfg(feature = "watch")]
+        if self.active_screen == crate::SCREEN_CALENDAR
+            && crate::watch::calendar::dispatch(btn)
+        {
             return;
         }
 
@@ -1769,6 +1780,12 @@ static WATCH_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
+#[cfg(feature = "watch")]
+static CALENDAR_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Calendar",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
 // ── DISPLAY_STATE
 // ─────────────────────────────────────────────────────────────
 
@@ -1812,8 +1829,20 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         ScreenState::new(&ADVERT_ITEMS),
         #[cfg(feature = "watch")]
         ScreenState::new(&WATCH_ITEMS),
+        #[cfg(feature = "watch")]
+        ScreenState::new(&CALENDAR_ITEMS),
     ],
-    [GAME_ENABLED, true, true, true, true, WATCH_ENABLED],
+    [
+        GAME_ENABLED,
+        true,
+        true,
+        true,
+        true,
+        #[cfg(feature = "watch")]
+        WATCH_ENABLED,
+        #[cfg(feature = "watch")]
+        WATCH_ENABLED,
+    ],
 )));
 
 // ── Scrolling menu renderer
