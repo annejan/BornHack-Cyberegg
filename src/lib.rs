@@ -1,3 +1,70 @@
+//! Firmware library for the BornHack CyberÆgg badge — an nRF52840-based
+//! e-paper / LoRa / BLE / NFC pet-and-mesh companion device.
+//!
+//! # Hardware target
+//!
+//! - **MCU** — Nordic nRF52840 (Cortex-M4F + radio + USB + NFC).
+//! - **Display** — SSD1675 152×152 tri-color e-paper over SPI3.
+//! - **LoRa radio** — Semtech SX1262 over SPI2, MeshCore protocol.
+//! - **BLE** — softdevice via `nrf-sdc` / `trouble-host`.
+//! - **NFC** — built-in NFCT controller; emulates an ISO 14443-A
+//!   Type 4 tag with authenticated station commands ([`signed_channel`]).
+//!
+//! # Bin targets (`src/bin/`)
+//!
+//! - **`embassy`** — main firmware. Built with the `embassy*` features.
+//! - **`simulator`** — desktop SDL2 UI simulator.  Built with `simulator`.
+//! - **`simulate_game`** — headless game-balance simulator that runs all
+//!   player profiles and prints a summary table matching the Python sim.
+//! - **`hwtest`** — standalone factory hardware test.  Skips this library
+//!   entirely (the `#![cfg]` gate below makes the lib content empty for
+//!   it) so it links without dragging in the full graphics/menu stack.
+//!
+//! # Feature gates
+//!
+//! Compose to keep the flash budget under control on the 960 KiB app
+//! partition:
+//!
+//! - `embassy-base` — async runtime, EPD driver, buttons, buzzer, kv,
+//!   watch face, signed-channel NFC.  Always on for any firmware build.
+//! - `embassy-watch` — `embassy-base` only (smallest fw configuration).
+//! - `embassy-game` — `embassy-base` + virtual pet game + USB-MSC.
+//! - `embassy-mesh` — `embassy-base` + LoRa mesh + BLE companion.
+//! - `embassy` — full build = base + game + mesh + USB-MSC.
+//! - `simulator` — host-side build with SDL2 rendering and `std`.
+//! - `signed-channel` — Ed25519 challenge/response NFC station auth.
+//!
+//! # Module map
+//!
+//! - [`fw`] — driver-layer code: EPD, buzzer, battery ADC, button matrix,
+//!   LEDs, NFC tag, LoRa radio, BLE companion, MeshCore plumbing, FAT12
+//!   reader, ekv-backed kv store, sponsors slideshow.  Embassy only.
+//! - [`game`] — virtual-pet lifecycle (hunger / inspiration / health /
+//!   tiredness), mini-games (maze, black-hole, NIM, lights-out,
+//!   tic-tac-toe, sprite engine), station bonuses, action-feedback
+//!   toasts.  Gated by `game`.
+//! - [`watch`] — Casio-style digital + analog clock face, alarms with
+//!   per-day mask and weekly repeats, multi-slot alarm state.  Gated by
+//!   `watch`.
+//! - [`menu`] — declarative `MenuItem` / `MenuItemKind` items, the icon-
+//!   grid `DisplayState`, and the scrolling 3-row menu renderer.  Always
+//!   built.
+//! - [`text_entry`] — full-screen quadrant-style on-screen keyboard for
+//!   text input (node names, channel replies, etc.).
+//! - [`signed_channel`] — Ed25519 challenge/response verification used by
+//!   the NFC station-command flow.  Gated by `signed-channel`.
+//! - [`ui`] — common drawing helpers (frame, layout constants).
+//!
+//! # Bootloader
+//!
+//! A custom USB-DFU bootloader (`nrf-aegg-bootloader`, in the
+//! `bootloader/` directory) replaces the factory Adafruit UF2 stub.  It
+//! lives at `0x00000000`–`0x0000FFFF` (64 KiB) and hands off to the app
+//! at `0x00010000`.  The main app's `memory-fw.x` accordingly sets
+//! `FLASH ORIGIN = 0x00010000` and `LENGTH = 960K`.  The bootloader is a
+//! standalone Cargo project, *not* in this workspace and *not* tracked
+//! in git — see the README for build steps.
+
 // The library only has meaningful content when building the main firmware
 // or simulator. Other binaries (e.g. `hwtest`) build against an empty
 // library so their builds don't drag in the full graphics/menu stack.
