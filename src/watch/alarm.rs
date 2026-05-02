@@ -33,7 +33,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, Triangle};
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
@@ -670,27 +670,31 @@ fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
     earliest
 }
 
-/// Render a small red bell, centred at `(cx, cy)`.  Roughly 13×11 pixels:
-/// triangular body, wider rim along the bottom, and a tiny clapper dot
-/// hanging below.
+/// Render a small red bell, centred at `(cx, cy)`.  Roughly 13×13 pixels:
+/// a circular dome on top blended into a slightly flared skirt, then a
+/// wider rim, and a clapper hanging below.  The dome+skirt avoids the
+/// pointy "Christmas tree" silhouette a triangle gives at this size.
 fn draw_bell<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
     let red = PrimitiveStyle::with_fill(RED);
-    // Body — flat-bottomed triangle.
-    Triangle::new(
-        Point::new(cx, cy - 5),
-        Point::new(cx - 5, cy + 4),
-        Point::new(cx + 5, cy + 4),
-    )
-    .into_styled(red)
-    .draw(display)?;
-    // Rim — wider rectangle along the body's bottom.
+    // Dome — 9 px circle, top-left at (cx-4, cy-5).  Gives a rounded
+    // top instead of a sharp triangular apex.
+    Circle::new(Point::new(cx - 4, cy - 5), 9)
+        .into_styled(red)
+        .draw(display)?;
+    // Skirt — straight-sided rectangle blended into the bottom of the
+    // dome, 2 px wider than the dome's max diameter to give the bell
+    // its characteristic flare.
+    Rectangle::new(Point::new(cx - 5, cy + 1), Size::new(11, 3))
+        .into_styled(red)
+        .draw(display)?;
+    // Rim — 13 px wide, sits flush below the skirt.
     Rectangle::new(Point::new(cx - 6, cy + 4), Size::new(13, 2))
         .into_styled(red)
         .draw(display)?;
-    // Clapper.
+    // Clapper — small dot hanging below the rim.
     Rectangle::new(Point::new(cx - 1, cy + 7), Size::new(2, 2))
         .into_styled(red)
         .draw(display)?;
