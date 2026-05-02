@@ -58,7 +58,7 @@ pub enum Toast {
     StationRest = 12,
     /// Station tap was rejected because the matching effect is still
     /// on cooldown.  The remaining seconds are read from
-    /// [`STATION_COOLDOWN_SECS`] and formatted at draw time.
+    /// `STATION_COOLDOWN_SECS` and formatted at draw time.
     StationCooldown = 13,
 }
 

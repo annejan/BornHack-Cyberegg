@@ -28,7 +28,7 @@ use crate::{BLACK, TriColor};
 // ── Modal kind
 // ────────────────────────────────────────────────────────────────
 
-/// Which in-game modal is currently open.  Stored as a `u8` in [`MODAL_KIND`].
+/// Which in-game modal is currently open.  Stored as a `u8` in `MODAL_KIND`.
 ///
 /// Layout:
 ///   Top row (info/meta):    Stats, Hibernate, (empty), (empty)
@@ -359,7 +359,7 @@ pub fn cursor_down() {
 /// Activate the currently selected item.
 ///
 /// "Cancel" closes the modal.  Action items dispatch to the game engine
-/// via [`lifecycle`].  "View stats" opens the stats bar display.
+/// via `lifecycle`.  "View stats" opens the stats bar display.
 pub fn activate() {
     // If stats view is showing, any activation closes it.
     if STATS_VIEW.load(Ordering::Relaxed) {
@@ -405,7 +405,7 @@ const BORDER: u32 = 2;
 const TITLE_H: i32 = 18;
 const ITEM_H: i32 = 16;
 
-/// Draw the modal overlay.  Call this after [`draw_screen_game`] so it renders
+/// Draw the modal overlay.  Call this after `draw_screen_game` so it renders
 /// on top.  Does nothing when no modal is open.
 pub fn draw_modal<D>(display: &mut D) -> Result<(), D::Error>
 where

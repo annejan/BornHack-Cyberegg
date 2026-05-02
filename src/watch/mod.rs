@@ -2,7 +2,7 @@
 //! on-device alarm clock.
 //!
 //! This module is now a thin coordinator: state and rendering live in two
-//! sibling submodules, [`alarm`] and [`clock`].  External callers keep using
+//! sibling submodules, `alarm` and `clock`.  External callers keep using
 //! the same `crate::watch::*` paths; the items they need are re-exported
 //! below.
 //!
@@ -13,7 +13,7 @@
 //! Alarm-edit mirrors the Settings-menu stepper pattern: Up/Down moves the
 //! selection between fields (Hour, Minute, Days, Tone, Enabled), Fire drills
 //! into a field (Up/Down then steps the value, Fire or Cancel pops back), and
-//! Cancel from row-nav exits the edit screen entirely.  See [`alarm`] for the
+//! Cancel from row-nav exits the edit screen entirely.  See `alarm` for the
 //! full button table.
 //!
 //! The current weekday is highlighted in red (white-on-red) for visual punch.

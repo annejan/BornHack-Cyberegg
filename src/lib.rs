@@ -36,7 +36,7 @@
 //!
 //! # Module map
 //!
-//! - [`fw`] — driver-layer code: EPD, buzzer, battery ADC, button matrix,
+//! - `fw` — driver-layer code: EPD, buzzer, battery ADC, button matrix,
 //!   LEDs, NFC tag, LoRa radio, BLE companion, MeshCore plumbing, FAT12
 //!   reader, ekv-backed kv store, sponsors slideshow.  Embassy only.
 //! - [`game`] — virtual-pet lifecycle (hunger / inspiration / health /
@@ -158,7 +158,7 @@ use embassy_sync::signal::Signal;
 #[cfg(feature = "simulator")]
 pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
-/// Player-menu song indices into [`crate::fw::buzzer::MELODIES`].
+/// Player-menu song indices into `crate::fw::buzzer::MELODIES`.
 /// Defined here, not in `fw::buzzer`, so the `game::modal` music menu
 /// can reference them on simulator builds (which don't link
 /// `fw::buzzer`) without re-declaring the values.  `fw::buzzer` keeps
@@ -184,7 +184,7 @@ pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new(
 /// Current LoRa radio parameters exposed as atomics so the menu can read them
 /// synchronously. Populated on boot from flash and kept in sync with
 /// `settings::get_radio_params_or_default()`.  Defaults match
-/// [`crate::fw::mesh::settings::DEFAULT_RADIO`] — BornHack Turbo (g4).
+/// `crate::fw::mesh::settings::DEFAULT_RADIO` — BornHack Turbo (g4).
 pub static LORA_FREQ_HZ: AtomicU32 = AtomicU32::new(869_850_000);
 pub static LORA_BW_HZ: AtomicU32 = AtomicU32::new(250_000);
 pub static LORA_SF: AtomicU8 = AtomicU8::new(8);
@@ -240,8 +240,8 @@ pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// One-shot request for the next EPD refresh to use the slow full
-/// waveform ([`ssd1675::UpdateMode::Mode2`]) instead of the fast LUT
-/// ([`ssd1675::UpdateMode::Mode1`]).  The display loop in `embassy.rs`
+/// waveform (`ssd1675::UpdateMode::Mode2`) instead of the fast LUT
+/// (`ssd1675::UpdateMode::Mode1`).  The display loop in `embassy.rs`
 /// `swap`s the flag back to `false` after consuming it, so a mini-game
 /// can simply set this to `true` on close to clear residual ghosting
 /// from its many fast updates in one full-cycle refresh.

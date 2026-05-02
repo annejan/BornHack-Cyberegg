@@ -132,7 +132,7 @@ pub async fn init() {
 /// Number of PCX sprite files available.
 ///
 /// On hardware this reflects the FAT12 partition scan done in
-/// [`init`] — zero means the badge was flashed without art assets,
+/// `init` — zero means the badge was flashed without art assets,
 /// which the game UI surfaces as a "No sprites on flash" placeholder
 /// in the pet area.
 ///
@@ -157,7 +157,7 @@ pub fn frame_count() -> u8 {
 /// starting at frame `00`.  `prefix` is the 4-byte `PPAA` portion of
 /// the FAT12 8.3 filename.
 ///
-/// Firmware: read directly from the [`ANIM_PRESENCE`] bitmap built at
+/// Firmware: read directly from the `ANIM_PRESENCE` bitmap built at
 /// boot.  Simulator: probes `assets/to-badge/` directly.
 ///
 /// Frame `00` missing → returns 0 (no animation available).
@@ -470,7 +470,7 @@ fn fat_name_to_dotted(name: &[u8; 11]) -> std::string::String {
 /// "best effort" stance as the embedded blitter.
 ///
 /// Used by the simulator binary; the embedded firmware uses
-/// [`blit_file`] which streams from FAT12 instead.
+/// `blit_file` which streams from FAT12 instead.
 #[cfg(feature = "simulator")]
 pub fn blit_pcx_sim<D>(display: &mut D, name: &[u8; 11], x: i32, y: i32)
 where

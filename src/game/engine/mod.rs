@@ -1195,7 +1195,7 @@ impl GameState {
     ///
     /// Becomes true when at least `SAVE_INTERVAL_TICKS` (15 minutes)
     /// have elapsed since the last save.  The caller does the async
-    /// save and then calls [`mark_saved()`].
+    /// save and then calls `mark_saved()`.
     ///
     /// No extra wake-ups are scheduled for saving — this check
     /// piggybacks on whatever triggered the current update.
