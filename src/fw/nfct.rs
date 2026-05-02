@@ -271,6 +271,13 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
     );
     match crate::game::station::apply(plaintext) {
         Some(toast) => {
+            // Pull the user back to the game screen so the bonus toast
+            // is actually visible — they may have been on Watch /
+            // Channels / etc. when they tapped.  `show_toast` itself
+            // wakes the display loop via TOAST_SIGNAL.
+            crate::DISPLAY_STATE.lock(|cell| {
+                cell.borrow_mut().set_active_screen(crate::SCREEN_GAME);
+            });
             crate::game::show_toast(toast);
             let _ = out.extend_from_slice(&[0x90, 0x00]);
         }

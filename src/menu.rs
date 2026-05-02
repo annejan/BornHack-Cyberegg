@@ -384,6 +384,16 @@ impl<const M: usize> DisplayState<M> {
         self.active_screen
     }
 
+    /// Programmatically jump to a specific screen (e.g. an NFC bonus
+    /// hands focus back to the game screen so the toast is visible).
+    /// Ignored if the requested screen is out of range or disabled.
+    pub fn set_active_screen(&mut self, s: u8) {
+        let idx = s as usize;
+        if idx < M && self.enabled[idx] {
+            self.active_screen = s;
+        }
+    }
+
     pub fn current_screen(&self) -> &ScreenState {
         &self.screens[self.active_screen as usize]
     }

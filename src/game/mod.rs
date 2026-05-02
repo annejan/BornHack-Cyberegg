@@ -30,7 +30,7 @@ pub mod station;
 pub mod tictactoe;
 pub mod traits_view;
 // ── Action feedback toast ────────────────────────────────────────────────────
-use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
@@ -92,10 +92,10 @@ impl Toast {
             Toast::Inspired => "+inspired",
             Toast::Hibernate => "hibernating",
             Toast::Wake => "waking up",
-            Toast::StationFood => "station: fed!",
-            Toast::StationDrugs => "station: healed!",
-            Toast::StationInspire => "station: inspired!",
-            Toast::StationRest => "station: rested!",
+            Toast::StationFood => "Food bonus!",
+            Toast::StationDrugs => "Heal bonus!",
+            Toast::StationInspire => "Inspire bonus!",
+            Toast::StationRest => "Sleep bonus!",
             // Dynamic — handled in the renderer.
             Toast::StationCooldown => "",
         }
@@ -104,22 +104,55 @@ impl Toast {
 
 /// Toast message index.
 static TOAST_MSG: AtomicU8 = AtomicU8::new(0);
-/// Remaining draw cycles before the toast disappears.
-static TOAST_TTL: AtomicU8 = AtomicU8::new(0);
+/// Whether a toast is currently visible.  Cleared on the first
+/// render that occurs at or after `TOAST_STARTED_MS + TOAST_MIN_VISIBLE_MS`.
+static TOAST_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Wall-clock millisecond timestamp when the active toast was shown.
+/// Stored as the low 32 bits of the uptime-millisecond counter — wraps
+/// after ~49 days, far longer than any toast's lifetime.
+static TOAST_STARTED_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Remaining cooldown in seconds, read by the renderer when the
 /// active toast is [`Toast::StationCooldown`].  Set by
 /// [`show_station_cooldown`].
 static STATION_COOLDOWN_SECS: AtomicU16 = AtomicU16::new(0);
 
-/// Number of display refreshes to show the toast (~2–3 sec per refresh on
-/// e-ink).
-const TOAST_DRAWS: u8 = 2;
+/// Minimum wall-clock visibility for a toast.  After this elapses the
+/// toast disappears on the next display refresh.  E-paper refreshes
+/// (fast LUT or full) take roughly 0.5–3 s each, so the actual
+/// on-screen time is `max(TOAST_MIN_VISIBLE_MS, time-to-next-refresh)`.
+const TOAST_MIN_VISIBLE_MS: u32 = 2000;
 
-/// Show a feedback toast for the next few display refreshes.
+/// Low 32 bits of the current uptime in milliseconds.  Cross-platform
+/// wrapper so `mod.rs` compiles on both firmware (`embassy_time`) and
+/// simulator (`lifecycle::sim_elapsed_ms`).
+fn now_ms_u32() -> u32 {
+    #[cfg(feature = "embassy-base")]
+    {
+        embassy_time::Instant::now().as_millis() as u32
+    }
+    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    {
+        lifecycle::sim_elapsed_ms() as u32
+    }
+    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+    {
+        0
+    }
+}
+
+/// Show a feedback toast.  Becomes visible on the next display
+/// refresh and stays visible until the first refresh at or after
+/// `TOAST_MIN_VISIBLE_MS` elapsed.  Fires `TOAST_SIGNAL` so the
+/// display loop wakes up immediately even if no other event would
+/// have triggered a redraw (e.g. an NFC station bonus arriving while
+/// the display task is parked).
 pub fn show_toast(toast: Toast) {
     TOAST_MSG.store(toast as u8, Ordering::Relaxed);
-    TOAST_TTL.store(TOAST_DRAWS, Ordering::Relaxed);
+    TOAST_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
+    TOAST_ACTIVE.store(true, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::TOAST_SIGNAL.signal(());
 }
 
 /// Show the station-cooldown toast with the remaining time formatted
@@ -327,9 +360,9 @@ where
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
-    // Action feedback toast — shown briefly after an action.
-    let ttl = TOAST_TTL.load(Ordering::Relaxed);
-    if ttl > 0 {
+    // Action feedback toast — shown until the first render at or
+    // after TOAST_MIN_VISIBLE_MS has elapsed since show_toast.
+    if TOAST_ACTIVE.load(Ordering::Relaxed) {
         let toast = Toast::from_u8(TOAST_MSG.load(Ordering::Relaxed));
         // Dynamic toasts (station cooldown) format their text at draw
         // time from a small atomic; everything else uses the static
@@ -357,7 +390,13 @@ where
             )
             .draw(display)?;
         }
-        TOAST_TTL.store(ttl - 1, Ordering::Relaxed);
+        // Wrapping subtraction handles the once-per-49-days uptime
+        // wraparound correctly: if start was before wrap and now after,
+        // `now - start` still yields the true elapsed delta (mod 2^32).
+        let elapsed = now_ms_u32().wrapping_sub(TOAST_STARTED_MS.load(Ordering::Relaxed));
+        if elapsed >= TOAST_MIN_VISIBLE_MS {
+            TOAST_ACTIVE.store(false, Ordering::Relaxed);
+        }
     }
 
     modal::draw_modal(display)?;

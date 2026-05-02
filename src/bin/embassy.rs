@@ -544,12 +544,27 @@ async fn wait_display_event(
         #[cfg(not(feature = "game"))]
         let sprite_tick = core::future::pending::<()>();
 
+        // Compose button + TOAST_SIGNAL into a single wakeup so the
+        // outer select shape stays unchanged.  Both result in a
+        // non-sprite (`return false`) wake-up.
+        let button_or_toast = async {
+            use embassy_futures::select::Either;
+            match select(
+                button_rcvr.changed(),
+                hello_graphics::TOAST_SIGNAL.wait(),
+            )
+            .await
+            {
+                Either::First(_) | Either::Second(_) => {}
+            }
+        };
+
         #[cfg(feature = "mesh")]
         {
             use embassy_futures::select::{Either4, select4};
             match select(
                 select3(
-                    button_rcvr.changed(),
+                    button_or_toast,
                     BLE_PAIRING_SIGNAL.wait(),
                     MINUTE_TICK.wait(),
                 ),
@@ -580,11 +595,7 @@ async fn wait_display_event(
 
         #[cfg(not(feature = "mesh"))]
         match select(
-            select3(
-                button_rcvr.changed(),
-                BLE_PAIRING_SIGNAL.wait(),
-                MINUTE_TICK.wait(),
-            ),
+            select3(button_or_toast, BLE_PAIRING_SIGNAL.wait(), MINUTE_TICK.wait()),
             sprite_tick,
         )
         .await
