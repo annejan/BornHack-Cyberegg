@@ -503,14 +503,21 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
 
-        // Calendar screen consumes Up/Down (and Left/Right) for list scrolling.
-        // Cancel/Fire/Execute fall through to the normal handler so screen-nav
-        // and the BLE PIN dialog still work.
+        // Calendar screen consumes all arrow keys for cursor movement on the
+        // month grid, plus Fire/Execute to drill into a day's events.  We map
+        // Cancel to `screen_left()` here so the user has an explicit exit —
+        // the grid leaves no other button free to fall through for screen-nav.
+        // (In day-detail mode the calendar's own dispatcher consumes Cancel
+        // to return to the grid; this branch is unreachable there.)
         #[cfg(feature = "watch")]
-        if self.active_screen == crate::SCREEN_CALENDAR
-            && crate::watch::calendar::dispatch(btn)
-        {
-            return;
+        if self.active_screen == crate::SCREEN_CALENDAR {
+            if crate::watch::calendar::dispatch(btn) {
+                return;
+            }
+            if matches!(btn, ButtonId::Cancel) {
+                self.screen_left();
+                return;
+            }
         }
 
         let screen = &self.screens[self.active_screen as usize];
