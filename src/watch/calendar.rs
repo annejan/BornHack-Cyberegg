@@ -38,8 +38,8 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use super::alarm::{
-    N_ALARMS, alarm_day_n, alarm_enabled_n, alarm_hour_n, alarm_is_one_shot_n, alarm_minute_n,
-    alarm_month_n, alarm_summary_n, alarm_year_n,
+    N_ALARMS, alarm_day_n, alarm_enabled_n, alarm_end_hour_n, alarm_end_minute_n, alarm_hour_n,
+    alarm_is_one_shot_n, alarm_minute_n, alarm_month_n, alarm_summary_n, alarm_year_n,
 };
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE, draw_frame};
@@ -58,10 +58,13 @@ static CURSOR_YEAR: AtomicU16 = AtomicU16::new(0);
 static CURSOR_MONTH: AtomicU8 = AtomicU8::new(0);
 static CURSOR_DAY: AtomicU8 = AtomicU8::new(0);
 
-/// Scroll offset within the day-detail event list.
-static DETAIL_SCROLL: AtomicU8 = AtomicU8::new(0);
-
 const MAX_EVENTS: usize = N_ALARMS;
+
+/// First hour visible at the top of the day-detail timeline (0..=23).
+/// Sentinel `0xFF` means "auto-position on next render" — set when the
+/// user enters day-detail, then resolved to the first event's hour
+/// (or the current hour for today) and replaced in-place.
+static DAY_VIEW_TOP_HOUR: AtomicU8 = AtomicU8::new(0xFF);
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
@@ -92,6 +95,10 @@ struct EventRow {
     day: u8,
     hour: u8,
     minute: u8,
+    /// Event end time on the same day.  Mirrors `(hour, minute)` for
+    /// zero-duration events (DTEND missing in the source ICS).
+    end_hour: u8,
+    end_minute: u8,
     /// Back-reference to the alarm slot — used to look up the summary.
     slot: u8,
 }
@@ -111,6 +118,8 @@ fn collect_sorted(out: &mut [EventRow; MAX_EVENTS]) -> usize {
             day: alarm_day_n(slot),
             hour: alarm_hour_n(slot),
             minute: alarm_minute_n(slot),
+            end_hour: alarm_end_hour_n(slot),
+            end_minute: alarm_end_minute_n(slot),
             slot: slot as u8,
         };
         n += 1;
@@ -230,7 +239,10 @@ fn dispatch_active(btn: ButtonId) -> bool {
         ButtonId::Left => add_days(cur.0, cur.1, cur.2, -1),
         ButtonId::Right => add_days(cur.0, cur.1, cur.2, 1),
         ButtonId::Fire | ButtonId::Execute => {
-            DETAIL_SCROLL.store(0, Ordering::Relaxed);
+            // Re-arm the day-view auto-scroll for the day we just dropped
+            // into.  The next render computes the right top-hour based on
+            // events / now and stores it.
+            DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
             MODE.store(MODE_DAY_DETAIL, Ordering::Relaxed);
             return true;
         }
@@ -244,15 +256,47 @@ fn dispatch_active(btn: ButtonId) -> bool {
 }
 
 fn dispatch_day_detail(btn: ButtonId) -> bool {
-    let cur = DETAIL_SCROLL.load(Ordering::Relaxed);
+    // Up/Down: scroll the timeline by an hour.
+    // Left/Right: jump to prev/next day (day-view auto-scrolls again).
+    // Cancel: back to the grid.
+    let cur = (
+        CURSOR_YEAR.load(Ordering::Relaxed),
+        CURSOR_MONTH.load(Ordering::Relaxed),
+        CURSOR_DAY.load(Ordering::Relaxed),
+    );
     match btn {
-        ButtonId::Up => DETAIL_SCROLL.store(cur.saturating_sub(1), Ordering::Relaxed),
-        ButtonId::Down => DETAIL_SCROLL.store(cur.saturating_add(1), Ordering::Relaxed),
-        ButtonId::Cancel => MODE.store(MODE_ACTIVE, Ordering::Relaxed),
-        // Swallow other buttons so they don't accidentally screen-nav.
-        ButtonId::Left | ButtonId::Right | ButtonId::Fire | ButtonId::Execute => {}
+        ButtonId::Up => {
+            let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+            // Treat sentinel as 0 for the bounds-check; renderer will
+            // resolve the new value into the visible range.
+            let resolved = if cur_top == 0xFF { 0 } else { cur_top };
+            DAY_VIEW_TOP_HOUR.store(resolved.saturating_sub(1), Ordering::Relaxed);
+            return true;
+        }
+        ButtonId::Down => {
+            let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+            let resolved = if cur_top == 0xFF { 0 } else { cur_top };
+            // Cap at 23 so the user can't scroll past the end of the day.
+            DAY_VIEW_TOP_HOUR.store(resolved.saturating_add(1).min(23), Ordering::Relaxed);
+            return true;
+        }
+        ButtonId::Left if cur.0 != 0 => {
+            DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
+            set_cursor(add_days(cur.0, cur.1, cur.2, -1));
+            return true;
+        }
+        ButtonId::Right if cur.0 != 0 => {
+            DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
+            set_cursor(add_days(cur.0, cur.1, cur.2, 1));
+            return true;
+        }
+        ButtonId::Cancel => {
+            MODE.store(MODE_ACTIVE, Ordering::Relaxed);
+            return true;
+        }
+        // Other buttons: swallow.
+        _ => true,
     }
-    true
 }
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
@@ -280,6 +324,8 @@ where
         day: 0,
         hour: 0,
         minute: 0,
+        end_hour: 0,
+        end_minute: 0,
         slot: 0,
     }; MAX_EVENTS];
     let n = collect_sorted(&mut events_buf);
@@ -452,6 +498,33 @@ where
     Ok(())
 }
 
+/// Day-detail view: an agenda timeline.
+///
+/// Layout (152×152, with the frame header drawn earlier in `draw`):
+///
+/// ```text
+///        ┌─────────────────────────────┐  y=0..17  Calendar / [bat]
+///        │  Wed 15 Jul 2026 (red bar)  │  y=20..36 day header
+///        ├─────────────────────────────┤
+///   06   │                             │  y=40..148 timeline
+///        │░░░░ 09:30 Workshop          │
+///   09   │░░░░░░                       │  ← block height ∝ duration
+///        │                             │
+///   12   │█ 12:00 Lunch                │  ← short event = thin marker
+///        │░░ 13:00 Talk                │
+///   15   │░░                           │
+///        │                             │
+///   18   │── ←─ red "now" line if today│
+///        │░ 17:30 Demo                 │
+///   21   │                             │
+///        └─────────────────────────────┘
+/// ```
+///
+/// Timeline shows the fixed 06:00–24:00 window (18 h × 6 px = 108 px).
+/// Events render as filled black blocks with white title text inside;
+/// blocks shorter than ~10 px omit the title.  Today's "now" position
+/// is marked with a red horizontal line.  Empty days show
+/// `(no events)` over the timeline.
 fn draw_day_detail<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -459,7 +532,7 @@ where
     let cursor = ensure_cursor(events);
     let today_ymd = today();
 
-    // ── Big date header ────────────────────────────────────────────────────
+    // ── Day header (compact red bar) ─────────────────────────────────────
     let weekday = weekday_for(cursor.0, cursor.1, cursor.2) as usize;
     let mon_idx = (cursor.1 as usize).saturating_sub(1).min(11);
     let mut buf: heapless::String<24> = heapless::String::new();
@@ -490,67 +563,177 @@ where
     )
     .draw(display)?;
 
-    // ── Event list ─────────────────────────────────────────────────────────
+    // ── Timeline ─────────────────────────────────────────────────────────
+    // Zoom is fixed; the visible window scrolls.  At 12 px/hour the
+    // 108 px timeline fits exactly 9 hours — a useful "fit one Bornhack
+    // session-block" range.  Up/Down in dispatch_day_detail scrolls in
+    // 1-hour increments.
+    const TL_TOP_Y: i32 = 40;
+    const TL_BOT_Y: i32 = 148;
+    const PX_PER_HOUR: i32 = 12;
+    const HOURS_VISIBLE: i32 = (TL_BOT_Y - TL_TOP_Y) / PX_PER_HOUR; // = 9
+    const TL_AXIS_X: i32 = 20;
+    const TL_LEFT_X: i32 = 22;
+    const TL_RIGHT_X: i32 = 148;
+
+    // Filter events to the cursor day (collected before resolving the
+    // scroll position so we can auto-scroll to the first event).
     let day_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
         .iter()
         .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
         .collect();
 
-    let left = TextStyleBuilder::new()
+    // Resolve the scroll sentinel to a sensible top-hour: first event
+    // hour, or current hour if today, or 06:00.  Clamp so the visible
+    // window always stays inside 0..24.
+    let mut top_hour = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+    if top_hour == 0xFF {
+        let chosen = if let Some(c) = super::clock::wall_clock() {
+            if (c.year, c.month, c.day) == cursor {
+                c.hour as i32
+            } else {
+                day_evs.first().map(|e| e.hour as i32).unwrap_or(6)
+            }
+        } else {
+            day_evs.first().map(|e| e.hour as i32).unwrap_or(6)
+        };
+        // Land one hour above the anchor so it isn't pinned to the
+        // very top edge.
+        let anchored = (chosen - 1).clamp(0, 24 - HOURS_VISIBLE);
+        top_hour = anchored as u8;
+        DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
+    } else if (top_hour as i32) > 24 - HOURS_VISIBLE {
+        top_hour = (24 - HOURS_VISIBLE) as u8;
+        DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
+    }
+    let tl_start_hour = top_hour as i32;
+
+    // Convert (hour, minute) to a y-pixel inside the timeline,
+    // clamped to the visible window.
+    let y_for_time = |h: u8, m: u8| -> i32 {
+        let total_min = h as i32 * 60 + m as i32 - tl_start_hour * 60;
+        let clamped = total_min.clamp(0, HOURS_VISIBLE * 60);
+        TL_TOP_Y + clamped * PX_PER_HOUR / 60
+    };
+
+    // Vertical axis line.
+    Rectangle::new(
+        Point::new(TL_AXIS_X, TL_TOP_Y),
+        Size::new(1, (TL_BOT_Y - TL_TOP_Y) as u32),
+    )
+    .into_styled(PrimitiveStyle::with_fill(BLACK))
+    .draw(display)?;
+
+    // Hour labels + tick marks every hour (12 px between labels — fits
+    // a FONT_6X10 line cleanly).
+    let label_style = MonoTextStyle::new(&FONT_6X10, BLACK);
+    let right_align = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Right)
+        .build();
+    let mut h = tl_start_hour;
+    while h <= tl_start_hour + HOURS_VISIBLE {
+        let label_y = TL_TOP_Y + (h - tl_start_hour) * PX_PER_HOUR + 4;
+        let mut s: heapless::String<3> = heapless::String::new();
+        let _ = core::fmt::write(&mut s, format_args!("{:02}", h));
+        Text::with_text_style(
+            &s,
+            Point::new(TL_AXIS_X - 2, label_y),
+            label_style,
+            right_align,
+        )
+        .draw(display)?;
+        Rectangle::new(Point::new(TL_AXIS_X, label_y - 1), Size::new(3, 1))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        h += 1;
+    }
+
+    let inside_left = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Left)
         .build();
 
-    if day_evs.is_empty() {
-        Text::with_text_style(
-            "(no events)",
-            Point::new(76, 80),
-            MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
-            centered,
-        )
-        .draw(display)?;
-        return Ok(());
+    // Event blocks — only those that intersect the visible window.
+    for ev in &day_evs {
+        let ev_start_min = ev.hour as i32 * 60 + ev.minute as i32;
+        let ev_end_min = ev.end_hour as i32 * 60 + ev.end_minute as i32;
+        let win_start_min = tl_start_hour * 60;
+        let win_end_min = win_start_min + HOURS_VISIBLE * 60;
+        if ev_end_min < win_start_min || ev_start_min > win_end_min {
+            continue;
+        }
+
+        let start_y = y_for_time(ev.hour, ev.minute);
+        let end_y = y_for_time(ev.end_hour, ev.end_minute);
+        // Min 4 px tall so zero-duration events are still visible.
+        let height = (end_y - start_y).max(4) as u32;
+        let block_w = (TL_RIGHT_X - TL_LEFT_X) as u32;
+
+        Rectangle::new(Point::new(TL_LEFT_X, start_y), Size::new(block_w, height))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+
+        // Title fits inside if the block is at least one text-line tall.
+        if height >= 10 {
+            let summary = alarm_summary_n(ev.slot as usize);
+            let mut row: heapless::String<48> = heapless::String::new();
+            let _ = core::fmt::write(
+                &mut row,
+                format_args!("{:02}:{:02} {}", ev.hour, ev.minute, summary.as_str()),
+            );
+            Text::with_text_style(
+                &row,
+                Point::new(TL_LEFT_X + 2, start_y + 5),
+                MonoTextStyle::new(&FONT_6X10, WHITE),
+                inside_left,
+            )
+            .draw(display)?;
+        }
     }
 
-    const ROW_TOP_Y: i32 = 50;
-    const ROW_STEP_Y: i32 = 14;
-    const ROWS_VISIBLE: usize = 7; // (150 - 50) / 14 ≈ 7
-
-    let raw_scroll = DETAIL_SCROLL.load(Ordering::Relaxed) as usize;
-    let max_scroll = day_evs.len().saturating_sub(ROWS_VISIBLE);
-    let scroll = raw_scroll.min(max_scroll);
-    if raw_scroll != scroll {
-        DETAIL_SCROLL.store(scroll as u8, Ordering::Relaxed);
+    // "Now" indicator — red horizontal line across the events area.
+    if is_today {
+        if let Some(c) = super::clock::wall_clock() {
+            let now_min = c.hour as i32 * 60 + c.minute as i32;
+            let win_start_min = tl_start_hour * 60;
+            let win_end_min = win_start_min + HOURS_VISIBLE * 60;
+            if (win_start_min..=win_end_min).contains(&now_min) {
+                let now_y = y_for_time(c.hour, c.minute);
+                Rectangle::new(
+                    Point::new(TL_AXIS_X, now_y),
+                    Size::new((TL_RIGHT_X - TL_AXIS_X) as u32, 1),
+                )
+                .into_styled(PrimitiveStyle::with_fill(RED))
+                .draw(display)?;
+            }
+        }
     }
 
-    for i in 0..ROWS_VISIBLE.min(day_evs.len() - scroll) {
-        let ev = day_evs[scroll + i];
-        let summary = alarm_summary_n(ev.slot as usize);
-        let mut row: heapless::String<48> = heapless::String::new();
-        let _ = core::fmt::write(
-            &mut row,
-            format_args!("{:02}:{:02} {}", ev.hour, ev.minute, summary.as_str()),
-        );
-        Text::with_text_style(
-            &row,
-            Point::new(4, ROW_TOP_Y + i as i32 * ROW_STEP_Y),
-            MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
-            left,
-        )
-        .draw(display)?;
-    }
-
-    // Scroll arrows.
+    // Scroll indicators on the right edge: ↑ if events exist before
+    // the visible window, ↓ if events exist after.
     let arrow_style = MonoTextStyle::new(&FONT_6X10, BLACK);
-    if scroll > 0 {
-        Text::with_text_style("^", Point::new(146, ROW_TOP_Y), arrow_style, centered)
+    let above = day_evs
+        .iter()
+        .any(|ev| (ev.hour as i32 * 60 + ev.minute as i32) < tl_start_hour * 60);
+    let below = day_evs.iter().any(|ev| {
+        (ev.hour as i32 * 60 + ev.minute as i32) >= (tl_start_hour + HOURS_VISIBLE) * 60
+    });
+    if above {
+        Text::with_text_style("^", Point::new(146, TL_TOP_Y + 4), arrow_style, centered)
             .draw(display)?;
     }
-    if scroll + ROWS_VISIBLE < day_evs.len() {
+    if below {
+        Text::with_text_style("v", Point::new(146, TL_BOT_Y - 4), arrow_style, centered)
+            .draw(display)?;
+    }
+
+    if day_evs.is_empty() {
+        // Soft "(no events)" overlay so the timeline doesn't look broken.
         Text::with_text_style(
-            "v",
-            Point::new(146, ROW_TOP_Y + (ROWS_VISIBLE as i32 - 1) * ROW_STEP_Y),
-            arrow_style,
+            "(no events)",
+            Point::new(85, 90),
+            MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
             centered,
         )
         .draw(display)?;
