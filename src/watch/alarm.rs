@@ -191,6 +191,9 @@ const ALARM_TONES: &[(&str, u8)] = &[
     ("Tone: Sandstorm", 3),
     ("Tone: Startup", 0),
     ("Tone: Trololo", 5),
+    ("Tone: Daisy Bell", 9),
+    ("Tone: Nokia", 10),
+    ("Tone: Samsung", 11),
 ];
 
 pub fn alarm_hour() -> u8 {

@@ -451,3 +451,71 @@ pub const ALARM: &[Tone] = &[
     Tone::new(Note::Rest, 100),
     Tone::new(Note::A5, 150),
 ];
+
+// "Daisy Bell" (Harry Dacre, 1892) — first phrase of the chorus,
+// "Daisy, Daisy, give me your answer do".  3/4 time, BPM ~120,
+// quarter = 500 ms.  Famous for being the first computer-sung song
+// (IBM 704, 1961) and HAL 9000's parting tune in 2001: A Space
+// Odyssey.  Key of C major; ends on the tonic (C4) for closure
+// even though the original phrase resolves later in the chorus.
+const DBQ: u32 = 500; // quarter
+const DBH: u32 = 1000; // half
+const DBHD: u32 = 1500; // dotted half
+pub const DAISY_BELL: &[Tone] = &[
+    // "Dai - sy"  — high G drops to E
+    Tone::new(Note::G4, DBH),
+    Tone::new(Note::E4, DBQ),
+    // "Dai - sy"
+    Tone::new(Note::G4, DBH),
+    Tone::new(Note::E4, DBQ),
+    // "give me your"  — C, D, E walking up
+    Tone::new(Note::C4, DBQ),
+    Tone::new(Note::D4, DBQ),
+    Tone::new(Note::E4, DBQ),
+    // "an - swer  do"  — F (long) E D
+    Tone::new(Note::F4, DBH),
+    Tone::new(Note::E4, DBQ),
+    Tone::new(Note::D4, DBQ),
+    // Resolve to tonic C — not in the lyrics but lets the standalone
+    // phrase end on a stable chord rather than the dominant D.
+    Tone::new(Note::C4, DBHD),
+];
+
+// Nokia Tune — the unmistakable 13-note phrase from Francisco Tárrega's
+// "Gran Vals" (1902) that became the Nokia ringtone in 1994.  Key of
+// A major, 4/4 time, BPM ~150.  Pattern: two eighths + two quarters
+// repeated three times, ending on a held A4.  ~4.4 s total.
+const NQ: u32 = 400; // quarter at BPM 150
+const NE: u32 = 200; // eighth
+const NH: u32 = 800; // half (final held note)
+pub const NOKIA: &[Tone] = &[
+    // Bar 1: E D F♯ G♯
+    Tone::new(Note::E5, NE),
+    Tone::new(Note::D5, NE),
+    Tone::new(Note::Fs4, NQ),
+    Tone::new(Note::Gs4, NQ),
+    // Bar 2: C♯ B D E
+    Tone::new(Note::Cs5, NE),
+    Tone::new(Note::B4, NE),
+    Tone::new(Note::D4, NQ),
+    Tone::new(Note::E4, NQ),
+    // Bar 3: B A C♯ E
+    Tone::new(Note::B4, NE),
+    Tone::new(Note::A4, NE),
+    Tone::new(Note::Cs4, NQ),
+    Tone::new(Note::E4, NQ),
+    // Bar 4: A (held tonic)
+    Tone::new(Note::A4, NH),
+];
+
+// Samsung "Whistle" notification — short 5-note SMS chime.
+// Pattern: A → C♯ → A (an octave up) → G♯ (held 2×) → E (held 4×).
+// A major-ish with a chromatic G♯ passing tone before resolving down
+// to E.  ~900 ms total.
+pub const OVER_THE_HORIZON: &[Tone] = &[
+    Tone::new(Note::A4, 100),
+    Tone::new(Note::Cs5, 100),
+    Tone::new(Note::A5, 100),
+    Tone::new(Note::Gs5, 200),
+    Tone::new(Note::E5, 400),
+];
