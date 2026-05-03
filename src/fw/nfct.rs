@@ -306,11 +306,14 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
 }
 
 /// After every NDEF write, see whether the buffer now holds a
-/// complete NDEF text record.  If it does and the text matches a
-/// station phrase, apply the effect, show the toast, and re-arm the
-/// buffer back to the default URL so the next phone-read shows the
-/// `badge.team` URL again.
-#[cfg(feature = "game")]
+/// complete NDEF text record.  Two effects can apply on the same
+/// payload:
+///   * If `text` starts with `"token:"`, forward the value to the
+///     token screen (always, regardless of features).
+///   * If the `game` feature is enabled and the text matches a
+///     station phrase, apply the effect, show the toast, and re-arm
+///     the buffer back to the default URL so the next phone-read
+///     shows the `badge.team` URL again.
 fn try_apply_station(ndef_buf: &mut [u8; NDEF_BUF_LEN]) {
     let nlen = u16::from_be_bytes([ndef_buf[0], ndef_buf[1]]) as usize;
     if nlen == 0 || 2 + nlen > ndef_buf.len() {
@@ -320,17 +323,25 @@ fn try_apply_station(ndef_buf: &mut [u8; NDEF_BUF_LEN]) {
     let Some(text) = ndef::find_text_record(msg) else {
         return;
     };
-    let Some(toast) = crate::game::station::apply(text) else {
-        return;
-    };
-    crate::game::show_toast(toast);
-    init_ndef_url(ndef_buf);
+    try_apply_token(text);
+    #[cfg(feature = "game")]
+    if let Some(toast) = crate::game::station::apply(text) {
+        crate::game::show_toast(toast);
+        init_ndef_url(ndef_buf);
+    }
 }
 
-#[cfg(not(feature = "game"))]
-fn try_apply_station(_ndef_buf: &mut [u8; NDEF_BUF_LEN]) {}
+/// If `text` starts with `"token:"`, forward the suffix to the token
+/// screen.  Silently no-ops on non-token text or invalid UTF-8.
+fn try_apply_token(text: &[u8]) {
+    const PREFIX: &[u8] = b"token:";
+    if let Some(value_bytes) = text.strip_prefix(PREFIX)
+        && let Ok(value) = core::str::from_utf8(value_bytes)
+    {
+        crate::token::set_token(value);
+    }
+}
 
-#[cfg(feature = "game")]
 mod ndef {
     //! Minimal NDEF reader — just enough to pull a UTF-8 text payload
     //! out of the first text record in a message.

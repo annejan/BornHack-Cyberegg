@@ -580,6 +580,12 @@ async fn push_grp_txt(
                 Some(i) => (&text[..i], &text[i + 2..]),
                 None => ("", text),
             };
+
+            // Token screen: if the message text starts with "token:" (after
+            // stripping any "sender: " prefix), store the value.
+            if let Some(token_val) = msg_str.strip_prefix("token:") {
+                crate::token::set_token(token_val);
+            }
             let mut sender: heapless::String<32> = heapless::String::new();
             let _ = sender.push_str(sender_str);
             let mut text_str: heapless::String<128> = heapless::String::new();
@@ -1159,6 +1165,11 @@ async fn try_handle_txt_msg(
         });
         crate::PM_SIGNAL.signal(());
         crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
+
+        // Token screen: direct messages starting with "token:" also work.
+        if let Some(token_val) = text.strip_prefix("token:") {
+            crate::token::set_token(token_val);
+        }
 
         if !crate::BLE_CONNECTED.load(core::sync::atomic::Ordering::Relaxed) {
             crate::fw::led::set_led(&crate::fw::led::LED_BLUE, crate::fw::led::LedState::Blink);

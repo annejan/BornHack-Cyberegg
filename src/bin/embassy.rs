@@ -27,7 +27,7 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH,
     board,
     draw_graphics, health_err, unix_now, with_health,
 };
@@ -558,18 +558,22 @@ async fn wait_display_event(
         #[cfg(not(feature = "game"))]
         let sprite_tick = core::future::pending::<()>();
 
-        // Compose button + TOAST_SIGNAL into a single wakeup so the
-        // outer select shape stays unchanged.  Both result in a
-        // non-sprite (`return false`) wake-up.
+        // Compose button + TOAST_SIGNAL + TOKEN_SIGNAL into a single
+        // wakeup so the outer select shape stays unchanged.  All three
+        // result in a non-sprite (`return false`) wake-up.  TOKEN_SIGNAL
+        // fires when a new token value arrives over MeshCore or NFC —
+        // joining it here lets the token screen redraw immediately
+        // rather than waiting for the next minute tick.
         let button_or_toast = async {
-            use embassy_futures::select::Either;
-            match select(
+            use embassy_futures::select::{Either3, select3};
+            match select3(
                 button_rcvr.changed(),
                 bornhack_aegg::TOAST_SIGNAL.wait(),
+                bornhack_aegg::TOKEN_SIGNAL.wait(),
             )
             .await
             {
-                Either::First(_) | Either::Second(_) => {}
+                Either3::First(_) | Either3::Second(_) | Either3::Third(_) => {}
             }
         };
 
@@ -596,6 +600,7 @@ async fn wait_display_event(
                 Either::First(Either3::Second(_)) => return false,
                 Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
                 Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
+                Either::First(Either3::Third(_)) if active_screen == SCREEN_TOKEN => return false,
                 // Calendar is intentionally left off the minute-tick
                 // redraw list.  The fast-LUT refresh path doesn't update
                 // the red plane (today highlight, event dots, day-view
@@ -627,6 +632,7 @@ async fn wait_display_event(
             Either::First(Either3::Second(_)) => return false,
             Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
             Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
+            Either::First(Either3::Third(_)) if active_screen == SCREEN_TOKEN => return false,
             // Calendar deliberately ignores the minute tick — see the
             // matching arm in the mesh-feature branch above for why.
             _ => {}

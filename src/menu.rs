@@ -21,15 +21,16 @@ pub enum ScreenId {
     Pm = 2,
     Channel = 3,
     Advert = 4,
-    Watch = 5,
-    Calendar = 6,
+    Token = 5,
+    Watch = 6,
+    Calendar = 7,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -1781,6 +1782,11 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
+static TOKEN_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Token",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
 #[cfg(feature = "watch")]
 static WATCH_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "Clock",
@@ -1834,6 +1840,7 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         ScreenState::new(&PM_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
+        ScreenState::new(&TOKEN_ITEMS),
         #[cfg(feature = "watch")]
         ScreenState::new(&WATCH_ITEMS),
         #[cfg(feature = "watch")]
@@ -1841,6 +1848,7 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
     ],
     [
         GAME_ENABLED,
+        true,
         true,
         true,
         true,
