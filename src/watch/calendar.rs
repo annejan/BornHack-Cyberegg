@@ -30,7 +30,7 @@
 //! the moment you land on the screen.
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_7X13_BOLD};
+use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_6X13_BOLD, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
@@ -49,6 +49,11 @@ use crate::{BLACK, RED, TriColor, WHITE, draw_frame};
 const MODE_PASSIVE: u8 = 0;
 const MODE_ACTIVE: u8 = 1;
 const MODE_DAY_DETAIL: u8 = 2;
+/// Full-screen agenda list of every event on the cursor day, with full
+/// (untruncated) summaries.  Fire from day-detail enters; Cancel
+/// returns.  Lets users see short events whose blocks were too small
+/// to show their title inline on the timeline.
+const MODE_DAY_LIST: u8 = 3;
 
 static MODE: AtomicU8 = AtomicU8::new(MODE_PASSIVE);
 
@@ -74,6 +79,11 @@ static DAY_VIEW_TOP_HOUR: AtomicU8 = AtomicU8::new(0xFF);
 static DAY_VIEW_TITLE_SCROLL: AtomicU8 = AtomicU8::new(0);
 const TITLE_SCROLL_STEP: u8 = 3;
 const TITLE_SCROLL_MAX: u8 = 24;
+
+/// Top-of-window row offset for the day-list popup.  Stepped by Up
+/// (back) / Down (forward) one row at a time.  Cleared on entry so the
+/// popup always opens at the first event of the day.
+static DAY_LIST_SCROLL: AtomicU8 = AtomicU8::new(0);
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
@@ -210,6 +220,7 @@ fn set_cursor(ymd: (u16, u8, u8)) {
 
 pub fn dispatch(btn: ButtonId) -> bool {
     match MODE.load(Ordering::Relaxed) {
+        MODE_DAY_LIST => dispatch_day_list(btn),
         MODE_DAY_DETAIL => dispatch_day_detail(btn),
         MODE_ACTIVE => dispatch_active(btn),
         _ => dispatch_passive(btn),
@@ -265,14 +276,17 @@ fn dispatch_active(btn: ButtonId) -> bool {
 }
 
 fn dispatch_day_detail(btn: ButtonId) -> bool {
-    // Up/Down:    scroll the timeline by an hour.
-    // Left/Right: scroll all event titles left/right in 3-char steps so
-    //             long titles like "Daily Volunteer Meeting" can be
-    //             read past their truncation point.  Day switching
-    //             isn't bound here — it's an uncommon action; Cancel
-    //             back to the grid, arrow to a different day, Fire to
-    //             enter again.
-    // Cancel:     back to the grid (title scroll resets to 0).
+    // Up/Down:        scroll the timeline by an hour.
+    // Left/Right:     scroll all event titles left/right in 3-char steps so
+    //                 long titles like "Daily Volunteer Meeting" can be
+    //                 read past their truncation point.  Day switching
+    //                 isn't bound here — it's an uncommon action; Cancel
+    //                 back to the grid, arrow to a different day, Fire to
+    //                 enter again.
+    // Fire / Execute: open the full-screen event-list popup so short
+    //                 events whose blocks were too small to fit a title
+    //                 inline can still be inspected.
+    // Cancel:         back to the grid (title scroll resets to 0).
     match btn {
         ButtonId::Up => {
             let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
@@ -300,12 +314,42 @@ fn dispatch_day_detail(btn: ButtonId) -> bool {
             DAY_VIEW_TITLE_SCROLL.store(cur.saturating_sub(TITLE_SCROLL_STEP), Ordering::Relaxed);
             return true;
         }
+        ButtonId::Fire | ButtonId::Execute => {
+            DAY_LIST_SCROLL.store(0, Ordering::Relaxed);
+            MODE.store(MODE_DAY_LIST, Ordering::Relaxed);
+            return true;
+        }
         ButtonId::Cancel => {
             DAY_VIEW_TITLE_SCROLL.store(0, Ordering::Relaxed);
             MODE.store(MODE_ACTIVE, Ordering::Relaxed);
-            return true;
+            true
         }
-        // Other buttons (Fire / Execute): swallow.
+    }
+}
+
+/// Day-list popup — full-screen scrollable agenda for the cursor day,
+/// with full (untruncated) event summaries.  Up / Down scroll one row
+/// at a time; Cancel returns to the timeline.  Other buttons are
+/// swallowed so the screen-nav doesn't take over while the popup is up.
+fn dispatch_day_list(btn: ButtonId) -> bool {
+    match btn {
+        ButtonId::Up => {
+            let cur = DAY_LIST_SCROLL.load(Ordering::Relaxed);
+            DAY_LIST_SCROLL.store(cur.saturating_sub(1), Ordering::Relaxed);
+            true
+        }
+        ButtonId::Down => {
+            let cur = DAY_LIST_SCROLL.load(Ordering::Relaxed);
+            // Loose cap — the renderer just leaves rows blank past the
+            // end of the day's events.  N_ALARMS is the absolute upper
+            // bound on events ever importable.
+            DAY_LIST_SCROLL.store(cur.saturating_add(1).min(N_ALARMS as u8), Ordering::Relaxed);
+            true
+        }
+        ButtonId::Cancel => {
+            MODE.store(MODE_DAY_DETAIL, Ordering::Relaxed);
+            true
+        }
         _ => true,
     }
 }
@@ -343,6 +387,7 @@ where
     let events = &events_buf[..n];
 
     match MODE.load(Ordering::Relaxed) {
+        MODE_DAY_LIST => draw_day_list(display, events),
         MODE_DAY_DETAIL => draw_day_detail(display, events),
         MODE_ACTIVE => draw_grid(display, events, true),
         _ => draw_grid(display, events, false),
@@ -581,8 +626,8 @@ where
     // 1-hour increments.
     const TL_TOP_Y: i32 = 40;
     const TL_BOT_Y: i32 = 148;
-    const PX_PER_HOUR: i32 = 12;
-    const HOURS_VISIBLE: i32 = (TL_BOT_Y - TL_TOP_Y) / PX_PER_HOUR; // = 9
+    const PX_PER_HOUR: i32 = 18;
+    const HOURS_VISIBLE: i32 = (TL_BOT_Y - TL_TOP_Y) / PX_PER_HOUR; // = 6
     const TL_AXIS_X: i32 = 20;
     const TL_LEFT_X: i32 = 22;
     const TL_RIGHT_X: i32 = 148;
@@ -635,16 +680,17 @@ where
     .into_styled(PrimitiveStyle::with_fill(BLACK))
     .draw(display)?;
 
-    // Hour labels + tick marks every hour (12 px between labels — fits
-    // a FONT_6X10 line cleanly).
-    let label_style = MonoTextStyle::new(&FONT_6X10, BLACK);
+    // Hour labels + tick marks every hour (18 px between labels — fits
+    // a FONT_6X13_BOLD line with comfortable headroom; the bold weight
+    // prints noticeably crisper on the e-paper's grey-ish whites).
+    let label_style = MonoTextStyle::new(&FONT_6X13_BOLD, BLACK);
     let right_align = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Right)
         .build();
     let mut h = tl_start_hour;
     while h <= tl_start_hour + HOURS_VISIBLE {
-        let label_y = TL_TOP_Y + (h - tl_start_hour) * PX_PER_HOUR + 4;
+        let label_y = TL_TOP_Y + (h - tl_start_hour) * PX_PER_HOUR + 6;
         let mut s: heapless::String<3> = heapless::String::new();
         let _ = core::fmt::write(&mut s, format_args!("{:02}", h));
         Text::with_text_style(
@@ -713,9 +759,11 @@ where
             .draw(display)?;
 
         // Title fits inside if the block (post-divider) is at least one
-        // text-line tall — FONT_6X10 needs the full 10 px or its bottom
-        // row would land in the divider gap.
-        if block_h >= 10 {
+        // text-line tall — FONT_6X13_BOLD needs the full 13 px or its
+        // bottom row would land in the divider gap.  At 18 px/hour
+        // that means 60-min events get titles; 30-min and 45-min events
+        // render as bare time markers.
+        if block_h >= 13 {
             let summary = alarm_summary_n(ev.slot as usize);
             // Apply the global title scroll offset.  `get(N..)` returns
             // None if N is past the end of the (NUL-trimmed) summary —
@@ -731,8 +779,8 @@ where
             );
             Text::with_text_style(
                 &row,
-                Point::new(TL_LEFT_X + 2, start_y + 5),
-                MonoTextStyle::new(&FONT_6X10, WHITE),
+                Point::new(TL_LEFT_X + 2, start_y + 8),
+                MonoTextStyle::new(&FONT_6X13_BOLD, WHITE),
                 inside_left,
             )
             .draw(display)?;
@@ -785,6 +833,123 @@ where
             centered,
         )
         .draw(display)?;
+    }
+
+    Ok(())
+}
+
+/// Day-list popup — full-screen scrollable list of every event on the
+/// cursor day with full (untruncated) summaries.  Reached from
+/// day-detail by Fire / Execute; see `MODE_DAY_LIST`.
+fn draw_day_list<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let cursor = ensure_cursor(events);
+    let today_ymd = today();
+
+    // ── Day header (same red bar / FONT_7X13_BOLD as day-detail) ─────────
+    let weekday = weekday_for(cursor.0, cursor.1, cursor.2) as usize;
+    let mon_idx = (cursor.1 as usize).saturating_sub(1).min(11);
+    let mut buf: heapless::String<24> = heapless::String::new();
+    let _ = core::fmt::write(
+        &mut buf,
+        format_args!(
+            "{} {} {} {}",
+            DAY_NAMES_LONG[weekday], cursor.2, MONTH_ABBR[mon_idx], cursor.0
+        ),
+    );
+
+    let is_today = matches!(today_ymd, Some(t) if t == cursor);
+    if is_today {
+        Rectangle::new(Point::new(0, 20), Size::new(152, 16))
+            .into_styled(PrimitiveStyle::with_fill(RED))
+            .draw(display)?;
+    }
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    let header_fg = if is_today { WHITE } else { RED };
+    Text::with_text_style(
+        &buf,
+        Point::new(76, 28),
+        MonoTextStyle::new(&FONT_7X13_BOLD, header_fg),
+        centered,
+    )
+    .draw(display)?;
+
+    // ── Event rows ───────────────────────────────────────────────────────
+    // Filter to cursor day; events arrive already sorted by start time.
+    let day_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
+        .iter()
+        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
+        .collect();
+
+    if day_evs.is_empty() {
+        Text::with_text_style(
+            "(no events)",
+            Point::new(76, 90),
+            MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+            centered,
+        )
+        .draw(display)?;
+        return Ok(());
+    }
+
+    const ROW_TOP_Y: i32 = 42;
+    const ROW_BOT_Y: i32 = 148;
+    const ROW_H: i32 = 14; // FONT_6X13_BOLD = 13 px + 1 px gap
+    const ROWS_VISIBLE: i32 = (ROW_BOT_Y - ROW_TOP_Y) / ROW_H; // = 7
+    const ROW_LEFT_X: i32 = 2;
+
+    // Clamp the stored scroll to a sensible window so the user can't
+    // wedge themselves on a fully-blank screen by spamming Down.
+    let scroll = DAY_LIST_SCROLL.load(Ordering::Relaxed) as i32;
+    let max_scroll = (day_evs.len() as i32 - ROWS_VISIBLE).max(0);
+    let scroll = scroll.min(max_scroll);
+    DAY_LIST_SCROLL.store(scroll as u8, Ordering::Relaxed);
+
+    let row_style = MonoTextStyle::new(&FONT_6X13_BOLD, BLACK);
+    let left_align = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Left)
+        .build();
+
+    for r in 0..ROWS_VISIBLE {
+        let idx = scroll + r;
+        if (idx as usize) >= day_evs.len() {
+            break;
+        }
+        let ev = day_evs[idx as usize];
+        let summary = alarm_summary_n(ev.slot as usize);
+        let mut row: heapless::String<48> = heapless::String::new();
+        let _ = core::fmt::write(
+            &mut row,
+            format_args!(
+                "{:02}:{:02}-{:02}:{:02} {}",
+                ev.hour,
+                ev.minute,
+                ev.end_hour,
+                ev.end_minute,
+                summary.as_str()
+            ),
+        );
+        let y = ROW_TOP_Y + r * ROW_H + ROW_H / 2;
+        Text::with_text_style(&row, Point::new(ROW_LEFT_X, y), row_style, left_align)
+            .draw(display)?;
+    }
+
+    // Scroll indicators on the right edge: ^ if rows hidden above,
+    // v if rows hidden below.
+    let arrow_style = MonoTextStyle::new(&FONT_6X10, BLACK);
+    if scroll > 0 {
+        Text::with_text_style("^", Point::new(146, ROW_TOP_Y + 4), arrow_style, centered)
+            .draw(display)?;
+    }
+    if (scroll + ROWS_VISIBLE) < day_evs.len() as i32 {
+        Text::with_text_style("v", Point::new(146, ROW_BOT_Y - 4), arrow_style, centered)
+            .draw(display)?;
     }
 
     Ok(())
