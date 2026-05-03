@@ -170,6 +170,11 @@ pub const SONG_IMPERIAL_MARCH_INDEX: u8 = 2;
 pub const SONG_SANDSTORM_INDEX: u8 = 3;
 pub const SONG_PINK_PANTHER_INDEX: u8 = 4;
 pub const SONG_TROLOLO_INDEX: u8 = 5;
+// Indices 6, 7, 8 are reserved for system-only sounds (PET_WARN,
+// FUNNY_ENDING, ALARM) — not exposed in the player music menu.
+pub const SONG_DAISY_BELL_INDEX: u8 = 9;
+pub const SONG_NOKIA_INDEX: u8 = 10;
+pub const SONG_OVER_THE_HORIZON_INDEX: u8 = 11;
 
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);

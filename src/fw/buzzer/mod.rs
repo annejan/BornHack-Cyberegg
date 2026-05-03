@@ -16,6 +16,9 @@ pub const MELODIES: &[&[Tone]] = &[
     melodies::PET_WARN,       // 6 — pet severity alert (not in the menu)
     melodies::FUNNY_ENDING,   // 7 — played when the pet leaves
     melodies::ALARM,          // 8 — watch-app wake alarm
+    melodies::DAISY_BELL,     // 9 — HAL 9000's parting song, player-pickable
+    melodies::NOKIA,          // 10 — Nokia Tune (Tárrega's Gran Vals)
+    melodies::OVER_THE_HORIZON, // 11 — Samsung's "Over the Horizon" hook
 ];
 
 /// Index of [`melodies::PET_WARN`] in [`MELODIES`].  Triggered by
