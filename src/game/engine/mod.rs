@@ -891,21 +891,26 @@ impl GameState {
         true
     }
 
-    /// Hibernate the pet — all progression freezes.
+    /// Hibernate the pet — all progression freezes.  Marks the
+    /// state for immediate persistence so a power-off before the
+    /// next 15-minute save tick still preserves the toggle.
     pub fn hibernate(&mut self) -> bool {
         if self.hibernating || self.phase == Phase::Gone {
             return false;
         }
         self.hibernating = true;
+        self.request_save();
         true
     }
 
     /// End hibernation — progression resumes from this moment.
+    /// Marks the state for immediate persistence (see `hibernate`).
     pub fn wake_from_hibernation(&mut self) -> bool {
         if !self.hibernating {
             return false;
         }
         self.hibernating = false;
+        self.request_save();
         true
     }
 
