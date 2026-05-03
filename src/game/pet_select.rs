@@ -68,7 +68,7 @@ pub fn cursor_down() {
 /// Confirm selection — starts the game with the chosen pet kind.
 pub fn confirm() {
     let idx = SELECTION.load(Ordering::Relaxed) as usize;
-    let kind = PetKind::ALL.get(idx).copied().unwrap_or(PetKind::Snail);
+    let kind = PetKind::ALL.get(idx).copied().unwrap_or(PetKind::Bartholomeus);
     let mode = MODE.load(Ordering::Relaxed);
 
     match mode {

@@ -33,11 +33,13 @@ const KV_NAMESPACE: &str = "sponsors";
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
 /// Build FAT12 8.3 filename for sponsor slide `index` (0–9).
-/// Format: `0200FF  PCX` where FF is the hex frame index.
+/// Format: `0300FF  PCX` where FF is the hex frame index.
+/// (Sponsors moved from prefix `02` to `03` when the slug pet was
+/// added — slug now occupies the `02xx` range.)
 fn sponsor_filename(index: u8) -> [u8; 11] {
     [
         b'0',
-        b'2',
+        b'3',
         b'0',
         b'0',
         HEX[(index >> 4) as usize],

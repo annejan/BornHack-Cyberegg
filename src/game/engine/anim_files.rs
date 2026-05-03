@@ -4,7 +4,8 @@
 //! # Filename format
 //!
 //! Each sprite file is named `PPAAFF.PCX` where:
-//!   - `PP` = pet kind prefix (hex): `00` = Snail, `01` = Cat, ...
+//!   - `PP` = pet kind prefix (hex): `00` = Bartholomeus
+//!     (formerly "Snail"), `01` = Cat, `02` = Slug, ...
 //!   - `AA` = animation ID (hex): `01` = Idle, `02` = Happy, ...
 //!   - `FF` = frame number (hex): `00`, `01`, `02`, ...
 //!
@@ -13,7 +14,8 @@
 //!
 //! The shared start screen uses `PP=00, AA=00, FF=00` (`000000  PCX`).
 //! The hatching egg animation uses `AA=14` with the pet-specific prefix
-//! (e.g. `001400  PCX` for snail egg, `011400  PCX` for cat egg).
+//! (e.g. `001400  PCX` for Bartholomeus egg, `011400  PCX` for cat
+//! egg, `021400  PCX` for slug egg).
 
 use super::PetKind;
 use super::to_display::DisplayAnim;
@@ -83,7 +85,7 @@ pub fn start_screen_filename() -> [u8; 11] {
     *b"000000  PCX"
 }
 
-/// Six menu icons live under prefix `0x03`, one sequence per icon:
+/// Six menu icons live under prefix `0x04`, one sequence per icon:
 ///
 /// | slot | sequence | name           | row, col   |
 /// |------|----------|----------------|------------|
@@ -97,12 +99,15 @@ pub fn start_screen_filename() -> [u8; 11] {
 /// `selected` selects between frame 0 (normal, drawn over the white
 /// background) and frame 1 (selected — replaces the firmware-drawn
 /// black selection circle entirely).
+///
+/// Menu icons moved from prefix `03` to `04` when the slug pet
+/// (`02xx`) and sponsors (`03xx`) shifted up.
 pub fn menu_icon_filename(slot: u8, selected: bool) -> [u8; 11] {
     let aa = slot;
     let ff: u8 = if selected { 1 } else { 0 };
     [
         b'0',
-        b'3',
+        b'4',
         HEX[(aa >> 4) as usize],
         HEX[(aa & 0xF) as usize],
         HEX[(ff >> 4) as usize],

@@ -30,28 +30,35 @@ pub use to_display::DisplayAnim;
 #[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
 #[repr(u8)]
 pub enum PetKind {
-    Snail = 0,
+    /// Pet kind 0 — formerly named `Snail`, renamed to Bartholomeus
+    /// when the snail artwork was reworked.  Persisted byte value
+    /// remains 0 so existing saves still load.
+    Bartholomeus = 0,
     Cat = 1,
+    Slug = 2,
 }
 
 impl PetKind {
     pub fn from_u8(v: u8) -> Self {
         match v {
             1 => Self::Cat,
-            _ => Self::Snail,
+            2 => Self::Slug,
+            _ => Self::Bartholomeus,
         }
     }
 
     /// Human-readable name for the selection screen and Unicorn Realm.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Snail => "Snail",
+            Self::Bartholomeus => "Bartholomeus",
             Self::Cat => "Cat",
+            Self::Slug => "Slug",
         }
     }
 
     /// All available pet kinds, in order.
-    pub const ALL: &'static [PetKind] = &[PetKind::Snail, PetKind::Cat];
+    pub const ALL: &'static [PetKind] =
+        &[PetKind::Bartholomeus, PetKind::Cat, PetKind::Slug];
 }
 
 /// Lifecycle phase of the pet.
@@ -1301,7 +1308,8 @@ impl GameState {
     /// Returns `None` if the buffer is too short.
     #[allow(unused_assignments)]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        // Accept old 65-byte saves (default to Snail) and new 66-byte saves.
+        // Accept old 65-byte saves (default to Bartholomeus, formerly
+        // "Snail") and new 66-byte saves with the explicit pet-kind byte.
         if b.len() < SAVE_SIZE - 1 {
             return None;
         }
@@ -1371,7 +1379,7 @@ impl GameState {
         let pet_kind = if i < b.len() {
             PetKind::from_u8(r8!())
         } else {
-            PetKind::Snail
+            PetKind::Bartholomeus
         };
 
         Some(Self {
@@ -1482,9 +1490,9 @@ impl PetRecord {
         } else if buf.len() >= 25 {
             // Old 25-byte format without pet_kind.
             name.copy_from_slice(&buf[12..24]);
-            PetKind::Snail
+            PetKind::Bartholomeus
         } else {
-            PetKind::Snail
+            PetKind::Bartholomeus
         };
         Self {
             generation: u16::from_le_bytes([buf[0], buf[1]]),
@@ -1534,7 +1542,7 @@ impl PetRealm {
                 vitality: 0,
                 curiosity: 0,
                 resilience: 0,
-                pet_kind: PetKind::Snail,
+                pet_kind: PetKind::Bartholomeus,
                 name: [0; PET_NAME_MAX],
                 name_len: 0,
             }; REALM_MAX_PETS],

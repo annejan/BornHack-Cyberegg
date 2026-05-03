@@ -30,12 +30,14 @@ pub fn dispatch(btn: ButtonId) -> bool {
     }
 
     // ── Pet selection screen ────────────────────────────────────────────
+    // Cancel is intentionally ignored here — picking a pet is mandatory
+    // for the game to start, so closing the screen without a confirmed
+    // selection would leave the game in limbo.
     if super::pet_select::is_active() {
         match btn {
             ButtonId::Up => super::pet_select::cursor_up(),
             ButtonId::Down => super::pet_select::cursor_down(),
             ButtonId::Fire | ButtonId::Execute => super::pet_select::confirm(),
-            ButtonId::Cancel => super::pet_select::close(),
             _ => {}
         }
         return true;

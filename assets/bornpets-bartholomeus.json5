@@ -13,13 +13,13 @@
   // IMPORTANT: finalise this config before starting artwork.
   // Adding or reordering assets shifts all cell positions in the PNG.
 
-  image: "bornpets-sprites.png",
+  image: "bornpets-sprites-bartholomeus.png",
   output: "src/fw/game/sprites.rs",
   format: "rle",
 
   assets: [
     // ─────────────────────────────────────────────────────────────────
-    // A1 — SNAIL IDLE STATE SPRITES
+    // A1 — bartho IDLE STATE SPRITES
     // Up to 5 frames each.  Frame 1 = base pose, remaining frames =
     // subtle variation (antenna twitch, shell shimmer, eye blink).
     // These map to DisplayAnim::Idle plus the engine stats.
@@ -35,7 +35,7 @@
 
     {
       type: "sequence",
-      name: "snail_idle_neutral",
+      name: "bartho_idle_neutral",
       comment: "DisplayAnim::Idle — default resting state.  Gentle antenna sway.",
       frames: 5,
       frame_width: 152,
@@ -43,7 +43,7 @@
     },
     {
       type: "sequence",
-      name: "snail_happy",
+      name: "bartho_happy",
       comment: "DisplayAnim::Idle when happy > 75%.  Bright eyes, antennae up, slight shell glow.",
       frames: 5,
       frame_width: 152,
@@ -51,14 +51,14 @@
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A2 — SNAIL CRITICAL STATE SPRITES
+    // A2 — bartho CRITICAL STATE SPRITES
     // Up to 5 frames each.  Shown when a stat crosses the critical
     // threshold.  Maps to DisplayAnim::Critical* variants.
     // ─────────────────────────────────────────────────────────────────
 
     {
       type: "sequence",
-      name: "snail_critical_sick",
+      name: "bartho_critical_sick",
       comment: "DisplayAnim::CriticalSick — unhealthy.  Pale, droopy eyes, shell dull.  Sweat drops.",
       frames: 5,
       frame_width: 152,
@@ -66,7 +66,7 @@
     },
     {
       type: "sequence",
-      name: "snail_critical_tired",
+      name: "bartho_critical_tired",
       comment: "DisplayAnim::CriticalTired — exhausted.  Heavy eyelids, sagging antennae, yawning.",
       frames: 5,
       frame_width: 152,
@@ -74,7 +74,7 @@
     },
     {
       type: "sequence",
-      name: "snail_critical_hungry",
+      name: "bartho_critical_hungry",
       comment: "DisplayAnim::CriticalHungry — starving.  Looking around for food, hollow expression.",
       frames: 5,
       frame_width: 152,
@@ -82,7 +82,7 @@
     },
     {
       type: "sequence",
-      name: "snail_critical_drained",
+      name: "bartho_critical_drained",
       comment: "DisplayAnim::CriticalDrained — burnt out / uninspired.  Slumped, lifeless posture, dull shell.",
       frames: 5,
       frame_width: 152,
@@ -90,7 +90,7 @@
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A2b — SNAIL WARNING STATE SPRITES
+    // A2b — bartho WARNING STATE SPRITES
     // Up to 5 frames each.  Shown when a stat crosses the warning
     // threshold (below critical).  Pet looks uncomfortable — player
     // should act soon but it's not yet urgent.
@@ -99,7 +99,7 @@
 
     {
       type: "sequence",
-      name: "snail_warning_sick",
+      name: "bartho_warning_sick",
       comment: "DisplayAnim::WarningSick — slightly unwell.  Slower movement, occasional sniffle.",
       frames: 5,
       frame_width: 152,
@@ -107,7 +107,7 @@
     },
     {
       type: "sequence",
-      name: "snail_warning_tired",
+      name: "bartho_warning_tired",
       comment: "DisplayAnim::WarningTired — getting sleepy.  Occasional yawn, drooping antennae.",
       frames: 5,
       frame_width: 152,
@@ -115,7 +115,7 @@
     },
     {
       type: "sequence",
-      name: "snail_warning_hungry",
+      name: "bartho_warning_hungry",
       comment: "DisplayAnim::WarningHungry — peckish.  Glancing around, antenna perked toward food direction.",
       frames: 5,
       frame_width: 152,
@@ -123,7 +123,7 @@
     },
     {
       type: "sequence",
-      name: "snail_warning_drained",
+      name: "bartho_warning_drained",
       comment: "DisplayAnim::WarningDrained — listless.  Reduced movement, shell slightly duller.",
       frames: 5,
       frame_width: 152,
@@ -131,7 +131,7 @@
     },
     {
       type: "sequence",
-      name: "snail_warning_miserable",
+      name: "bartho_warning_miserable",
       comment: "DisplayAnim::WarningMiserable — unhappy.  Withdrawn into shell slightly, sad expression.",
       frames: 5,
       frame_width: 152,
@@ -139,52 +139,52 @@
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A3 — SNAIL ACTIVITY SPRITES
+    // A3 — bartho ACTIVITY SPRITES
     // Up to 5 frames each.  Shown during active player actions.
     // Maps to DisplayAnim::Feeding/Healing/Relaxing/Playing.
     // ─────────────────────────────────────────────────────────────────
 
     {
       type: "sequence",
-      name: "snail_feeding",
-      comment: "DisplayAnim::Feeding — feed action.  F1: food appears.  F2: snail approaches.  F3: eating.  F4: satisfied.  F5: food gone.",
+      name: "bartho_feeding",
+      comment: "DisplayAnim::Feeding — feed action.  F1: food appears.  F2: bartho approaches.  F3: eating.  F4: satisfied.  F5: food gone.",
       frames: 5,
       frame_width: 152,
       frame_height: 75,
     },
     {
       type: "sequence",
-      name: "snail_healing",
-      comment: "DisplayAnim::Healing — heal action.  F1: medicine appears.  F2: snail takes it.  F3: glow effect.  F4: recovering.  F5: healthy again.",
+      name: "bartho_healing",
+      comment: "DisplayAnim::Healing — heal action.  F1: medicine appears.  F2: bartho takes it.  F3: glow effect.  F4: recovering.  F5: healthy again.",
       frames: 5,
       frame_width: 152,
       frame_height: 75,
     },
     {
       type: "sequence",
-      name: "snail_relaxing",
-      comment: "DisplayAnim::Relaxing — relax action.  F1: snail settles in.  F2: relaxed pose.  F3: content expression.  F4: slightly drowsy.  F5: refreshed.",
+      name: "bartho_relaxing",
+      comment: "DisplayAnim::Relaxing — relax action.  F1: bartho settles in.  F2: relaxed pose.  F3: content expression.  F4: slightly drowsy.  F5: refreshed.",
       frames: 5,
       frame_width: 152,
       frame_height: 75,
     },
     {
       type: "sequence",
-      name: "snail_playing",
-      comment: "DisplayAnim::Playing — play action.  F1: toy appears.  F2: snail investigates.  F3: playing.  F4: excitement.  F5: happy, miserable zeroed.",
+      name: "bartho_playing",
+      comment: "DisplayAnim::Playing — play action.  F1: toy appears.  F2: bartho investigates.  F3: playing.  F4: excitement.  F5: happy, miserable zeroed.",
       frames: 5,
       frame_width: 152,
       frame_height: 75,
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A4 — SNAIL SLEEPING
+    // A4 — bartho SLEEPING
     // Up to 5 frames.  Maps to DisplayAnim::Sleeping.
     // ─────────────────────────────────────────────────────────────────
 
     {
       type: "sequence",
-      name: "snail_sleeping",
+      name: "bartho_sleeping",
       comment: "DisplayAnim::Sleeping — eyes closed, Zzz, gentle shell shimmer.  Subtle breath movement between frames.",
       frames: 5,
       frame_width: 152,
@@ -192,14 +192,14 @@
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A5 — SNAIL LEAVING SEQUENCE
+    // A5 — bartho LEAVING SEQUENCE
     // Up to 5 frames.  Maps to DisplayAnim::Leaving.
     // Urgency increases with maxed_count (1–4).
     // ─────────────────────────────────────────────────────────────────
 
     {
       type: "sequence",
-      name: "snail_leaving",
+      name: "bartho_leaving",
       comment: "DisplayAnim::Leaving — pet is about to leave.  Increasingly urgent: F1: looking away.  F2: turning.  F3: moving toward exit.  F4: almost gone.  F5: final glance back.",
       frames: 5,
       frame_width: 152,
@@ -207,14 +207,14 @@
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A6 — SNAIL FAREWELL / GONE
+    // A6 — bartho FAREWELL / GONE
     // Up to 5 frames.  Maps to DisplayAnim::Gone.
     // Peaceful departure — not distressing.
     // ─────────────────────────────────────────────────────────────────
 
     {
       type: "sequence",
-      name: "snail_gone",
+      name: "bartho_gone",
       comment: "DisplayAnim::Gone — pet has left.  F1: glowing softly.  F2: rising.  F3: sparkles.  F4: fading.  F5: empty scene, stars remain.",
       frames: 5,
       frame_width: 152,
@@ -222,14 +222,14 @@
     },
 
     // ─────────────────────────────────────────────────────────────────
-    // A7 — SNAIL HIBERNATING
+    // A7 — bartho HIBERNATING
     // Up to 5 frames.  Maps to DisplayAnim::Hibernating.
     // Overlay on top of last shown state.
     // ─────────────────────────────────────────────────────────────────
 
     {
       type: "sequence",
-      name: "snail_hibernating",
+      name: "bartho_hibernating",
       comment: "DisplayAnim::Hibernating — frozen overlay.  Snowflake or frost effect, pet still visible underneath.  Subtle shimmer between frames.",
       frames: 5,
       frame_width: 152,

@@ -341,7 +341,7 @@ fn run_profile(policy: &dyn Policy, seed: u64, max_days: u32) -> SimResult {
     let ticks_per_day: u32 = 8640;
     let max_ticks = max_days * ticks_per_day;
 
-    let mut state = GameState::new_egg(seed, PetKind::Snail);
+    let mut state = GameState::new_egg(seed, PetKind::Bartholomeus);
     let mut tick: u32 = 0;
     let mut action_count: u32 = 0;
     let mut steps: u32 = 0;

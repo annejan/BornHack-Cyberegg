@@ -491,12 +491,12 @@ pub fn new_generation(kind: super::engine::PetKind) {
     }
 }
 
-/// Get the current pet's kind (defaults to Snail if no game).
+/// Get the current pet's kind (defaults to Bartholomeus if no game).
 pub fn pet_kind() -> super::engine::PetKind {
     let state = unsafe { (*GAME.get()).as_ref() };
     match state {
         Some(s) => s.pet_kind,
-        None => super::engine::PetKind::Snail,
+        None => super::engine::PetKind::Bartholomeus,
     }
 }
 
