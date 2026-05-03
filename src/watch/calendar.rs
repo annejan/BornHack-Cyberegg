@@ -66,6 +66,15 @@ const MAX_EVENTS: usize = N_ALARMS;
 /// (or the current hour for today) and replaced in-place.
 static DAY_VIEW_TOP_HOUR: AtomicU8 = AtomicU8::new(0xFF);
 
+/// Horizontal scroll offset (in chars) applied to every event title in
+/// day-detail.  The "HH:MM " prefix stays pinned; only the summary text
+/// scrolls so the user can still tell which event is which.  Stepped by
+/// Right (forward) / Left (back) in 3-char increments, capped at 24.
+/// Reset to 0 on Cancel.
+static DAY_VIEW_TITLE_SCROLL: AtomicU8 = AtomicU8::new(0);
+const TITLE_SCROLL_STEP: u8 = 3;
+const TITLE_SCROLL_MAX: u8 = 24;
+
 // ── Layout ──────────────────────────────────────────────────────────────────
 
 const MONTH_LABEL_Y: i32 = 25; // baseline middle
@@ -256,14 +265,14 @@ fn dispatch_active(btn: ButtonId) -> bool {
 }
 
 fn dispatch_day_detail(btn: ButtonId) -> bool {
-    // Up/Down: scroll the timeline by an hour.
-    // Left/Right: jump to prev/next day (day-view auto-scrolls again).
-    // Cancel: back to the grid.
-    let cur = (
-        CURSOR_YEAR.load(Ordering::Relaxed),
-        CURSOR_MONTH.load(Ordering::Relaxed),
-        CURSOR_DAY.load(Ordering::Relaxed),
-    );
+    // Up/Down:    scroll the timeline by an hour.
+    // Left/Right: scroll all event titles left/right in 3-char steps so
+    //             long titles like "Daily Volunteer Meeting" can be
+    //             read past their truncation point.  Day switching
+    //             isn't bound here — it's an uncommon action; Cancel
+    //             back to the grid, arrow to a different day, Fire to
+    //             enter again.
+    // Cancel:     back to the grid (title scroll resets to 0).
     match btn {
         ButtonId::Up => {
             let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
@@ -280,21 +289,23 @@ fn dispatch_day_detail(btn: ButtonId) -> bool {
             DAY_VIEW_TOP_HOUR.store(resolved.saturating_add(1).min(23), Ordering::Relaxed);
             return true;
         }
-        ButtonId::Left if cur.0 != 0 => {
-            DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
-            set_cursor(add_days(cur.0, cur.1, cur.2, -1));
+        ButtonId::Right => {
+            let cur = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed);
+            let next = cur.saturating_add(TITLE_SCROLL_STEP).min(TITLE_SCROLL_MAX);
+            DAY_VIEW_TITLE_SCROLL.store(next, Ordering::Relaxed);
             return true;
         }
-        ButtonId::Right if cur.0 != 0 => {
-            DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
-            set_cursor(add_days(cur.0, cur.1, cur.2, 1));
+        ButtonId::Left => {
+            let cur = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed);
+            DAY_VIEW_TITLE_SCROLL.store(cur.saturating_sub(TITLE_SCROLL_STEP), Ordering::Relaxed);
             return true;
         }
         ButtonId::Cancel => {
+            DAY_VIEW_TITLE_SCROLL.store(0, Ordering::Relaxed);
             MODE.store(MODE_ACTIVE, Ordering::Relaxed);
             return true;
         }
-        // Other buttons: swallow.
+        // Other buttons (Fire / Execute): swallow.
         _ => true,
     }
 }
@@ -654,6 +665,16 @@ where
         .alignment(Alignment::Left)
         .build();
 
+    // Wall-clock-now in day-minutes, but only when the cursor day is
+    // actually today — otherwise there's nothing to highlight as
+    // "current".  Reused below for both the per-block colour and the
+    // horizontal "now" line so we only hit `wall_clock()` once.
+    let now_min_today: Option<i32> = if is_today {
+        super::clock::wall_clock().map(|c| c.hour as i32 * 60 + c.minute as i32)
+    } else {
+        None
+    };
+
     // Event blocks — only those that intersect the visible window.
     for ev in &day_evs {
         let ev_start_min = ev.hour as i32 * 60 + ev.minute as i32;
@@ -668,19 +689,45 @@ where
         let end_y = y_for_time(ev.end_hour, ev.end_minute);
         // Min 4 px tall so zero-duration events are still visible.
         let height = (end_y - start_y).max(4) as u32;
+        // Carve 1 px off the bottom of every block so back-to-back
+        // events (one ending at the same minute the next starts) don't
+        // fuse into a single tall rectangle — the gap reads as a
+        // hairline divider.  Standalone blocks lose nothing visible
+        // since the gap blends into the white timeline background.
+        let block_h = height.saturating_sub(1).max(1);
         let block_w = (TL_RIGHT_X - TL_LEFT_X) as u32;
 
-        Rectangle::new(Point::new(TL_LEFT_X, start_y), Size::new(block_w, height))
-            .into_styled(PrimitiveStyle::with_fill(BLACK))
+        // Currently-happening events render in red — start-inclusive,
+        // end-exclusive ([start, end)) so a 13:00–14:00 block is
+        // highlighted from 13:00:00 up to but not including 14:00:00,
+        // matching the standard calendar convention.  Zero-duration
+        // markers (start == end) never highlight as current.
+        let is_now = matches!(
+            now_min_today,
+            Some(now) if ev_start_min <= now && now < ev_end_min,
+        );
+        let fill = if is_now { RED } else { BLACK };
+
+        Rectangle::new(Point::new(TL_LEFT_X, start_y), Size::new(block_w, block_h))
+            .into_styled(PrimitiveStyle::with_fill(fill))
             .draw(display)?;
 
-        // Title fits inside if the block is at least one text-line tall.
-        if height >= 10 {
+        // Title fits inside if the block (post-divider) is at least one
+        // text-line tall — FONT_6X10 needs the full 10 px or its bottom
+        // row would land in the divider gap.
+        if block_h >= 10 {
             let summary = alarm_summary_n(ev.slot as usize);
+            // Apply the global title scroll offset.  `get(N..)` returns
+            // None if N is past the end of the (NUL-trimmed) summary —
+            // fine, the title row just renders as the bare time prefix
+            // for that event, which still tells the user what's where
+            // and is the cue to press Execute back.
+            let scroll = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed) as usize;
+            let scrolled = summary.as_str().get(scroll..).unwrap_or("");
             let mut row: heapless::String<48> = heapless::String::new();
             let _ = core::fmt::write(
                 &mut row,
-                format_args!("{:02}:{:02} {}", ev.hour, ev.minute, summary.as_str()),
+                format_args!("{:02}:{:02} {}", ev.hour, ev.minute, scrolled),
             );
             Text::with_text_style(
                 &row,
@@ -693,20 +740,21 @@ where
     }
 
     // "Now" indicator — red horizontal line across the events area.
-    if is_today {
-        if let Some(c) = super::clock::wall_clock() {
-            let now_min = c.hour as i32 * 60 + c.minute as i32;
-            let win_start_min = tl_start_hour * 60;
-            let win_end_min = win_start_min + HOURS_VISIBLE * 60;
-            if (win_start_min..=win_end_min).contains(&now_min) {
-                let now_y = y_for_time(c.hour, c.minute);
-                Rectangle::new(
-                    Point::new(TL_AXIS_X, now_y),
-                    Size::new((TL_RIGHT_X - TL_AXIS_X) as u32, 1),
-                )
-                .into_styled(PrimitiveStyle::with_fill(RED))
-                .draw(display)?;
-            }
+    // Mostly invisible inside a currently-happening (red) block, but
+    // still useful as a marker during gap time between events.
+    if let Some(now_min) = now_min_today {
+        let win_start_min = tl_start_hour * 60;
+        let win_end_min = win_start_min + HOURS_VISIBLE * 60;
+        if (win_start_min..=win_end_min).contains(&now_min) {
+            let now_h = (now_min / 60) as u8;
+            let now_m = (now_min % 60) as u8;
+            let now_y = y_for_time(now_h, now_m);
+            Rectangle::new(
+                Point::new(TL_AXIS_X, now_y),
+                Size::new((TL_RIGHT_X - TL_AXIS_X) as u32, 1),
+            )
+            .into_styled(PrimitiveStyle::with_fill(RED))
+            .draw(display)?;
         }
     }
 
