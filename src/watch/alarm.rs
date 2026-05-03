@@ -198,8 +198,9 @@ static ALARM_ENABLED: [AtomicBool; N_ALARMS] = [const { AtomicBool::new(false) }
 /// Day-of-week mask: bit 0 = Mon .. bit 6 = Sun. Default = every day.
 static ALARM_DAYS: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0b0111_1111) }; N_ALARMS];
 /// Index into [`crate::fw::buzzer::MELODIES`] used as the alarm ringtone.
-/// Default: 8 = the dedicated `ALARM` beep-beep pattern.
-static ALARM_MELODY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(8) }; N_ALARMS];
+/// Default: the dedicated `ALARM` beep-beep pattern.
+static ALARM_MELODY: [AtomicU8; N_ALARMS] =
+    [const { AtomicU8::new(crate::fw::buzzer::ALARM_INDEX as u8) }; N_ALARMS];
 /// Optional one-shot date.  When `year` is non-zero, the slot fires only on
 /// the exact matching `year-month-day` (and then self-disables) — used for
 /// calendar-event alarms.  `year == 0` means recurring per the day mask.
@@ -226,17 +227,20 @@ static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
 
 /// Curated alarm-tone choices: (menu label, melody index).
 /// Order is the cycle order in the Settings → Alarm → Tone stepper.
+/// Indices reference [`crate::fw::buzzer::MELODIES`] via the named
+/// constants in `crate` (player-pickable songs) and
+/// `crate::fw::buzzer` (system-only sounds like `ALARM`).
 const ALARM_TONES: &[(&str, u8)] = &[
-    ("Tone: Beep", 8),
-    ("Tone: Imp. March", 2),
-    ("Tone: Rickroll", 1),
-    ("Tone: Pink Pant.", 4),
-    ("Tone: Sandstorm", 3),
-    ("Tone: Startup", 0),
-    ("Tone: Trololo", 5),
-    ("Tone: Daisy Bell", 9),
-    ("Tone: Nokia", 10),
-    ("Tone: Samsung", 11),
+    ("Tone: Beep", crate::fw::buzzer::ALARM_INDEX as u8),
+    ("Tone: Imp. March", crate::SONG_IMPERIAL_MARCH_INDEX),
+    ("Tone: Rickroll", crate::SONG_RICKROLL_INDEX),
+    ("Tone: Pink Pant.", crate::SONG_PINK_PANTHER_INDEX),
+    ("Tone: Sandstorm", crate::SONG_SANDSTORM_INDEX),
+    ("Tone: Startup", crate::SONG_STARTUP_INDEX),
+    ("Tone: Trololo", crate::SONG_TROLOLO_INDEX),
+    ("Tone: Daisy Bell", crate::SONG_DAISY_BELL_INDEX),
+    ("Tone: Nokia", crate::SONG_NOKIA_INDEX),
+    ("Tone: Samsung", crate::SONG_OVER_THE_HORIZON_INDEX),
 ];
 
 #[inline]

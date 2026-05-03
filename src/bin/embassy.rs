@@ -595,12 +595,15 @@ async fn wait_display_event(
             )
             .await
             {
-                Either::Second(Either4::First(_)) => return true, // sprite timer
-                Either::First(Either3::First(_)) => return false,
-                Either::First(Either3::Second(_)) => return false,
-                Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
-                Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
-                Either::First(Either3::Third(_)) if active_screen == SCREEN_TOKEN => return false,
+                Either::Second(Either4::First(_))  => return true,  // sprite timer
+                Either::First(Either3::First(_))   => return false, // button / toast
+                Either::First(Either3::Second(_))  => return false, // BLE pairing
+                Either::First(Either3::Third(_))                    // minute tick
+                    if active_screen == SCREEN_MAIN => return false,
+                Either::First(Either3::Third(_))                    // minute tick
+                    if active_screen == SCREEN_WATCH => return false,
+                Either::First(Either3::Third(_))                    // minute tick
+                    if active_screen == SCREEN_TOKEN => return false,
                 // Calendar is intentionally left off the minute-tick
                 // redraw list.  The fast-LUT refresh path doesn't update
                 // the red plane (today highlight, event dots, day-view
@@ -609,13 +612,12 @@ async fn wait_display_event(
                 // while still costing an EPD update.  Calendar redraws
                 // only on button input — the user navigating in or
                 // pressing anything will pick up wall-clock changes.
-                Either::Second(Either4::Second(_)) if active_screen == SCREEN_PM => return false,
-                Either::Second(Either4::Third(_)) if active_screen == SCREEN_CHANNEL => {
-                    return false;
-                }
-                Either::Second(Either4::Fourth(_)) if active_screen == SCREEN_ADVERT => {
-                    return false;
-                }
+                Either::Second(Either4::Second(_))                  // PM activity
+                    if active_screen == SCREEN_PM => return false,
+                Either::Second(Either4::Third(_))                   // LoRa msg
+                    if active_screen == SCREEN_CHANNEL => return false,
+                Either::Second(Either4::Fourth(_))                  // self-advert
+                    if active_screen == SCREEN_ADVERT => return false,
                 _ => {}
             }
         }
@@ -627,12 +629,15 @@ async fn wait_display_event(
         )
         .await
         {
-            Either::Second(_) => return true, // sprite timer
-            Either::First(Either3::First(_)) => return false,
-            Either::First(Either3::Second(_)) => return false,
-            Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
-            Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
-            Either::First(Either3::Third(_)) if active_screen == SCREEN_TOKEN => return false,
+            Either::Second(_)                  => return true,  // sprite timer
+            Either::First(Either3::First(_))   => return false, // button / toast
+            Either::First(Either3::Second(_))  => return false, // BLE pairing
+            Either::First(Either3::Third(_))                    // minute tick
+                if active_screen == SCREEN_MAIN => return false,
+            Either::First(Either3::Third(_))                    // minute tick
+                if active_screen == SCREEN_WATCH => return false,
+            Either::First(Either3::Third(_))                    // minute tick
+                if active_screen == SCREEN_TOKEN => return false,
             // Calendar deliberately ignores the minute tick — see the
             // matching arm in the mesh-feature branch above for why.
             _ => {}
