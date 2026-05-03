@@ -81,7 +81,7 @@ fn parse_hex_pair(hi: u8, lo: u8) -> Option<u8> {
 }
 
 /// Discover PCX files on the FAT12 partition and record per-animation
-/// presence in [`ANIM_PRESENCE`].  Walks the entire directory — no
+/// presence in `ANIM_PRESENCE`.  Walks the entire directory — no
 /// catalogue size cap.
 #[cfg(feature = "embassy-base")]
 pub async fn init() {
@@ -138,7 +138,8 @@ pub async fn init() {
 ///
 /// In the simulator there's no FAT12 to scan, but PCX files are
 /// resolved at draw time from `assets/to-badge/` via
-/// [`blit_pcx_sim`].  We therefore report `u8::MAX` so the firmware
+/// `blit_pcx_sim` (defined below, gated on the `simulator` feature).
+/// We therefore report `u8::MAX` so the firmware
 /// "no sprites" fallback message doesn't fire under `make sim`; if a
 /// specific PCX is actually missing the simulator silently shows
 /// nothing in the pet area, matching the embedded fail-soft.
@@ -305,7 +306,7 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 // Blit
 // ---------------------------------------------------------------------------
 
-/// Blit a PCX file (by [`FileRef`]) onto the display at position (`x`, `y`).
+/// Blit a PCX file (by [`fat12::FileRef`]) onto the display at position (`x`, `y`).
 ///
 /// Streams the PCX from flash through a small sliding buffer, RLE-decodes
 /// one scanline at a time, and writes 2bpp pixels into the black and red

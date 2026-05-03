@@ -8,7 +8,7 @@
 //! - **LoRa radio** — Semtech SX1262 over SPI2, MeshCore protocol.
 //! - **BLE** — softdevice via `nrf-sdc` / `trouble-host`.
 //! - **NFC** — built-in NFCT controller; emulates an ISO 14443-A
-//!   Type 4 tag with authenticated station commands ([`signed_channel`]).
+//!   Type 4 tag with authenticated station commands (`signed_channel`).
 //!
 //! # Bin targets (`src/bin/`)
 //!
@@ -39,21 +39,21 @@
 //! - `fw` — driver-layer code: EPD, buzzer, battery ADC, button matrix,
 //!   LEDs, NFC tag, LoRa radio, BLE companion, MeshCore plumbing, FAT12
 //!   reader, ekv-backed kv store, sponsors slideshow.  Embassy only.
-//! - [`game`] — virtual-pet lifecycle (hunger / inspiration / health /
+//! - `game` — virtual-pet lifecycle (hunger / inspiration / health /
 //!   tiredness), mini-games (maze, black-hole, NIM, lights-out,
 //!   tic-tac-toe, sprite engine), station bonuses, action-feedback
 //!   toasts.  Gated by `game`.
-//! - [`watch`] — Casio-style digital + analog clock face, alarms with
+//! - `watch` — Casio-style digital + analog clock face, alarms with
 //!   per-day mask and weekly repeats, multi-slot alarm state.  Gated by
 //!   `watch`.
-//! - [`menu`] — declarative `MenuItem` / `MenuItemKind` items, the icon-
+//! - `menu` — declarative `MenuItem` / `MenuItemKind` items, the icon-
 //!   grid `DisplayState`, and the scrolling 3-row menu renderer.  Always
 //!   built.
-//! - [`text_entry`] — full-screen quadrant-style on-screen keyboard for
+//! - `text_entry` — full-screen quadrant-style on-screen keyboard for
 //!   text input (node names, channel replies, etc.).
-//! - [`signed_channel`] — Ed25519 challenge/response verification used by
+//! - `signed_channel` — Ed25519 challenge/response verification used by
 //!   the NFC station-command flow.  Gated by `signed-channel`.
-//! - [`ui`] — common drawing helpers (frame, layout constants).
+//! - `ui` — common drawing helpers (frame, layout constants).
 //!
 //! # Bootloader
 //!

@@ -7,7 +7,7 @@ use embassy_sync::once_lock::OnceLock;
 
 static DEVICE_ID: OnceLock<[u8; 2]> = OnceLock::new();
 
-/// Read the two-byte ID from FICR DEVICEADDR[0] and cache it.  Call once at
+/// Read the two-byte ID from FICR DEVICEADDR\[0\] and cache it.  Call once at
 /// startup.
 pub fn init() {
     let lo = embassy_nrf::pac::FICR.deviceaddr(0).read();
@@ -23,7 +23,7 @@ pub fn get() -> [u8; 2] {
 
 /// Return the 6-byte BLE random static address derived from FICR DEVICEADDR.
 ///
-/// FICR DEVICEADDR[0] holds the lower 32 bits and DEVICEADDR[1] the upper 16
+/// FICR DEVICEADDR\[0\] holds the lower 32 bits and DEVICEADDR\[1\] the upper 16
 /// bits of the factory-assigned 48-bit address.  The top 2 bits of byte 5 are
 /// forced to `0b11` as required for a random static address (BT Core Spec
 /// §1.3.2.1).

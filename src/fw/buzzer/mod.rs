@@ -204,7 +204,7 @@ macro_rules! tone {
 /// per-half-period timer wakes needed. For each note `set_period` loads the
 /// correct COUNTERTOP, a 50% `DutyCycle` is set, and `enable()`/`disable()`
 /// bookend the `Timer::after_millis` wait. The idle pin level is LOW
-/// (configured via [`SimpleConfig`]), so silence and rests keep the pin low.
+/// (configured via [`embassy_nrf::pwm::SimpleConfig`]), so silence and rests keep the pin low.
 pub struct Buzzer<'d> {
     pwm: SimplePwm<'d>,
 }

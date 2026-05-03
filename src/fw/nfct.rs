@@ -269,26 +269,39 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
         "signed: verify ok, plaintext len={=usize}",
         plaintext.len()
     );
-    match crate::game::station::apply(plaintext) {
-        Some(toast) => {
-            // Pull the user back to the game screen so the bonus toast
-            // is actually visible — they may have been on Watch /
-            // Channels / etc. when they tapped.  `show_toast` itself
-            // wakes the display loop via TOAST_SIGNAL.
-            crate::DISPLAY_STATE.lock(|cell| {
-                cell.borrow_mut().set_active_screen(crate::SCREEN_GAME);
-            });
-            crate::game::show_toast(toast);
-            let _ = out.extend_from_slice(&[0x90, 0x00]);
+    // The signed APDU's only payload kind today is a station command
+    // dispatched into the game lifecycle.  In an `embassy-mesh`-only
+    // build (signed-channel: yes, game: no) there's nothing to apply
+    // it to, so we acknowledge the verify and respond 6A 82 (referenced
+    // data not found) rather than hard-failing to compile.
+    #[cfg(feature = "game")]
+    {
+        match crate::game::station::apply(plaintext) {
+            Some(toast) => {
+                // Pull the user back to the game screen so the bonus toast
+                // is actually visible — they may have been on Watch /
+                // Channels / etc. when they tapped.  `show_toast` itself
+                // wakes the display loop via TOAST_SIGNAL.
+                crate::DISPLAY_STATE.lock(|cell| {
+                    cell.borrow_mut().set_active_screen(crate::SCREEN_GAME);
+                });
+                crate::game::show_toast(toast);
+                let _ = out.extend_from_slice(&[0x90, 0x00]);
+            }
+            None => {
+                let can_use = crate::game::lifecycle::can_use_station();
+                info!(
+                    "signed: station command rejected (can_use_station={=bool}), plaintext={:02x}",
+                    can_use, plaintext
+                );
+                let _ = out.extend_from_slice(&[0x6A, 0x82]);
+            }
         }
-        None => {
-            let can_use = crate::game::lifecycle::can_use_station();
-            info!(
-                "signed: station command rejected (can_use_station={=bool}), plaintext={:02x}",
-                can_use, plaintext
-            );
-            let _ = out.extend_from_slice(&[0x6A, 0x82]);
-        }
+    }
+    #[cfg(not(feature = "game"))]
+    {
+        let _ = plaintext; // silence unused-binding warning
+        let _ = out.extend_from_slice(&[0x6A, 0x82]);
     }
 }
 

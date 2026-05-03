@@ -1206,8 +1206,8 @@ impl ContactStore {
         Ok(true)
     }
 
-    /// Delete all contacts by iterating every slot and calling [`delete`] on
-    /// each.
+    /// Delete all contacts by iterating every slot and calling [`Self::delete`]
+    /// on each.
     pub async fn clear_all(&self) {
         for idx in 0..MAX_CONTACTS {
             if let Some(contact) = self.read_slot(idx).await {

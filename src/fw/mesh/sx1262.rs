@@ -71,10 +71,10 @@ impl MeshCoreConfig {
     };
 
     /// Build a [`MeshCoreConfig`] from user-configurable
-    /// [`settings::RadioParams`].
+    /// [`super::settings::RadioParams`].
     ///
     /// Hardware-fixed fields (`sync_word`, `preamble_len`, `tcxo`) are
-    /// inherited from [`UK_NARROW_BAND`] and are never user-configurable
+    /// inherited from [`Self::UK_NARROW_BAND`] and are never user-configurable
     /// via the companion app.
     ///
     /// `settings::RadioParams.cr` uses **MeshCore protocol encoding** (5 = CR
