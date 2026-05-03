@@ -84,12 +84,10 @@ pub enum ScreenError {
 pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
-pub mod date_picker;
 pub mod menu;
 #[cfg(feature = "signed-channel")]
 pub mod signed_channel;
 pub mod text_entry;
-pub mod toast;
 pub mod ui;
 #[cfg(feature = "watch")]
 pub mod watch;
@@ -486,30 +484,6 @@ pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resu
 where
     D: DrawTarget<Color = TriColor>,
 {
-    // Date picker: full-screen date/time input takes priority over all
-    // screens (same shape as text_entry).
-    if date_picker::is_active() {
-        #[cfg(feature = "embassy-base")]
-        return date_picker::DATE_PICKER.lock(|cell| {
-            let borrow = cell.borrow();
-            if let Some(ref picker) = *borrow {
-                date_picker::draw_overlay(display, picker)
-            } else {
-                Ok(())
-            }
-        });
-        #[cfg(feature = "simulator")]
-        return {
-            let guard = date_picker::DATE_PICKER.lock().unwrap();
-            let borrow = guard.borrow();
-            if let Some(ref picker) = *borrow {
-                date_picker::draw_overlay(display, picker)
-            } else {
-                Ok(())
-            }
-        };
-    }
-
     // Text entry: full-screen text input takes priority over all screens.
     if text_entry::is_active() {
         #[cfg(feature = "embassy-base")]
@@ -565,13 +539,9 @@ where
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 
-    // BLE pairing PIN overlay — drawn near-last so it appears on every screen,
+    // BLE pairing PIN overlay — drawn last so it appears on every screen,
     // including over the game screen and any in-game modal.
-    draw_ble_pin_overlay(display)?;
-
-    // Toast banner — last so it sits above everything else, including the
-    // BLE pin overlay.  Cleared by the dispatcher on the next button press.
-    toast::draw_overlay(display)
+    draw_ble_pin_overlay(display)
 }
 
 /// Draw the BLE passkey PIN dialog centred on screen.

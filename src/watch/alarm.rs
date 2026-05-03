@@ -343,41 +343,10 @@ pub fn first_empty_event_slot() -> Option<usize> {
     (1..N_ALARMS).find(|&slot| !alarm_enabled_n(slot))
 }
 
-/// Populate slot `slot` with the given date/time and ASCII summary, then
-/// enable it.  Non-printable bytes in `summary` are dropped to match the
-/// FAT12 import path's filter.
-pub fn populate_event_n(
-    slot: usize,
-    year: u16,
-    month: u8,
-    day: u8,
-    hour: u8,
-    minute: u8,
-    summary: &[u8],
-) {
-    set_alarm_date_n(slot, year, month, day);
-    set_alarm_time_n(slot, hour, minute);
-    let mut buf = [0u8; SUMMARY_LEN];
-    let mut i = 0usize;
-    for &b in summary {
-        if i >= SUMMARY_LEN {
-            break;
-        }
-        if (0x20..=0x7e).contains(&b) {
-            buf[i] = b;
-            i += 1;
-        }
-    }
-    set_alarm_summary_n(slot, &buf);
-    set_alarm_enabled_n(slot, true);
-}
-
 /// Add an event scheduled `minutes_ahead` minutes from the current wall
 /// clock, with the given summary.  Picks the first empty event slot.
-/// Returns `Some((hour, minute))` of the firing time on success, or
-/// `None` if the wall clock isn't synced or all event slots are full —
-/// callers use the returned time to show a confirmation banner so the
-/// user can see the action took effect.
+/// Returns the firing `(hour, minute)` on success, or `None` if the
+/// wall clock isn't synced or all event slots are full.
 #[cfg(feature = "embassy-base")]
 pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
     let c = clock::wall_clock()?;
@@ -399,7 +368,21 @@ pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
         (d2.year as u16, d2.month, d2.day)
     };
 
-    populate_event_n(slot, year, month, day, target_hour, target_min, summary);
+    set_alarm_date_n(slot, year, month, day);
+    set_alarm_time_n(slot, target_hour, target_min);
+    let mut buf = [0u8; SUMMARY_LEN];
+    let mut i = 0usize;
+    for &b in summary {
+        if i >= SUMMARY_LEN {
+            break;
+        }
+        if (0x20..=0x7e).contains(&b) {
+            buf[i] = b;
+            i += 1;
+        }
+    }
+    set_alarm_summary_n(slot, &buf);
+    set_alarm_enabled_n(slot, true);
     Some((target_hour, target_min))
 }
 

@@ -36,21 +36,12 @@ pub use alarm::{
     alarm_dec_minute, alarm_enabled_label, alarm_enabled_n, alarm_hour, alarm_hour_n,
     alarm_inc_hour, alarm_inc_melody, alarm_inc_minute, alarm_is_one_shot_n, alarm_minute,
     alarm_minute_n, alarm_month_n, alarm_toggle_day, alarm_toggle_enabled, alarm_tone_label,
-    alarm_year_n, clear_imported_alarms, first_empty_event_slot, populate_event_n,
+    alarm_year_n, clear_imported_alarms, first_empty_event_slot,
 };
 #[cfg(feature = "embassy-base")]
 pub use alarm::{
     add_quick_event, alarm_ring_timeout_task, check_and_fire_alarm, dismiss_alarm_if_ringing,
 };
-
-/// Convenience: current wall clock as `(year, month, day, hour, minute)`,
-/// or `None` if not synced yet.  Used by the date-picker to seed sensible
-/// defaults when opening the on-device "Add named event" flow.
-#[cfg(feature = "embassy-base")]
-pub fn wall_clock_ymdhm() -> Option<(u16, u8, u8, u8, u8)> {
-    let c = clock::wall_clock()?;
-    Some((c.year, c.month, c.day, c.hour, c.minute))
-}
 use embedded_graphics::prelude::*;
 
 use crate::menu::ButtonId;
