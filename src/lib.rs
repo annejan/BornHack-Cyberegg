@@ -320,7 +320,11 @@ struct WallClock {
 static WALL_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<WallClock>>> =
     Mutex::new(RefCell::new(None));
 
-/// Called by the BLE task when `SET_DEVICE_TIME` (0x06) is received.
+/// Called by the BLE task when `SET_DEVICE_TIME` (0x06) is received,
+/// and by the on-air clock-seeding path (`fw::mesh::repeater_time`)
+/// for both the initial seed and later refinements.  Does NOT latch
+/// `BLE_TIME_LOCKED` on its own — the BLE caller sets that flag
+/// explicitly after calling here.
 #[cfg(feature = "embassy-base")]
 pub fn set_wall_clock(unix_secs: u32) {
     WALL_CLOCK.lock(|cell| {
@@ -330,6 +334,14 @@ pub fn set_wall_clock(unix_secs: u32) {
         });
     });
 }
+
+/// Latched once the BLE companion has set the wall clock via
+/// `SET_DEVICE_TIME` (0x06).  The on-air seeder checks this and
+/// stops refining once true — BLE is authoritative.  Never cleared
+/// until reboot — a BLE disconnect does NOT re-enable on-air
+/// refinement.
+#[cfg(feature = "embassy-base")]
+pub static BLE_TIME_LOCKED: AtomicBool = AtomicBool::new(false);
 
 /// Current unix time in seconds, or `None` if the clock has never been synced.
 #[cfg(feature = "embassy-base")]

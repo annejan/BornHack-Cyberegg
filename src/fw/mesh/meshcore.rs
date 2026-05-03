@@ -526,6 +526,12 @@ async fn push_grp_txt(
         Ok(dec) => {
             let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
 
+            // Feed the channel-message timestamp into the wall-clock
+            // seeder.  MAC verification just above proves the sender
+            // had the channel key.  `path_len` already encodes the
+            // hop count in its low 6 bits (0 for direct).
+            super::repeater_time::observe_timestamp(dec.timestamp, path_len & 0x3F);
+
             let content_hash = msg_hash(grp.channel_hash, text.as_bytes(), dec.timestamp);
             let is_new = MSG_SEEN.lock(|cell| {
                 let mut ring = cell.borrow_mut();
@@ -655,6 +661,19 @@ async fn log_advert(
     };
 
     let sig_ok = meshcore::identity::verify_advert(&a, payload).is_ok();
+
+    // Feed companion (role=1, Chat) and repeater (role=2) advert
+    // timestamps into the wall-clock seeder.  Only trust
+    // signature-verified adverts; the seeder applies its own
+    // year-2026 floor, ±10 min delta filter, and hop-count refinement.
+    if sig_ok && matches!(a.role.to_u8(), 1 | 2) {
+        let hops = if path_len_byte == contacts::OUT_PATH_UNKNOWN {
+            0u8
+        } else {
+            path_len_byte & 0x3F
+        };
+        super::repeater_time::observe_timestamp(a.timestamp, hops);
+    }
 
     if let Some(ref name) = a.name {
         defmt::info!(

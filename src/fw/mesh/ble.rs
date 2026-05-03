@@ -1160,6 +1160,10 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
                                     crate::set_wall_clock(ts);
+                                    crate::BLE_TIME_LOCKED.store(
+                                        true,
+                                        core::sync::atomic::Ordering::Relaxed,
+                                    );
                                     defmt::info!("companion: SET_DEVICE_TIME unix={=u32}", ts);
                                     companion::Response::Ok
                                 }
