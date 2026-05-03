@@ -490,11 +490,12 @@ To regenerate all PCX files into `assets/to-badge/`:
 ```bash
 cd ../asset-gen
 cargo run -- export \
-    ../bornhack-firmware-2026/assets/bornpets-sponsors.json5 \
-    ../bornhack-firmware-2026/assets/bornpets-sponsors-cat.json5 \
-    ../bornhack-firmware-2026/assets/sponsors.json5 \
-    ../bornhack-firmware-2026/assets/bornpets-menu-icons.json5 \
-    --output-dir ../bornhack-firmware-2026/assets/to-badge \
+    ../hello-graphics/assets/bornpets-bartholomeus.json5 \
+    ../hello-graphics/assets/bornpets-sponsors-cat.json5 \
+    ../hello-graphics/assets/bornpets-sponsors-slug.json5 \
+    ../hello-graphics/assets/sponsors.json5 \
+    ../hello-graphics/assets/bornpets-menu-icons.json5 \
+    --output-dir ../hello-graphics/assets/to-badge \
     --format pcx
 ```
 
@@ -504,10 +505,11 @@ Each JSON5 file contributes a separate `PP` prefix range:
 
 | Config | Prefix | Purpose |
 | --- | --- | --- |
-| `bornpets-sponsors.json5` | `00xx` | Snail pet animations + shared icons / placeholders |
+| `bornpets-bartholomeus.json5` | `00xx` | Bartholomeus pet animations (formerly "Snail") + shared icons / placeholders |
 | `bornpets-sponsors-cat.json5` | `01xx` | Cat pet animations |
-| `sponsors.json5` | `02xx` | First-boot sponsor slideshow images |
-| `bornpets-menu-icons.json5` | `03xx` | On-screen menu icons (top + bottom rows, normal + selected) |
+| `bornpets-sponsors-slug.json5` | `02xx` | Slug pet animations |
+| `sponsors.json5` | `03xx` | First-boot sponsor slideshow images |
+| `bornpets-menu-icons.json5` | `04xx` | On-screen menu icons (top + bottom rows, normal + selected) |
 
 After generating, copy all `.PCX` files from `assets/to-badge/` to the badge's USB drive.
 
