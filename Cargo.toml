@@ -5,6 +5,15 @@ edition = "2024"
 
 [dependencies]
 embedded-graphics = { version = "0.8" }
+# Larger mono fonts for the conference-badge name screen.  Stock
+# embedded-graphics ascii fonts cap out at 10×20; profont adds the
+# 12×22 / 16×30 sizes for medium-length names.
+profont = { version = "0.7" }
+# Even bigger fonts (~30–42 px tall) for short names on the
+# conference-badge screen.  Different API from `MonoFont` — uses its
+# own `FontRenderer` — but the only practical way to get glyphs that
+# fill a 152×152 panel.
+u8g2-fonts = { version = "0.7", default-features = false }
 
 # Simulator libraries go here
 embedded-graphics-simulator = { version = "0.8", optional = true }

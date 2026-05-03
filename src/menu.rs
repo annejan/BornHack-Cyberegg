@@ -24,13 +24,14 @@ pub enum ScreenId {
     Token = 5,
     Watch = 6,
     Calendar = 7,
+    Name = 8,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 9;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -1798,6 +1799,14 @@ static CALENDAR_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
+/// Big-name conference-badge screen.  Pure renderer — no menu items
+/// (the screen takes over the whole panel and arrows fall through to
+/// the icon-grid screen-nav).  Always enabled.
+static NAME_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Name",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
 // ── DISPLAY_STATE
 // ─────────────────────────────────────────────────────────────
 
@@ -1844,6 +1853,7 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         ScreenState::new(&WATCH_ITEMS),
         #[cfg(feature = "watch")]
         ScreenState::new(&CALENDAR_ITEMS),
+        ScreenState::new(&NAME_ITEMS),
     ],
     [
         GAME_ENABLED,
@@ -1856,6 +1866,7 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         WATCH_ENABLED,
         #[cfg(feature = "watch")]
         WATCH_ENABLED,
+        true,
     ],
 )));
 

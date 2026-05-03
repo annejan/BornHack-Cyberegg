@@ -82,6 +82,7 @@ pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
+pub mod name_screen;
 #[cfg(feature = "signed-channel")]
 pub mod signed_channel;
 pub mod text_entry;
@@ -492,6 +493,7 @@ pub const SCREEN_ADVERT: u8 = ScreenId::Advert as u8;
 pub const SCREEN_TOKEN: u8 = ScreenId::Token as u8;
 pub const SCREEN_WATCH: u8 = ScreenId::Watch as u8;
 pub const SCREEN_CALENDAR: u8 = ScreenId::Calendar as u8;
+pub const SCREEN_NAME: u8 = ScreenId::Name as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
@@ -551,6 +553,7 @@ where
         SCREEN_WATCH => watch::draw(display),
         #[cfg(feature = "watch")]
         SCREEN_CALENDAR => watch::calendar::draw(display),
+        SCREEN_NAME => name_screen::draw(display, bat_prc),
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 
