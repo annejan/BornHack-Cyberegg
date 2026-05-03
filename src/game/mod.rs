@@ -195,7 +195,7 @@ where
     D: DrawTarget<Color = TriColor>,
 {
     use embedded_graphics::mono_font::MonoTextStyle;
-    use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+    use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
     use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
     use engine::to_display::DisplayAnim;
 
@@ -383,7 +383,7 @@ where
         };
         if !msg.is_empty() {
             use embedded_graphics::mono_font::MonoTextStyle;
-            use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+            use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
             use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
             let style = TextStyleBuilder::new().baseline(Baseline::Top).build();
             Text::with_text_style(
@@ -482,7 +482,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
     // Debug: show animation name when no artwork loaded.
     if !has_sprite && lifecycle::is_started() {
         use embedded_graphics::mono_font::MonoTextStyle;
-        use embedded_graphics::mono_font::ascii::FONT_7X13;
+        use embedded_graphics::mono_font::iso_8859_1::FONT_7X13;
         use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
         use ssd1675::graphics::Color;
 
