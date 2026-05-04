@@ -90,6 +90,7 @@ impl ModalKind {
                 Item::BlackHole,
                 Item::Nim,
                 Item::Maze,
+                Item::TripleBorn,
                 Item::Cancel,
             ],
             Self::Music => &[
@@ -131,6 +132,7 @@ enum Item {
     BlackHole,
     Nim,
     Maze,
+    TripleBorn,
     PlayMusic,
     /// Buzzer song index passed to [`crate::fw::buzzer::play`].
     Song(u8),
@@ -154,6 +156,7 @@ impl Item {
             Self::BlackHole => "Black Hole",
             Self::Nim => "Nim",
             Self::Maze => "Maze",
+            Self::TripleBorn => "Triple Born",
             Self::PlayMusic => "Play music",
             Self::Song(crate::SONG_STARTUP_INDEX) => "Startup",
             Self::Song(crate::SONG_RICKROLL_INDEX) => "Rickroll",
@@ -189,6 +192,7 @@ impl Item {
             Self::BlackHole => stats.can_play_blackhole,
             Self::Nim => stats.can_play_nim,
             Self::Maze => stats.can_play_maze,
+            Self::TripleBorn => stats.can_play_tripleborn,
             Self::Hibernate => !stats.hibernating,
             Self::WakeUp => stats.hibernating,
         }
@@ -217,6 +221,7 @@ impl Item {
             Self::BlackHole => stats.cooldown_blackhole,
             Self::Nim => stats.cooldown_nim,
             Self::Maze => stats.cooldown_maze,
+            Self::TripleBorn => stats.cooldown_tripleborn,
             _ => 0,
         }
     }
@@ -273,6 +278,10 @@ impl Item {
             }
             Self::Maze => {
                 super::maze::open();
+                close();
+            }
+            Self::TripleBorn => {
+                super::tripleborn::open();
                 close();
             }
             Self::PlayMusic => open(ModalKind::Music),
