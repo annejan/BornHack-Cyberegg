@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::iso_8859_1::FONT_6X13_BOLD;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle};
 use embedded_graphics::text::{Alignment, Text};
@@ -25,8 +26,10 @@ const BOARD_Y: i32 = 20;
 const CELL: i32 = 22;
 const GEM_R: i32 = 8;
 
-const STATUS_Y: i32 = 8;
-const MOVES_Y: i32 = 156;
+/// Baseline-y of the top status bar.  Sized for `FONT_6X13_BOLD`
+/// (13 px tall) so the cap top sits at ~y=2 and descenders end at
+/// ~y=13 — fits cleanly in the 0..BOARD_Y=20 strip above the board.
+const STATUS_Y: i32 = 11;
 
 // ── Game state (atomics) ──────────────────────────────────────────────────
 
@@ -164,13 +167,33 @@ fn do_swap(a: usize, b: usize) {
     BOARD[b].store(tmp, Ordering::Relaxed);
 }
 
+/// Score awarded for a run of `n` identical gems (n ≥ 3).
+///
+/// | Run | Points | Notes                                  |
+/// |-----|-------:|----------------------------------------|
+/// |  3  |     30 | base                                   |
+/// |  4  |     60 | 2× base                                |
+/// |  5  |    100 | 3.3× base                              |
+/// |  6  |    150 | full-row clear — 5× base               |
+///
+/// `5 · n · (n − 1)` — the per-cell rate climbs with run length, so
+/// the marginal bonus for the 4th cell is +30, for the 5th +40, for
+/// the 6th +50.  Any run length above 6 is impossible on a 6×6
+/// board, but the formula stays well-defined if BOARD_W ever grows.
+fn run_score(n: usize) -> u32 {
+    let n = n as u32;
+    5 * n * (n - 1)
+}
+
 /// Detect runs of 3+ identical gems (horizontal *or* vertical), mark
-/// every cell in those runs for clearing, then clear them in a second
-/// pass.  Two-pass so a run of 4+ clears all of its cells (the previous
-/// implementation only ever cleared the first 3).  Score is 10 per
-/// cleared cell, so a plain 3-match still scores 30.
-fn try_match() -> bool {
+/// every cell for clearing, sum each run's `run_score`, then clear
+/// in a second pass.  Returns the **raw** score earned this pass
+/// (without the cascade multiplier) — caller decides whether and
+/// how to scale it.  Mutates `BOARD` (clears matched cells) but
+/// does **not** mutate `SCORE`.
+fn try_match() -> u32 {
     let mut to_clear = [false; CELLS];
+    let mut score_gain: u32 = 0;
 
     // Horizontal runs.
     for row in 0..BOARD_H {
@@ -186,10 +209,12 @@ fn try_match() -> bool {
             while end < BOARD_W && BOARD[base + end].load(Ordering::Relaxed) == g {
                 end += 1;
             }
-            if end - col >= 3 {
+            let run_len = end - col;
+            if run_len >= 3 {
                 for c in col..end {
                     to_clear[base + c] = true;
                 }
+                score_gain += run_score(run_len);
             }
             col = end;
         }
@@ -208,30 +233,29 @@ fn try_match() -> bool {
             while end < BOARD_H && BOARD[end * BOARD_W + col].load(Ordering::Relaxed) == g {
                 end += 1;
             }
-            if end - row >= 3 {
+            let run_len = end - row;
+            if run_len >= 3 {
                 for r in row..end {
                     to_clear[r * BOARD_W + col] = true;
                 }
+                score_gain += run_score(run_len);
             }
             row = end;
         }
     }
 
-    // Apply clears + score (count every cleared cell, including
-    // intersections between a horizontal and a vertical run).
-    let mut cleared = 0u32;
+    // Second pass: clear every marked cell.  Cells at the
+    // intersection of a horizontal and a vertical run are scored
+    // once per run (both runs really did contribute), then cleared
+    // once.
+    let mut any = false;
     for (i, marked) in to_clear.iter().enumerate() {
         if *marked {
             BOARD[i].store(0, Ordering::Relaxed);
-            cleared += 1;
+            any = true;
         }
     }
-    if cleared > 0 {
-        SCORE.fetch_add(cleared * 10, Ordering::Relaxed);
-        true
-    } else {
-        false
-    }
+    if any { score_gain } else { 0 }
 }
 
 fn apply_gravity() {
@@ -259,13 +283,19 @@ fn apply_gravity() {
 }
 
 /// Run the match-and-gravity cascade up to [`MAX_CASCADE_ITERS`]
-/// iterations.  Returns the number of iterations executed (0 means
-/// nothing matched on the very first pass).
+/// iterations.  Each successive cascade tier multiplies that tier's
+/// raw score by its 1-indexed chain depth — so a 3-step chain of
+/// three 3-matches pays 30·1 + 30·2 + 30·3 = 180 instead of 90.
+/// Returns the number of iterations executed (0 means nothing
+/// matched on the very first pass).
 fn run_cascade() -> u8 {
     for i in 0..MAX_CASCADE_ITERS {
-        if !try_match() {
+        let raw = try_match();
+        if raw == 0 {
             return i;
         }
+        let chain = (i as u32) + 1;
+        SCORE.fetch_add(raw * chain, Ordering::Relaxed);
         apply_gravity();
     }
     MAX_CASCADE_ITERS
@@ -437,17 +467,18 @@ where
             .draw(display)?;
     }
 
-    // Status bar
+    // Status bar — bold so it pops above the board grid, with the
+    // move count formatted as `N/MOVES_LIMIT` so the player always
+    // knows how many they have left without a separate counter.
     let moves = MOVE_COUNT.load(Ordering::Relaxed);
     let score = SCORE.load(Ordering::Relaxed);
-
-    let style = MonoTextStyle::new(&FONT_6X10, BLACK);
+    let style = MonoTextStyle::new(&FONT_6X13_BOLD, BLACK);
 
     let mut buf: heapless::String<24> = heapless::String::new();
-    let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Moves: {}", moves));
+    let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Moves: {}/{}", moves, MOVES_LIMIT));
     Text::with_alignment(
         buf.as_str(),
-        Point::new(4, STATUS_Y),
+        Point::new(2, STATUS_Y),
         style,
         Alignment::Left,
     )
@@ -457,20 +488,9 @@ where
     let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Score: {}", score));
     Text::with_alignment(
         buf.as_str(),
-        Point::new(148, STATUS_Y),
+        Point::new(150, STATUS_Y),
         style,
         Alignment::Right,
-    )
-    .draw(display)?;
-
-    let moves_left = MOVES_LIMIT.saturating_sub(moves);
-    buf.clear();
-    let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Left: {}", moves_left));
-    Text::with_alignment(
-        buf.as_str(),
-        Point::new(76, MOVES_Y),
-        style,
-        Alignment::Center,
     )
     .draw(display)?;
 
