@@ -94,6 +94,7 @@ pub enum MiniGame {
     BlackHole,
     Nim,
     Maze,
+    TripleBorn,
 }
 
 /// The complete game state.  Serialisable to ekv for save/restore.
@@ -139,6 +140,7 @@ pub struct GameState {
     pub cooldown_blackhole: u16,
     pub cooldown_nim: u16,
     pub cooldown_maze: u16,
+    pub cooldown_tripleborn: u16,
 
     // Interval counters (track ticks since last interval fire).
     drained_interval_counter: u32,
@@ -226,6 +228,7 @@ impl GameState {
             cooldown_blackhole: 0,
             cooldown_nim: 0,
             cooldown_maze: 0,
+            cooldown_tripleborn: 0,
 
             drained_interval_counter: 0,
             miserable_interval_counter: 0,
@@ -654,6 +657,7 @@ impl GameState {
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
         self.cooldown_nim = self.cooldown_nim.saturating_sub(d);
         self.cooldown_maze = self.cooldown_maze.saturating_sub(d);
+        self.cooldown_tripleborn = self.cooldown_tripleborn.saturating_sub(d);
     }
 
     /// Apply stat decay while awake for `delta` ticks.
@@ -936,7 +940,19 @@ impl GameState {
             MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN,
             MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN,
             MiniGame::Maze => self.cooldown_maze = MINIGAME_COOLDOWN,
+            MiniGame::TripleBorn => self.cooldown_tripleborn = MINIGAME_COOLDOWN,
         }
+    }
+
+    /// Add a variable-magnitude bonus to inspiration (reduces
+    /// `drained` by `amount`).  No cooldown set, no hunger cost —
+    /// callers pair this with [`award_inspiration`] for those.
+    /// Used by Triple Born to scale the on-close bonus by score.
+    pub fn add_drained_relief(&mut self, amount: u16) {
+        if self.phase != Phase::Active {
+            return;
+        }
+        self.drained = sat_sub(self.drained, amount);
     }
 
     /// Total hours the pet has spent in hibernation during its life.
@@ -1111,6 +1127,7 @@ pub struct PetStats {
     pub can_play_blackhole: bool,
     pub can_play_nim: bool,
     pub can_play_maze: bool,
+    pub can_play_tripleborn: bool,
 
     /// Remaining action cooldowns in ticks (1 tick = 10 s).  0 = ready.
     /// Mirrored from the matching `GameState` fields so the modal can
@@ -1124,6 +1141,7 @@ pub struct PetStats {
     pub cooldown_blackhole: u16,
     pub cooldown_nim: u16,
     pub cooldown_maze: u16,
+    pub cooldown_tripleborn: u16,
 
     /// Whether the pet is hibernating (all progression frozen).
     pub hibernating: bool,
@@ -1179,6 +1197,7 @@ impl GameState {
             can_play_blackhole: awake_active && action_idle && self.cooldown_blackhole == 0,
             can_play_nim: awake_active && action_idle && self.cooldown_nim == 0,
             can_play_maze: awake_active && action_idle && self.cooldown_maze == 0,
+            can_play_tripleborn: awake_active && action_idle && self.cooldown_tripleborn == 0,
 
             cooldown_feed: self.cooldown_feed,
             cooldown_heal: self.cooldown_heal,
@@ -1189,6 +1208,7 @@ impl GameState {
             cooldown_blackhole: self.cooldown_blackhole,
             cooldown_nim: self.cooldown_nim,
             cooldown_maze: self.cooldown_maze,
+            cooldown_tripleborn: self.cooldown_tripleborn,
 
             hibernating: self.hibernating,
             hibernate_hours: self.hibernate_hours(),
@@ -1408,6 +1428,7 @@ impl GameState {
             cooldown_blackhole: 0,
             cooldown_nim: 0,
             cooldown_maze: 0,
+            cooldown_tripleborn: 0,
             drained_interval_counter,
             miserable_interval_counter,
             tired_passive_counter,

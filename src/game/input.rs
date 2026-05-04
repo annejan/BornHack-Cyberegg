@@ -87,6 +87,20 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
+    // ── Triple Born mini-game ─────────────────────────────────────────
+    if super::tripleborn::is_active() {
+        match btn {
+            ButtonId::Cancel => super::tripleborn::close(),
+            ButtonId::Up => super::tripleborn::cursor_up(),
+            ButtonId::Down => super::tripleborn::cursor_down(),
+            ButtonId::Left => super::tripleborn::cursor_left(),
+            ButtonId::Right => super::tripleborn::cursor_right(),
+            ButtonId::Fire => super::tripleborn::activate(),
+            ButtonId::Execute => super::tripleborn::swap_stash(),
+        }
+        return true;
+    }
+
     // ── Lights Out mini-game ──────────────────────────────────────────
     if super::lightsout::is_active() {
         match btn {

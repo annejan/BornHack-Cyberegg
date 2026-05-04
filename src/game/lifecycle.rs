@@ -470,6 +470,17 @@ pub fn award_inspiration(game: super::engine::MiniGame) {
     }
 }
 
+/// Apply a variable-magnitude `drained` reduction.  Used by Triple
+/// Born to scale the on-close bonus by the score earned in the
+/// just-finished game (paired with `award_inspiration` for the
+/// fixed cooldown + hunger cost).
+pub fn add_drained_relief(amount: u16) {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.add_drained_relief(amount);
+    }
+}
+
 /// Start a new generation (after pet has left or manual reset).
 /// Records the current pet in the Unicorn Realm before replacing it.
 pub fn new_generation(kind: super::engine::PetKind) {
