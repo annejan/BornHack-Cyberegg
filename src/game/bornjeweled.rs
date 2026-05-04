@@ -7,7 +7,6 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::iso_8859_1::FONT_6X13_BOLD;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle};
@@ -507,7 +506,7 @@ where
         Text::with_alignment(
             "Game Over",
             Point::new(76, 78),
-            MonoTextStyle::new(&FONT_6X10, BLACK),
+            MonoTextStyle::new(&FONT_6X13_BOLD, BLACK),
             Alignment::Center,
         )
         .draw(display)?;
@@ -516,14 +515,14 @@ where
         Text::with_alignment(
             buf.as_str(),
             Point::new(76, 92),
-            MonoTextStyle::new(&FONT_6X10, BLACK),
+            MonoTextStyle::new(&FONT_6X13_BOLD, BLACK),
             Alignment::Center,
         )
         .draw(display)?;
         Text::with_alignment(
             "Press Fire",
             Point::new(76, 104),
-            MonoTextStyle::new(&FONT_6X10, BLACK),
+            MonoTextStyle::new(&FONT_6X13_BOLD, BLACK),
             Alignment::Center,
         )
         .draw(display)?;
