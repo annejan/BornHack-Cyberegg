@@ -15,6 +15,7 @@
 //! ```
 
 pub mod blackhole;
+pub mod bornjeweled;
 pub mod engine;
 pub mod input;
 pub mod lifecycle;
@@ -250,6 +251,9 @@ where
     }
     if nim::is_active() {
         return nim::draw(display);
+    }
+    if bornjeweled::is_active() {
+        return bornjeweled::draw(display);
     }
 
     // Battery icon — top-right.
