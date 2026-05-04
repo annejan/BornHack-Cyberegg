@@ -196,7 +196,7 @@ impl Item {
             Self::Nim => stats.can_play_nim,
             Self::Maze => stats.can_play_maze,
             Self::TripleBorn => stats.can_play_tripleborn,
-            Self::BornJeweled => true, // always available
+            Self::BornJeweled => stats.can_play_bornjeweled,
             Self::Hibernate => !stats.hibernating,
             Self::WakeUp => stats.hibernating,
         }
@@ -226,6 +226,7 @@ impl Item {
             Self::Nim => stats.cooldown_nim,
             Self::Maze => stats.cooldown_maze,
             Self::TripleBorn => stats.cooldown_tripleborn,
+            Self::BornJeweled => stats.cooldown_bornjeweled,
             _ => 0,
         }
     }
@@ -290,9 +291,6 @@ impl Item {
             }
             Self::BornJeweled => {
                 super::bornjeweled::open();
-                crate::DISPLAY_STATE.lock(|cell| {
-                    cell.borrow_mut().set_active_screen(crate::SCREEN_GAME);
-                });
                 close();
             }
             Self::PlayMusic => open(ModalKind::Music),

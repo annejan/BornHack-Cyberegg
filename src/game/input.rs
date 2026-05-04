@@ -101,6 +101,12 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
+    // ── BornJeweled mini-game ─────────────────────────────────────────
+    if super::bornjeweled::is_active() {
+        super::bornjeweled::dispatch(btn);
+        return true;
+    }
+
     // ── Lights Out mini-game ──────────────────────────────────────────
     if super::lightsout::is_active() {
         match btn {

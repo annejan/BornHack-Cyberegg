@@ -95,6 +95,7 @@ pub enum MiniGame {
     Nim,
     Maze,
     TripleBorn,
+    BornJeweled,
 }
 
 /// The complete game state.  Serialisable to ekv for save/restore.
@@ -141,6 +142,7 @@ pub struct GameState {
     pub cooldown_nim: u16,
     pub cooldown_maze: u16,
     pub cooldown_tripleborn: u16,
+    pub cooldown_bornjeweled: u16,
 
     // Interval counters (track ticks since last interval fire).
     drained_interval_counter: u32,
@@ -229,6 +231,7 @@ impl GameState {
             cooldown_nim: 0,
             cooldown_maze: 0,
             cooldown_tripleborn: 0,
+            cooldown_bornjeweled: 0,
 
             drained_interval_counter: 0,
             miserable_interval_counter: 0,
@@ -658,6 +661,7 @@ impl GameState {
         self.cooldown_nim = self.cooldown_nim.saturating_sub(d);
         self.cooldown_maze = self.cooldown_maze.saturating_sub(d);
         self.cooldown_tripleborn = self.cooldown_tripleborn.saturating_sub(d);
+        self.cooldown_bornjeweled = self.cooldown_bornjeweled.saturating_sub(d);
     }
 
     /// Apply stat decay while awake for `delta` ticks.
@@ -941,6 +945,7 @@ impl GameState {
             MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN,
             MiniGame::Maze => self.cooldown_maze = MINIGAME_COOLDOWN,
             MiniGame::TripleBorn => self.cooldown_tripleborn = MINIGAME_COOLDOWN,
+            MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN,
         }
     }
 
@@ -1128,6 +1133,7 @@ pub struct PetStats {
     pub can_play_nim: bool,
     pub can_play_maze: bool,
     pub can_play_tripleborn: bool,
+    pub can_play_bornjeweled: bool,
 
     /// Remaining action cooldowns in ticks (1 tick = 10 s).  0 = ready.
     /// Mirrored from the matching `GameState` fields so the modal can
@@ -1142,6 +1148,7 @@ pub struct PetStats {
     pub cooldown_nim: u16,
     pub cooldown_maze: u16,
     pub cooldown_tripleborn: u16,
+    pub cooldown_bornjeweled: u16,
 
     /// Whether the pet is hibernating (all progression frozen).
     pub hibernating: bool,
@@ -1198,6 +1205,7 @@ impl GameState {
             can_play_nim: awake_active && action_idle && self.cooldown_nim == 0,
             can_play_maze: awake_active && action_idle && self.cooldown_maze == 0,
             can_play_tripleborn: awake_active && action_idle && self.cooldown_tripleborn == 0,
+            can_play_bornjeweled: awake_active && action_idle && self.cooldown_bornjeweled == 0,
 
             cooldown_feed: self.cooldown_feed,
             cooldown_heal: self.cooldown_heal,
@@ -1209,6 +1217,7 @@ impl GameState {
             cooldown_nim: self.cooldown_nim,
             cooldown_maze: self.cooldown_maze,
             cooldown_tripleborn: self.cooldown_tripleborn,
+            cooldown_bornjeweled: self.cooldown_bornjeweled,
 
             hibernating: self.hibernating,
             hibernate_hours: self.hibernate_hours(),
@@ -1429,6 +1438,7 @@ impl GameState {
             cooldown_nim: 0,
             cooldown_maze: 0,
             cooldown_tripleborn: 0,
+            cooldown_bornjeweled: 0,
             drained_interval_counter,
             miserable_interval_counter,
             tired_passive_counter,
