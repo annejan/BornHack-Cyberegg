@@ -201,11 +201,13 @@ async fn ble_disabled_loop() -> ! {
 }
 
 async fn factory_reset_loop() -> ! {
-    loop {
-        crate::FACTORY_RESET_SIGNAL.wait().await;
-        defmt::info!("settings: factory reset requested — wiping KV and rebooting");
-        kv::wipe_and_reset().await;
-    }
+    // Single-shot: `wipe_and_reset` reboots the MCU and never returns,
+    // so the surrounding `loop {}` (clippy: never_loop) only ever ran
+    // once.  Keeping the function name + signal-wait shape unchanged so
+    // the spawn site in `bin/embassy.rs` doesn't move.
+    crate::FACTORY_RESET_SIGNAL.wait().await;
+    defmt::info!("settings: factory reset requested — wiping KV and rebooting");
+    kv::wipe_and_reset().await
 }
 
 async fn contact_reset_loop() -> ! {

@@ -69,12 +69,12 @@ pub enum DisplayAnim {
     Idle,
 }
 
-/// Count of maxed stats (≥ STAT_MAX).
+/// Count of maxed stats (= STAT_MAX).
 fn count_maxed(state: &GameState) -> u8 {
-    (state.hunger >= STAT_MAX) as u8
-        + (state.tired >= STAT_MAX) as u8
-        + (state.drained >= STAT_MAX) as u8
-        + (state.sick >= STAT_MAX) as u8
+    (state.hunger == STAT_MAX) as u8
+        + (state.tired == STAT_MAX) as u8
+        + (state.drained == STAT_MAX) as u8
+        + (state.sick == STAT_MAX) as u8
 }
 
 impl GameState {

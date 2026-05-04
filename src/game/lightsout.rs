@@ -126,7 +126,7 @@ pub fn cursor_down() {
 
 pub fn cursor_left() {
     let c = CURSOR.load(Ordering::Relaxed);
-    if c % (GRID as u8) > 0 {
+    if !c.is_multiple_of(GRID as u8) {
         CURSOR.store(c - 1, Ordering::Relaxed);
     }
 }

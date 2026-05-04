@@ -54,7 +54,6 @@ fn optimal_act(state: &mut GameState) {
     }
     if state.hunger > 16384 {
         state.feed();
-        return;
     }
 }
 
@@ -101,7 +100,6 @@ impl Policy for PerfectNoFeed {
         }
         if state.miserable > 32768 {
             state.play();
-            return;
         }
     }
 }
@@ -139,7 +137,6 @@ impl Policy for PerfectNoHeal {
         }
         if state.hunger > 16384 {
             state.feed();
-            return;
         }
     }
 }
@@ -171,7 +168,6 @@ impl Policy for PerfectNoRest {
         }
         if state.hunger > 16384 {
             state.feed();
-            return;
         }
     }
 }
@@ -229,7 +225,6 @@ impl Policy for NightOwlPolicy {
         }
         if state.miserable > 32768 {
             state.play();
-            return;
         }
     }
     fn next_check(&self, tick: u32) -> u32 {
@@ -274,7 +269,6 @@ impl Policy for FeedAndSleepPolicy {
         }
         if state.hunger > 32768 {
             state.feed();
-            return;
         }
     }
     fn next_check(&self, tick: u32) -> u32 {
@@ -310,7 +304,6 @@ impl Policy for FeedSleepHealPolicy {
         }
         if state.sick > 32768 {
             state.heal();
-            return;
         }
     }
     fn next_check(&self, tick: u32) -> u32 {

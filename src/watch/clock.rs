@@ -161,13 +161,13 @@ const SIN_Q14: [i16; 91] = [
 
 fn sin_deg(deg: i32) -> i32 {
     let d = deg.rem_euclid(360);
-    let v = match d {
+    
+    match d {
         0..=90 => SIN_Q14[d as usize] as i32,
         91..=180 => SIN_Q14[(180 - d) as usize] as i32,
         181..=270 => -(SIN_Q14[(d - 180) as usize] as i32),
         _ => -(SIN_Q14[(360 - d) as usize] as i32),
-    };
-    v
+    }
 }
 
 fn cos_deg(deg: i32) -> i32 {

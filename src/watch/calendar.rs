@@ -295,30 +295,30 @@ fn dispatch_day_detail(btn: ButtonId) -> bool {
             // resolve the new value into the visible range.
             let resolved = if cur_top == 0xFF { 0 } else { cur_top };
             DAY_VIEW_TOP_HOUR.store(resolved.saturating_sub(1), Ordering::Relaxed);
-            return true;
+            true
         }
         ButtonId::Down => {
             let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
             let resolved = if cur_top == 0xFF { 0 } else { cur_top };
             // Cap at 23 so the user can't scroll past the end of the day.
             DAY_VIEW_TOP_HOUR.store(resolved.saturating_add(1).min(23), Ordering::Relaxed);
-            return true;
+            true
         }
         ButtonId::Right => {
             let cur = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed);
             let next = cur.saturating_add(TITLE_SCROLL_STEP).min(TITLE_SCROLL_MAX);
             DAY_VIEW_TITLE_SCROLL.store(next, Ordering::Relaxed);
-            return true;
+            true
         }
         ButtonId::Left => {
             let cur = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed);
             DAY_VIEW_TITLE_SCROLL.store(cur.saturating_sub(TITLE_SCROLL_STEP), Ordering::Relaxed);
-            return true;
+            true
         }
         ButtonId::Fire | ButtonId::Execute => {
             DAY_LIST_SCROLL.store(0, Ordering::Relaxed);
             MODE.store(MODE_DAY_LIST, Ordering::Relaxed);
-            return true;
+            true
         }
         ButtonId::Cancel => {
             DAY_VIEW_TITLE_SCROLL.store(0, Ordering::Relaxed);

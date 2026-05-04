@@ -256,7 +256,7 @@ impl GameState {
 
 /// Saturating add for u16 stats (capped at STAT_MAX).
 fn sat_add(val: u16, delta: u16) -> u16 {
-    val.saturating_add(delta).min(STAT_MAX)
+    val.saturating_add(delta)
 }
 
 /// Saturating sub for u16 stats (floored at 0).
@@ -304,10 +304,10 @@ fn curiosity_modifier(curiosity: u16) -> u16 {
 
 /// Count of maxed stats (= STAT_MAX).
 fn count_maxed(state: &GameState) -> usize {
-    (state.hunger >= STAT_MAX) as usize
-        + (state.tired >= STAT_MAX) as usize
-        + (state.drained >= STAT_MAX) as usize
-        + (state.sick >= STAT_MAX) as usize
+    (state.hunger == STAT_MAX) as usize
+        + (state.tired == STAT_MAX) as usize
+        + (state.drained == STAT_MAX) as usize
+        + (state.sick == STAT_MAX) as usize
 }
 
 // ---------------------------------------------------------------------------
@@ -336,10 +336,7 @@ impl GameState {
             return;
         }
 
-        match self.phase {
-            Phase::Gone => return,
-            _ => {}
-        }
+        if self.phase == Phase::Gone { return }
 
         self.age_ticks += total_delta;
 
@@ -1471,7 +1468,7 @@ impl PetRecord {
         }
     }
 
-    fn to_bytes(&self, buf: &mut [u8]) {
+    fn to_bytes(self, buf: &mut [u8]) {
         buf[0..2].copy_from_slice(&self.generation.to_le_bytes());
         buf[2..6].copy_from_slice(&self.age_ticks.to_le_bytes());
         buf[6..8].copy_from_slice(&self.vitality.to_le_bytes());
@@ -1531,6 +1528,12 @@ impl PetRecord {
 pub struct PetRealm {
     pub pets: [PetRecord; REALM_MAX_PETS],
     pub count: u8,
+}
+
+impl Default for PetRealm {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PetRealm {

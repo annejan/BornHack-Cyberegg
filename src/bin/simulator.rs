@@ -100,7 +100,7 @@ fn main() -> Result<(), core::convert::Infallible> {
             need_redraw = false;
         }
 
-        window.update(&mut display);
+        window.update(&display);
 
         for event in window.events() {
             match event {

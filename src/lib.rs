@@ -701,7 +701,7 @@ where
 
     // Interior: 16×8 (body minus 2px border). Fill from right to left.
     let interior_w = 16u32;
-    let fill_w = ((pct as u32).min(100) * interior_w / 100) as u32;
+    let fill_w = (pct as u32).min(100) * interior_w / 100;
     let fill_x = bx + 2 + (interior_w - fill_w) as i32;
     if fill_w > 0 {
         Rectangle::new(Point::new(fill_x, y + 2), Size::new(fill_w, 8))

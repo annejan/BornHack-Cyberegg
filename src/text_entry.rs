@@ -429,11 +429,7 @@ where
     // Wrap and draw lines
     let max_lines = (TEXT_AREA_H / LINE_H) as usize;
     let total_lines = (text.len() + CHARS_PER_LINE - 1).max(1) / CHARS_PER_LINE.max(1);
-    let start_line = if total_lines > max_lines {
-        total_lines - max_lines
-    } else {
-        0
-    };
+    let start_line = total_lines.saturating_sub(max_lines);
 
     for i in 0..max_lines {
         let line_idx = start_line + i;

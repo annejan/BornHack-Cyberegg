@@ -118,7 +118,7 @@ async fn persist_seed(kv: &KvNamespace, seed: &[u8; 32]) {
 pub fn trng_seed() -> [u8; 32] {
     // nRF52840 RNG register offsets (Product Spec §6.19)
     const RNG_BASE: u32 = 0x4000_D000;
-    const TASKS_START: u32 = RNG_BASE + 0x000;
+    const TASKS_START: u32 = RNG_BASE;
     const TASKS_STOP: u32 = RNG_BASE + 0x004;
     const EVENTS_VALRDY: u32 = RNG_BASE + 0x100;
     const CONFIG: u32 = RNG_BASE + 0x504; // bit 0: DERCEN

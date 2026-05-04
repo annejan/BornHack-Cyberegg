@@ -119,7 +119,7 @@ pub async fn run(
     }
 
     // ── Intro screen ─────────────────────────────────────────────────
-    let _ = display.clear(Color::White);
+    display.clear(Color::White);
 
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
@@ -148,7 +148,7 @@ pub async fn run(
             continue; // Skip missing slides.
         };
 
-        let _ = display.clear(Color::White);
+        display.clear(Color::White);
 
         #[cfg(feature = "game")]
         crate::game::sprite_loader::blit_file(display, &file, 0, 0).await;
@@ -187,7 +187,7 @@ async fn any_sponsor_file_present() -> bool {
 async fn show_missing_assets_forever(display: &mut EpdGfx<'_>) {
     defmt::info!("sponsors: no sponsor PCX files found — waiting for USB upload");
 
-    let _ = display.clear(Color::White);
+    display.clear(Color::White);
 
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)

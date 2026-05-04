@@ -457,9 +457,8 @@ async fn push_grp_txt(
         let blink_hash = meshcore::channel::hash_from_key(&blink_key);
         if grp.channel_hash == blink_hash
             && !crate::IGNORE_BLINK.load(core::sync::atomic::Ordering::Relaxed)
-        {
-            if grp_txt::verify_mac(&blink_key, &grp).is_ok() {
-                if let Ok(dec) = grp_txt::decrypt(&blink_key, &grp) {
+            && grp_txt::verify_mac(&blink_key, &grp).is_ok()
+                && let Ok(dec) = grp_txt::decrypt(&blink_key, &grp) {
                     let text = core::str::from_utf8(&dec.text).unwrap_or("");
                     // The command is the last char after "sender: " prefix.
                     let cmd = text
@@ -493,8 +492,6 @@ async fn push_grp_txt(
                     }
                     defmt::info!("blinkme: cmd={=u8:#04x}", cmd.unwrap_or(0));
                 }
-            }
-        }
     }
 
     let ch = match channels.iter().find(|c| c.hash == grp.channel_hash) {
@@ -545,12 +542,11 @@ async fn push_grp_txt(
             if !is_new {
                 // Check if this is our own message echoed back by a repeater.
                 crate::CHANNEL_MSG_RING.lock(|cell| {
-                    if let Some(entry) = cell.borrow_mut().find_by_hash_mut(content_hash) {
-                        if entry.is_own && entry.repeat_count < 9 {
+                    if let Some(entry) = cell.borrow_mut().find_by_hash_mut(content_hash)
+                        && entry.is_own && entry.repeat_count < 9 {
                             entry.repeat_count += 1;
                             crate::LORA_MSG_SIGNAL.signal(());
                         }
-                    }
                 });
                 defmt::debug!(
                     "GrpTxt: duplicate suppressed (hash={=u32:#010x})",
@@ -926,18 +922,15 @@ async fn log_txt_msg(
     // after we've sent a command to the same peer.
     let store = contacts::ContactStore::new();
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
-    if let Some(hint_pk) = hint {
-        if hint_pk[0] == msg.src_hash {
-            if let Some(c) = store.find_by_key(&hint_pk).await {
-                if try_handle_txt_msg(lora, &c, &msg, rssi, path_len_byte, path, identity, &store)
+    if let Some(hint_pk) = hint
+        && hint_pk[0] == msg.src_hash
+            && let Some(c) = store.find_by_key(&hint_pk).await
+                && try_handle_txt_msg(lora, &c, &msg, rssi, path_len_byte, path, identity, &store)
                     .await
                     .is_ok()
                 {
                     return;
                 }
-            }
-        }
-    }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index. One
     // flash `get` for the bucket + up to `MAX_SLOTS_PER_BUCKET` slot reads.
@@ -952,7 +945,7 @@ async fn log_txt_msg(
         if c.pub_key[0] != msg.src_hash {
             continue;
         }
-        if hint.map_or(false, |h| h == c.pub_key) {
+        if hint == Some(c.pub_key) {
             continue;
         }
 
@@ -997,7 +990,7 @@ async fn try_handle_txt_msg(
     // against the contact we sent it to. Detect via pending outgoing ACK.
     let is_own_echo = crate::PENDING_ACK.lock(|cell| {
         cell.get()
-            .map_or(false, |pending| pending.ack_hash == ack_hash)
+            .is_some_and(|pending| pending.ack_hash == ack_hash)
     });
     if is_own_echo {
         defmt::debug!(
@@ -2628,16 +2621,14 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
     // store, e.g. first login after a wipe or before the first advert.
     let store = contacts::ContactStore::new();
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
-    if let Some(hint_pk) = hint {
-        if hint_pk[0] == msg.src_hash {
-            if try_dispatch_response_by_pk(&hint_pk, &msg, identity)
+    if let Some(hint_pk) = hint
+        && hint_pk[0] == msg.src_hash
+            && try_dispatch_response_by_pk(&hint_pk, &msg, identity)
                 .await
                 .is_ok()
             {
                 return;
             }
-        }
-    }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index instead
     // of a 300-slot linear scan. Covers unsolicited responses from peers we
@@ -2651,7 +2642,7 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
         if c.pub_key[0] != msg.src_hash {
             continue;
         }
-        if hint.map_or(false, |h| h == c.pub_key) {
+        if hint == Some(c.pub_key) {
             continue;
         }
 
@@ -2723,14 +2714,14 @@ async fn try_dispatch_response_by_pk(
 
     // Pending anonymous status ping (legacy ANON_REQ-with-empty-password path).
     let pending_status = crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.get());
-    if let Some(pending_key) = pending_status {
-        if pending_key == pub_key {
+    if let Some(pending_key) = pending_status
+        && pending_key == pub_key {
             crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
 
             // Status pong body: [uptime:4 LE][battery_mv:2 LE]
             let uptime_secs = if dec.text.len() >= 4 {
                 u32::from_le_bytes([
-                    dec.text.get(0).copied().unwrap_or(0),
+                    dec.text.first().copied().unwrap_or(0),
                     dec.text.get(1).copied().unwrap_or(0),
                     dec.text.get(2).copied().unwrap_or(0),
                     dec.text.get(3).copied().unwrap_or(0),
@@ -2765,7 +2756,6 @@ async fn try_dispatch_response_by_pk(
             let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult { pub_key, stats });
             return Ok(());
         }
-    }
 
     // Pending admin status request (REQ_TYPE_GET_STATUS, tag-based match).
     // Plaintext layout: [ts:4 LE][RepeaterStats:56]. After txt_msg::decrypt
@@ -2773,8 +2763,8 @@ async fn try_dispatch_response_by_pk(
     // stats[1..] (with trailing zero bytes stripped). We reassemble the full
     // 56-byte blob and parse it manually.
     let pending_admin_status = crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.get());
-    if let Some(admin_tag) = pending_admin_status {
-        if dec.timestamp == admin_tag {
+    if let Some(admin_tag) = pending_admin_status
+        && dec.timestamp == admin_tag {
             crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
 
             let mut stats = [0u8; 56];
@@ -2803,7 +2793,6 @@ async fn try_dispatch_response_by_pk(
             let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult { pub_key, stats });
             return Ok(());
         }
-    }
 
     // Pending generic binary request (CMD_SEND_BINARY_REQ /
     // PUSH_CODE_BINARY_RESPONSE). Response body starts at plaintext[4]; in our
@@ -2812,8 +2801,8 @@ async fn try_dispatch_response_by_pk(
     // up to the AES block boundary so neighbours/ACL entries that happen to end
     // in zero bytes aren't truncated.
     let pending_binary = crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.get());
-    if let Some(binary_tag) = pending_binary {
-        if dec.timestamp == binary_tag {
+    if let Some(binary_tag) = pending_binary
+        && dec.timestamp == binary_tag {
             crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
 
             // msg.data is the raw ciphertext; length is a multiple of AES block size.
@@ -2845,12 +2834,11 @@ async fn try_dispatch_response_by_pk(
             });
             return Ok(());
         }
-    }
 
     // Pending telemetry request (tag-based match).
     let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
-    if let Some(telem_tag) = pending_telem {
-        if dec.timestamp == telem_tag {
+    if let Some(telem_tag) = pending_telem
+        && dec.timestamp == telem_tag {
             crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
 
             // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
@@ -2867,7 +2855,6 @@ async fn try_dispatch_response_by_pk(
             let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult { pub_key, lpp });
             return Ok(());
         }
-    }
 
     // No pending status / admin-status / telemetry request — treat as a
     // login response. The MAC verified, so this contact is the right peer.
@@ -2960,16 +2947,14 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
     // (yet) in the contact store.
     let store = contacts::ContactStore::new();
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
-    if let Some(hint_pk) = hint {
-        if hint_pk[0] == msg.src_hash {
-            if try_dispatch_path_by_pk(&hint_pk, &msg, rssi, &store, identity)
+    if let Some(hint_pk) = hint
+        && hint_pk[0] == msg.src_hash
+            && try_dispatch_path_by_pk(&hint_pk, &msg, rssi, &store, identity)
                 .await
                 .is_ok()
             {
                 return;
             }
-        }
-    }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index instead
     // of a 300-slot linear scan. Covers unsolicited Path returns from peers
@@ -2983,7 +2968,7 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
         if c.pub_key[0] != msg.src_hash {
             continue;
         }
-        if hint.map_or(false, |h| h == c.pub_key) {
+        if hint == Some(c.pub_key) {
             continue;
         }
 
@@ -3182,8 +3167,8 @@ async fn try_dispatch_path_by_pk(
 
         // Pending discovery request (tag = extra[0..4]).
         let pending_disc = crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.get());
-        if let Some(disc_tag) = pending_disc {
-            if dec.extra.len() >= 4 {
+        if let Some(disc_tag) = pending_disc
+            && dec.extra.len() >= 4 {
                 let resp_tag =
                     u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
                 if resp_tag == disc_tag {
@@ -3215,7 +3200,6 @@ async fn try_dispatch_path_by_pk(
                     return Ok(());
                 }
             }
-        }
 
         // Default: treat as a login response.
         handle_path_login_response(&dec.extra, sender_pk);

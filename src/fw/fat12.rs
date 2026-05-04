@@ -144,8 +144,7 @@ impl FatParams {
 
     /// Number of sectors occupied by the root directory.
     fn root_dir_sectors(&self) -> u32 {
-        ((self.root_entry_count as u32 * 32) + self.bytes_per_sector as u32 - 1)
-            / self.bytes_per_sector as u32
+        (self.root_entry_count as u32 * 32).div_ceil(self.bytes_per_sector as u32)
     }
 
     /// Absolute flash address of the data region (cluster 2 starts here).

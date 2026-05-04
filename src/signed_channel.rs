@@ -181,7 +181,7 @@ mod csprng {
         /// startup is single-threaded so concurrent access is impossible.
         pub fn seed_from_hardware() {
             const RNG_BASE: u32 = 0x4000_D000;
-            const TASKS_START: u32 = RNG_BASE + 0x000;
+            const TASKS_START: u32 = RNG_BASE;
             const TASKS_STOP: u32 = RNG_BASE + 0x004;
             const EVENTS_VALRDY: u32 = RNG_BASE + 0x100;
             const CONFIG: u32 = RNG_BASE + 0x504; // bit 0: DERCEN
@@ -212,7 +212,7 @@ mod csprng {
             }
             STATE.lock(|s: &core::cell::RefCell<[u8; 32]>| {
                 let mut state = s.borrow_mut();
-                let digest = Sha256::new().chain_update(&*state).finalize();
+                let digest = Sha256::new().chain_update(*state).finalize();
                 *state = digest.into();
                 let mut out = [0u8; CHALLENGE_LEN];
                 out.copy_from_slice(&state[..CHALLENGE_LEN]);

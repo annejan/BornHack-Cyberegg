@@ -1915,8 +1915,8 @@ where
             .draw(display)?;
         }
 
-        if item_idx >= 0 {
-            if let Some(item) = items.get(item_idx as usize) {
+        if item_idx >= 0
+            && let Some(item) = items.get(item_idx as usize) {
                 let fg = if is_center { WHITE } else { BLACK };
                 // Hidden SlotInfo: render nothing — the row stays blank
                 // (the center row keeps its black highlight, but that's
@@ -1974,7 +1974,6 @@ where
                     .draw(display)?;
                 }
             }
-        }
     }
 
     Ok(())

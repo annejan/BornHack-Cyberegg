@@ -103,7 +103,7 @@ const ROW_START: [u8; ROWS as usize + 1] = [0, 1, 3, 6, 10, 15, 21];
 
 fn row_of(idx: u8) -> u8 {
     let mut r = 0u8;
-    while r + 1 <= ROWS && idx >= ROW_START[(r + 1) as usize] {
+    while r < ROWS && idx >= ROW_START[(r + 1) as usize] {
         r += 1;
     }
     r
