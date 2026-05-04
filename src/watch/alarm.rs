@@ -265,30 +265,24 @@ pub fn alarm_days_n(slot: usize) -> u8 {
 pub fn alarm_melody_n(slot: usize) -> u8 {
     ALARM_MELODY[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)] // only used by the trigger / future ICS importer
 pub fn alarm_year_n(slot: usize) -> u16 {
     ALARM_YEAR[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_month_n(slot: usize) -> u8 {
     ALARM_MONTH[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_end_hour_n(slot: usize) -> u8 {
     ALARM_END_HOUR[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_end_minute_n(slot: usize) -> u8 {
     ALARM_END_MINUTE[s(slot)].load(Ordering::Relaxed)
 }
 
 /// Returns the slot's SUMMARY as a heapless string.  Empty if no
 /// summary was set (e.g. slot 0, or pre-import).
-#[allow(dead_code)]
 pub fn alarm_summary_n(slot: usize) -> heapless::String<SUMMARY_LEN> {
     let i = s(slot);
     let mut out: heapless::String<SUMMARY_LEN> = heapless::String::new();
@@ -309,19 +303,12 @@ pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
 
 /// Returns `true` if `slot` is a one-shot calendar alarm (year != 0) bound to
 /// a specific date, rather than a recurring weekly alarm.
-#[allow(dead_code)] // only used by check_and_fire_alarm under embassy-base
 pub fn alarm_is_one_shot_n(slot: usize) -> bool {
     alarm_year_n(slot) != 0
 }
 
-// The slot-aware setters below are intentionally pub but currently have no
-// in-tree caller — they're the entry point external code (calendar import,
-// future multi-alarm UI) will use to populate slots > 0.  Without
-// `#[allow(dead_code)]` rustc warns until that wiring lands.
-
 /// Set or clear a slot's one-shot date.  Pass `(0, 0, 0)` to make the slot
 /// recurring (governed by its day mask) again.
-#[allow(dead_code)]
 pub fn set_alarm_date_n(slot: usize, year: u16, month: u8, day: u8) {
     let i = s(slot);
     ALARM_YEAR[i].store(year, Ordering::Relaxed);
@@ -330,7 +317,6 @@ pub fn set_alarm_date_n(slot: usize, year: u16, month: u8, day: u8) {
     super::signal_settings_dirty();
 }
 
-#[allow(dead_code)]
 pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
     let i = s(slot);
     ALARM_HOUR[i].store(hour.min(23), Ordering::Relaxed);
@@ -342,21 +328,18 @@ pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
 /// the `DTEND` of each event so the day-view can render duration
 /// blocks.  Defaults to the start time when `DTEND` is missing or
 /// degenerate (zero-duration event renders as a thin marker).
-#[allow(dead_code)]
 pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
     let i = s(slot);
     ALARM_END_HOUR[i].store(hour.min(23), Ordering::Relaxed);
     ALARM_END_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
 }
 
-#[allow(dead_code)]
 pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
     ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
     super::signal_settings_dirty();
 }
 
 /// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
-#[allow(dead_code)]
 pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
     let i = s(slot);
     for (j, b) in src.iter().enumerate() {
