@@ -520,7 +520,7 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
-        // Watch screen consumes Up/Down to toggle digital/analog face.
+        // Clock screen consumes Up/Down to toggle digital/analog face.
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]
         if self.active_screen == crate::SCREEN_WATCH && crate::watch::dispatch(btn) {
@@ -1915,8 +1915,8 @@ where
             .draw(display)?;
         }
 
-        if item_idx >= 0 {
-            if let Some(item) = items.get(item_idx as usize) {
+        if item_idx >= 0
+            && let Some(item) = items.get(item_idx as usize) {
                 let fg = if is_center { WHITE } else { BLACK };
                 // Hidden SlotInfo: render nothing — the row stays blank
                 // (the center row keeps its black highlight, but that's
@@ -1974,7 +1974,6 @@ where
                     .draw(display)?;
                 }
             }
-        }
     }
 
     Ok(())
@@ -2034,6 +2033,8 @@ where
             y += lh + 4;
             Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
             y += lh;
+            Text::with_text_style("AnneJan", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
             Text::with_text_style("Orange_Murker", Point::new(x, y), font, center).draw(display)?;
         }
         2 => {
@@ -2047,6 +2048,8 @@ where
             Text::with_text_style("at-boy", Point::new(x, y), font, center).draw(display)?;
             y += lh;
             Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("AnneJan", Point::new(x, y), font, center).draw(display)?;
         }
         4 => {
             Text::with_text_style("-- Graphics --", Point::new(x, y), font, center)

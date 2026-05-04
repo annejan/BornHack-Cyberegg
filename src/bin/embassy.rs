@@ -278,7 +278,7 @@ async fn main(spawner: Spawner) {
     // tri-color waveform so red ink particles get cycled too.  Wipes any
     // residual ghosting from the previous power-on session before the
     // first fast-LUT refresh paints over it.
-    let _ = display.clear(Color::White);
+    display.clear(Color::White);
     let _ = display.reset().await;
     let _ = display.update_tc().await;
     let _ = display.deep_sleep().await;
@@ -392,7 +392,7 @@ async fn display_loop(
         // Process any pending sponsor flag clear request from the menu.
         bornhack_aegg::fw::sponsors::process_clear_request().await;
 
-        let _ = display.clear(Color::White);
+        display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 
         // ── Game cycle: update engine, render animation ────────────────
@@ -726,7 +726,7 @@ async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryE
     use embedded_graphics::prelude::*;
     use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-    let _ = display.clear(Color::White);
+    display.clear(Color::White);
 
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)

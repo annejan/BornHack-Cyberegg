@@ -74,6 +74,12 @@ pub struct ChannelMsgRing {
     len: usize,
 }
 
+impl Default for ChannelMsgRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChannelMsgRing {
     const INIT: Option<ChannelMsgEntry> = None;
 

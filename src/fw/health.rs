@@ -107,6 +107,12 @@ pub struct SystemHealth {
     pub buttons: ButtonsHealth,
 }
 
+impl Default for SystemHealth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SystemHealth {
     pub const fn new() -> Self {
         Self {

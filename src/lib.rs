@@ -171,8 +171,14 @@ pub const SONG_IMPERIAL_MARCH_INDEX: u8 = 2;
 pub const SONG_SANDSTORM_INDEX: u8 = 3;
 pub const SONG_PINK_PANTHER_INDEX: u8 = 4;
 pub const SONG_TROLOLO_INDEX: u8 = 5;
-// Indices 6, 7, 8 are reserved for system-only sounds (PET_WARN,
-// FUNNY_ENDING, ALARM) — not exposed in the player music menu.
+// Indices 6, 7, 8 — system-only sounds (`PET_WARN`, `FUNNY_ENDING`,
+// `ALARM`).  Not exposed in the player music menu, but every site
+// that triggers them references these constants by name.  Defined
+// here (not in `fw::buzzer`) for the same reason as the SONG_*
+// constants — the simulator build doesn't link `fw::buzzer`.
+pub const PET_WARN_INDEX: usize = 6;
+pub const FUNNY_ENDING_INDEX: usize = 7;
+pub const ALARM_INDEX: usize = 8;
 pub const SONG_DAISY_BELL_INDEX: u8 = 9;
 pub const SONG_NOKIA_INDEX: u8 = 10;
 pub const SONG_OVER_THE_HORIZON_INDEX: u8 = 11;
@@ -695,7 +701,7 @@ where
 
     // Interior: 16×8 (body minus 2px border). Fill from right to left.
     let interior_w = 16u32;
-    let fill_w = ((pct as u32).min(100) * interior_w / 100) as u32;
+    let fill_w = (pct as u32).min(100) * interior_w / 100;
     let fill_x = bx + 2 + (interior_w - fill_w) as i32;
     if fill_w > 0 {
         Rectangle::new(Point::new(fill_x, y + 2), Size::new(fill_w, 8))

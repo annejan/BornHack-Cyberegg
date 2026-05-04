@@ -116,13 +116,11 @@ pub async fn init() {
         }
 
         // If a saved game is active but has no name, prompt for one.
-        if pet_name().is_empty() {
-            if let Some(s) = unsafe { (*GAME.get()).as_mut() } {
-                if s.phase == super::engine::Phase::Active {
+        if pet_name().is_empty()
+            && let Some(s) = unsafe { (*GAME.get()).as_mut() }
+                && s.phase == super::engine::Phase::Active {
                     s.naming_pending = true;
                 }
-            }
-        }
 
         // Unicorn Realm (past pets).
         let mut buf = [0u8; REALM_SAVE_SIZE];
@@ -141,8 +139,8 @@ async fn try_load() -> Option<GameState> {
     use crate::fw::kv;
     let ns = kv::namespace("game");
     let mut buf = [0u8; SAVE_SIZE];
-    if let Ok(n) = ns.get("state", &mut buf).await {
-        if n == SAVE_SIZE {
+    if let Ok(n) = ns.get("state", &mut buf).await
+        && n == SAVE_SIZE {
             if let Some(mut s) = GameState::from_bytes(&buf) {
                 s.last_update_tick = 0;
                 defmt::info!(
@@ -154,7 +152,6 @@ async fn try_load() -> Option<GameState> {
             }
             defmt::warn!("game: corrupt save data");
         }
-    }
     None
 }
 
@@ -362,7 +359,7 @@ fn check_severity_transition(state: &GameState) {
     if now == Severity::Gone as u8 && prev != Severity::Gone as u8 {
         if !muted {
             #[cfg(feature = "embassy-base")]
-            crate::fw::buzzer::play(crate::fw::buzzer::FUNNY_ENDING_INDEX);
+            crate::fw::buzzer::play(crate::FUNNY_ENDING_INDEX);
         }
         return;
     }
@@ -374,7 +371,7 @@ fn check_severity_transition(state: &GameState) {
     let upward = now > prev && now <= Severity::Leaving as u8;
     if upward && !muted {
         #[cfg(feature = "embassy-base")]
-        crate::fw::buzzer::play(crate::fw::buzzer::PET_WARN_INDEX);
+        crate::fw::buzzer::play(crate::PET_WARN_INDEX);
     }
 }
 

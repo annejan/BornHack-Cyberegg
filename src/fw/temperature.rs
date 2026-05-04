@@ -23,12 +23,12 @@ static CACHED_TEMP_C10: AtomicI16 = AtomicI16::new(i16::MIN);
 /// Read the nRF52840 die temperature, cache it, and return °C.
 ///
 /// Uses `unsafe { peripherals::TEMP::steal() }` so the caller can retain
-/// `p.TEMP` for the BLE stack.  The stolen peripheral is dropped before
-/// returning, leaving the register state clean for MPSL.
+/// `p.TEMP` for the BLE stack.  The stolen wrapper goes out of scope at
+/// the end of the function — `embassy_nrf::temp::Temp` doesn't implement
+/// `Drop`, so there's nothing to clean up explicitly.
 pub async fn read_and_cache() -> i16 {
     let mut sensor = Temp::new(unsafe { peripherals::TEMP::steal() }, Irqs);
     let t = sensor.read().await.to_num::<i16>();
-    drop(sensor);
     CACHED_TEMP_C10.store(t * 10, Ordering::Relaxed);
     t
 }

@@ -51,6 +51,9 @@ pub static TOKEN_VALUE: std::sync::Mutex<RefCell<heapless::String<TOKEN_MAX_LEN>
 pub static TOKEN_SET_AT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// How long a received token stays visible: 2 min 30 s = 150 seconds.
+/// Embassy-only: the simulator's `token_is_active` is a stub that
+/// always returns `false` and never consults this value.
+#[cfg(feature = "embassy-base")]
 const TOKEN_VISIBLE_SECS: u32 = 150;
 
 // ---------------------------------------------------------------------------

@@ -127,7 +127,7 @@ pub fn cursor_left() {
         return;
     }
     let c = CURSOR.load(Ordering::Relaxed);
-    if c % 3 > 0 {
+    if !c.is_multiple_of(3) {
         CURSOR.store(c - 1, Ordering::Relaxed);
     }
 }
@@ -362,7 +362,7 @@ where
     // Grid lines (2 horizontal + 2 vertical).
     let grid_style = PrimitiveStyle::with_stroke(BLACK, 3);
     for i in 1..3 {
-        let offset = BOARD_Y + i as i32 * CELL;
+        let offset = BOARD_Y + i * CELL;
         // Horizontal.
         Line::new(
             Point::new(BOARD_X, offset),
@@ -371,7 +371,7 @@ where
         .into_styled(grid_style)
         .draw(display)?;
         // Vertical.
-        let offset_x = BOARD_X + i as i32 * CELL;
+        let offset_x = BOARD_X + i * CELL;
         Line::new(
             Point::new(offset_x, BOARD_Y),
             Point::new(offset_x, BOARD_Y + 3 * CELL),
@@ -381,7 +381,7 @@ where
     }
 
     // Draw marks and cursor.
-    for i in 0..9 {
+    for (i, &cell) in board.iter().enumerate() {
         let col = (i % 3) as i32;
         let row = (i / 3) as i32;
         let x = BOARD_X + col * CELL;
@@ -394,7 +394,7 @@ where
             draw_cursor_ring(display, x + 2, y + 2, CELL - 4)?;
         }
 
-        match board[i] {
+        match cell {
             PLAYER => draw_x(display, x + PAD, y + PAD, CELL - 2 * PAD)?,
             AI => draw_o(display, x + PAD, y + PAD, CELL - 2 * PAD)?,
             _ => {}

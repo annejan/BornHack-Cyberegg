@@ -200,7 +200,7 @@ static ALARM_DAYS: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0b0111_1111) };
 /// Index into [`crate::fw::buzzer::MELODIES`] used as the alarm ringtone.
 /// Default: the dedicated `ALARM` beep-beep pattern.
 static ALARM_MELODY: [AtomicU8; N_ALARMS] =
-    [const { AtomicU8::new(crate::fw::buzzer::ALARM_INDEX as u8) }; N_ALARMS];
+    [const { AtomicU8::new(crate::ALARM_INDEX as u8) }; N_ALARMS];
 /// Optional one-shot date.  When `year` is non-zero, the slot fires only on
 /// the exact matching `year-month-day` (and then self-disables) — used for
 /// calendar-event alarms.  `year == 0` means recurring per the day mask.
@@ -231,7 +231,7 @@ static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
 /// constants in `crate` (player-pickable songs) and
 /// `crate::fw::buzzer` (system-only sounds like `ALARM`).
 const ALARM_TONES: &[(&str, u8)] = &[
-    ("Tone: Beep", crate::fw::buzzer::ALARM_INDEX as u8),
+    ("Tone: Beep", crate::ALARM_INDEX as u8),
     ("Tone: Imp. March", crate::SONG_IMPERIAL_MARCH_INDEX),
     ("Tone: Rickroll", crate::SONG_RICKROLL_INDEX),
     ("Tone: Pink Pant.", crate::SONG_PINK_PANTHER_INDEX),
@@ -265,30 +265,24 @@ pub fn alarm_days_n(slot: usize) -> u8 {
 pub fn alarm_melody_n(slot: usize) -> u8 {
     ALARM_MELODY[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)] // only used by the trigger / future ICS importer
 pub fn alarm_year_n(slot: usize) -> u16 {
     ALARM_YEAR[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_month_n(slot: usize) -> u8 {
     ALARM_MONTH[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_end_hour_n(slot: usize) -> u8 {
     ALARM_END_HOUR[s(slot)].load(Ordering::Relaxed)
 }
-#[allow(dead_code)]
 pub fn alarm_end_minute_n(slot: usize) -> u8 {
     ALARM_END_MINUTE[s(slot)].load(Ordering::Relaxed)
 }
 
 /// Returns the slot's SUMMARY as a heapless string.  Empty if no
 /// summary was set (e.g. slot 0, or pre-import).
-#[allow(dead_code)]
 pub fn alarm_summary_n(slot: usize) -> heapless::String<SUMMARY_LEN> {
     let i = s(slot);
     let mut out: heapless::String<SUMMARY_LEN> = heapless::String::new();
@@ -309,19 +303,12 @@ pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
 
 /// Returns `true` if `slot` is a one-shot calendar alarm (year != 0) bound to
 /// a specific date, rather than a recurring weekly alarm.
-#[allow(dead_code)] // only used by check_and_fire_alarm under embassy-base
 pub fn alarm_is_one_shot_n(slot: usize) -> bool {
     alarm_year_n(slot) != 0
 }
 
-// The slot-aware setters below are intentionally pub but currently have no
-// in-tree caller — they're the entry point external code (calendar import,
-// future multi-alarm UI) will use to populate slots > 0.  Without
-// `#[allow(dead_code)]` rustc warns until that wiring lands.
-
 /// Set or clear a slot's one-shot date.  Pass `(0, 0, 0)` to make the slot
 /// recurring (governed by its day mask) again.
-#[allow(dead_code)]
 pub fn set_alarm_date_n(slot: usize, year: u16, month: u8, day: u8) {
     let i = s(slot);
     ALARM_YEAR[i].store(year, Ordering::Relaxed);
@@ -330,7 +317,6 @@ pub fn set_alarm_date_n(slot: usize, year: u16, month: u8, day: u8) {
     super::signal_settings_dirty();
 }
 
-#[allow(dead_code)]
 pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
     let i = s(slot);
     ALARM_HOUR[i].store(hour.min(23), Ordering::Relaxed);
@@ -342,27 +328,18 @@ pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
 /// the `DTEND` of each event so the day-view can render duration
 /// blocks.  Defaults to the start time when `DTEND` is missing or
 /// degenerate (zero-duration event renders as a thin marker).
-#[allow(dead_code)]
 pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
     let i = s(slot);
     ALARM_END_HOUR[i].store(hour.min(23), Ordering::Relaxed);
     ALARM_END_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
 }
 
-#[allow(dead_code)]
 pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
     ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
     super::signal_settings_dirty();
 }
 
-#[allow(dead_code)]
-pub fn set_alarm_melody_n(slot: usize, melody: u8) {
-    ALARM_MELODY[s(slot)].store(melody, Ordering::Relaxed);
-    super::signal_settings_dirty();
-}
-
 /// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
-#[allow(dead_code)]
 pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
     let i = s(slot);
     for (j, b) in src.iter().enumerate() {
@@ -423,7 +400,7 @@ pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
 /// (the user's manual alarm) is left alone.  Used by the Events menu to
 /// undo an `ALARMS.ICS` import without rebooting; the next boot would
 /// overwrite slots 1..7 again from the file anyway, so this is mostly for
-/// "I changed my mind, take them off the watch face *now*" flows.
+/// "I changed my mind, take them off the Clock face *now*" flows.
 pub fn clear_imported_alarms() {
     for slot in 1..N_ALARMS {
         ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
@@ -802,7 +779,7 @@ where
 ///   * Alarm enabled with a future firing today → bell + that `HH:MM`.
 ///
 /// The bell uses the red plane, which only refreshes on a full
-/// tri-color update, so toggling alarms while sitting on the watch face
+/// tri-color update, so toggling alarms while sitting on the Clock face
 /// can leave the bell stale until the next full refresh.  The `HH:MM` is
 /// drawn in black and updates on every redraw.
 pub(super) fn draw_indicator<D>(display: &mut D) -> Result<(), D::Error>

@@ -431,11 +431,10 @@ impl<'a> SimpleLoRa<'a> {
 
         for _ in 0..10u8 {
             Timer::after_millis(50).await;
-            if let Ok(s) = self.lora.get_status() {
-                if matches!(s.chip_mode(), Some(ChipMode::RX)) {
+            if let Ok(s) = self.lora.get_status()
+                && matches!(s.chip_mode(), Some(ChipMode::RX)) {
                     return true;
                 }
-            }
         }
         false
     }

@@ -94,30 +94,25 @@ pub async fn init() {
     };
 
     let mut total: u8 = 0;
-    loop {
-        match dir.next().await {
-            Ok(Some((name, _file))) => {
-                if &name[8..11] != b"PCX" {
-                    continue;
-                }
-                total = total.saturating_add(1);
-                defmt::info!("sprite: catalogued {=[u8]:a}", &name[..]);
-                let Some(pp) = parse_hex_pair(name[0], name[1]) else {
-                    continue;
-                };
-                let Some(aa) = parse_hex_pair(name[2], name[3]) else {
-                    continue;
-                };
-                let Some(ff) = parse_hex_pair(name[4], name[5]) else {
-                    continue;
-                };
-                if (pp as usize) < PP_MAX && (aa as usize) < AA_MAX && ff < FF_MAX {
-                    let mask = 1u32 << ff;
-                    ANIM_PRESENCE[pp as usize][aa as usize]
-                        .fetch_or(mask, core::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            _ => break,
+    while let Ok(Some((name, _file))) = dir.next().await {
+        if &name[8..11] != b"PCX" {
+            continue;
+        }
+        total = total.saturating_add(1);
+        defmt::info!("sprite: catalogued {=[u8]:a}", &name[..]);
+        let Some(pp) = parse_hex_pair(name[0], name[1]) else {
+            continue;
+        };
+        let Some(aa) = parse_hex_pair(name[2], name[3]) else {
+            continue;
+        };
+        let Some(ff) = parse_hex_pair(name[4], name[5]) else {
+            continue;
+        };
+        if (pp as usize) < PP_MAX && (aa as usize) < AA_MAX && ff < FF_MAX {
+            let mask = 1u32 << ff;
+            ANIM_PRESENCE[pp as usize][aa as usize]
+                .fetch_or(mask, core::sync::atomic::Ordering::Relaxed);
         }
     }
 

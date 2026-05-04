@@ -70,6 +70,12 @@ pub struct MscState {
     last_sense: [u8; 18],
 }
 
+impl Default for MscState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MscState {
     pub const fn new() -> Self {
         Self {

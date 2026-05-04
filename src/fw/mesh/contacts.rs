@@ -537,6 +537,12 @@ pub struct ContactStore {
     hi: kv::KvNamespace,
 }
 
+impl Default for ContactStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContactStore {
     /// Create a new handle to the contact store.
     pub fn new() -> Self {
@@ -626,9 +632,9 @@ impl ContactStore {
         let stored_count = buf[0] as usize;
         let avail_count = (n - 1) / 2;
         let count = stored_count.min(avail_count).min(MAX_SLOTS_PER_BUCKET);
-        for i in 0..count {
+        for (i, slot) in out.iter_mut().take(count).enumerate() {
             let off = 1 + i * 2;
-            out[i] = u16::from_le_bytes([buf[off], buf[off + 1]]);
+            *slot = u16::from_le_bytes([buf[off], buf[off + 1]]);
         }
         count
     }
@@ -905,17 +911,13 @@ impl ContactStore {
             let mut cbuf = [0u8; CONTACT_SIZE];
             for idx in 0..MAX_CONTACTS {
                 let key = slot_key(idx);
-                if let Ok(n) = self.kv.get(key.as_str(), &mut cbuf).await {
-                    if n == CONTACT_SIZE {
-                        if let Some(c) =
+                if let Ok(n) = self.kv.get(key.as_str(), &mut cbuf).await
+                    && n == CONTACT_SIZE
+                        && let Some(c) =
                             Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
-                        {
-                            if !c.is_deleted() {
+                            && !c.is_deleted() {
                                 count += 1;
                             }
-                        }
-                    }
-                }
                 embassy_futures::yield_now().await;
             }
 
@@ -1074,12 +1076,11 @@ impl ContactStore {
         // --- Update path: contact already known via index ---
         if let Some(slot) = self.index_lookup(&contact.pub_key).await {
             let mut cbuf = [0u8; CONTACT_SIZE];
-            if let Ok(n) = self.kv.get(slot_key(slot).as_str(), &mut cbuf).await {
-                if n == CONTACT_SIZE {
-                    if let Some(existing) =
+            if let Ok(n) = self.kv.get(slot_key(slot).as_str(), &mut cbuf).await
+                && n == CONTACT_SIZE
+                    && let Some(existing) =
                         Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
-                    {
-                        if !existing.is_deleted() && existing.pub_key == contact.pub_key {
+                        && !existing.is_deleted() && existing.pub_key == contact.pub_key {
                             let mut updated = contact.clone();
                             updated.flags |= existing.flags & FLAG_FAVORITE;
                             if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
@@ -1090,9 +1091,6 @@ impl ContactStore {
                                 .await?;
                             return Ok(AddResult::Updated);
                         }
-                    }
-                }
-            }
             // Index pointed at a stale/deleted slot — fall through to add.
         }
 
@@ -1108,7 +1106,7 @@ impl ContactStore {
                 _reserved: 0,
             },
         };
-        let capacity = (meta.capacity as usize).min(MAX_CONTACTS).max(1);
+        let capacity = (meta.capacity as usize).clamp(1, MAX_CONTACTS);
         let target = meta.head as usize % capacity;
         let contact_hash = contact.pub_key[0];
 
@@ -1133,7 +1131,7 @@ impl ContactStore {
         // room is unchanged in that case.
         let bucket_room_required = incumbent
             .as_ref()
-            .map_or(true, |inc| inc.pub_key[0] != contact_hash);
+            .is_none_or(|inc| inc.pub_key[0] != contact_hash);
         if bucket_room_required && !self.hash_index_has_room(contact_hash).await {
             defmt::warn!(
                 "contacts: hash bucket {=u8:#04x} full ({=usize} slots) — rejecting new contact. Bump MAX_SLOTS_PER_BUCKET if this happens often.",

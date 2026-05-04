@@ -65,7 +65,7 @@ const BORDER: i32 = 4;
 //
 // Visited state: 324 bits = 41 u32s (same shape).
 
-const PACK_LEN: usize = (CELLS + 31) / 32; // = 11 u32s  (rounds up)
+const PACK_LEN: usize = CELLS.div_ceil(32); // = 11 u32s  (rounds up)
 
 const NORTH: u8 = 0b0001;
 const EAST: u8 = 0b0010;
@@ -107,23 +107,13 @@ static REVEALED: AtomicBool = AtomicBool::new(false);
 // use a newtype wrapper with manual initialisation.
 
 /// Packed open-wall nibble for each cell. Index = row*W + col.
-static WALLS: [AtomicU8; CELLS] = {
-    // const initialiser — all walls closed (0).
-    const INIT: AtomicU8 = AtomicU8::new(0);
-    [INIT; CELLS]
-};
+static WALLS: [AtomicU8; CELLS] = [const { AtomicU8::new(0) }; CELLS];
 
 /// Visited bitfield (one bit per cell).  Index i → u32 i/32, bit i%32.
-static VISITED: [AtomicU32; PACK_LEN] = {
-    const INIT: AtomicU32 = AtomicU32::new(0);
-    [INIT; PACK_LEN]
-};
+static VISITED: [AtomicU32; PACK_LEN] = [const { AtomicU32::new(0) }; PACK_LEN];
 
 /// Exit positions: packed as (row << 8 | col).  0xFFFF = unused.
-static EXITS: [AtomicU32; MAX_EXITS] = {
-    const INIT: AtomicU32 = AtomicU32::new(0xFFFF);
-    [INIT; MAX_EXITS]
-};
+static EXITS: [AtomicU32; MAX_EXITS] = [const { AtomicU32::new(0xFFFF) }; MAX_EXITS];
 
 // ── Maze source ───────────────────────────────────────────────────────────────
 //
@@ -408,9 +398,9 @@ impl Stack {
 
 // ── Maze generation ───────────────────────────────────────────────────────────
 
-/// Bitmap visited helpers — operate on a stack-local `[u32; PACK_LEN]`
-/// buffer passed in by the caller.  Generation and the BFS exit
-/// validator each instantiate their own; nothing is held across calls.
+// Bitmap visited helpers — operate on a stack-local `[u32; PACK_LEN]`
+// buffer passed in by the caller.  Generation and the BFS exit
+// validator each instantiate their own; nothing is held across calls.
 
 fn gen_mark(buf: &mut [u32; PACK_LEN], i: usize) {
     buf[i / 32] |= 1 << (i % 32);
@@ -420,7 +410,6 @@ fn gen_is_visited(buf: &[u32; PACK_LEN], i: usize) -> bool {
     buf[i / 32] & (1 << (i % 32)) != 0
 }
 
-/// Generate a new perfect maze using iterative Recursive Backtracker DFS.
 // ── Load maze from base64 ─────────────────────────────────────────────────────
 
 /// Decode a base64 string produced by the maze editor and populate the maze
@@ -460,7 +449,7 @@ fn load_from_base64(encoded: &str) -> bool {
 
     let wall_start  = 16usize;
     let cells       = w * h;
-    let wall_bytes  = (cells + 1) / 2;
+    let wall_bytes  = cells.div_ceil(2);
     if decoded_len < wall_start + wall_bytes { return false; }
 
     // ── Load into statics ─────────────────────────────────────────────────
@@ -611,7 +600,7 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
 
     let is_existing_exit = |r: usize, c: usize| -> bool {
         let p = ((r as u32) << 8) | c as u32;
-        exit_cells[..already_placed].iter().any(|&e| e == p)
+        exit_cells[..already_placed].contains(&p)
     };
 
     // BFS from candidate, treating existing exit cells as walls.
@@ -649,8 +638,7 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
 
     // Every existing exit must be reachable: at least one of its interior
     // neighbours must have been visited by the BFS.
-    for i in 0..already_placed {
-        let ev = exit_cells[i];
+    for &ev in &exit_cells[..already_placed] {
         let er = (ev >> 8) as usize;
         let ec = (ev & 0xFF) as usize;
 
@@ -678,6 +666,7 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
     true
 }
 
+/// Generate a new perfect maze using iterative Recursive Backtracker DFS.
 fn generate() {
     // Seed the PRNG.
     RNG.store(rng_seed(), Ordering::Relaxed);

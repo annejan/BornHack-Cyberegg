@@ -191,11 +191,10 @@ fn resolve_anchor(channel_idx: u8, anchor: Option<u32>) -> (usize, usize) {
             if entry.channel_idx != channel_idx {
                 continue;
             }
-            if let Some(h) = anchor {
-                if found_at.is_none() && entry.content_hash == h {
+            if let Some(h) = anchor
+                && found_at.is_none() && entry.content_hash == h {
                     found_at = Some(total);
                 }
-            }
             total += 1;
         }
         let anchor_idx = if total == 0 {

@@ -1,14 +1,14 @@
-// use embassy_nrf::gpio::AnyPin;
+//! Board pin assignments for NRF52840 with SSD1680 EPD.
 
-/// Board pin assignments for NRF52840 with SSD1680 EPD
-
-/// Macro to extract a board pin by name
-/// 
-/// Pins configured for **Cyber Ægg Prototype V2 board**
-/// 
-/// # Example usage:
-/// 
+/// Extract a board pin by name.
+///
+/// Pins configured for **Cyber Ægg Prototype V2 board**.
+///
+/// # Example usage
+///
+/// ```ignore
 /// let charge_pin = board!(p, charge);
+/// ```
 #[macro_export]
 #[rustfmt::skip]
 macro_rules! board {

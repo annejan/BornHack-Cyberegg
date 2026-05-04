@@ -175,11 +175,10 @@ pub async fn count_active() -> u8 {
     let mut count = 0u8;
     for i in 0..NUM_CHANNELS {
         let mut buf = [0u8; SLOT_LEN];
-        if let Ok(n) = kv.get(slot_key(i).as_str(), &mut buf).await {
-            if n == SLOT_LEN && !is_empty(&buf) {
+        if let Ok(n) = kv.get(slot_key(i).as_str(), &mut buf).await
+            && n == SLOT_LEN && !is_empty(&buf) {
                 count += 1;
             }
-        }
     }
     count
 }

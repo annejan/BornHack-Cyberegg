@@ -3,9 +3,9 @@
 //!
 //! What we actually need from an ICS file:
 //!   * `DTSTART` — the event start, in any of:
-//!       `DTSTART:YYYYMMDDTHHMMSS`             (floating local time)
-//!       `DTSTART:YYYYMMDDTHHMMSSZ`            (UTC)
-//!       `DTSTART;TZID=Europe/Copenhagen:YYYYMMDDTHHMMSS`
+//!     `DTSTART:YYYYMMDDTHHMMSS`             (floating local time),
+//!     `DTSTART:YYYYMMDDTHHMMSSZ`            (UTC),
+//!     `DTSTART;TZID=Europe/Copenhagen:YYYYMMDDTHHMMSS`.
 //!   * `DTEND` — same shapes, optional.  When absent the event has zero
 //!     duration (renders as a thin marker on the day-view).
 //!   * `SUMMARY` — the event title.  We keep up to the first 31 ASCII
@@ -27,8 +27,6 @@
 //! (we require T-prefixed times).  Bornhack ICS dumps don't fold lines
 //! around the SUMMARY/DTSTART/DTEND we care about; if we ever need
 //! richer parsing, swap this for a real crate.
-
-#![cfg_attr(not(test), allow(dead_code))]
 
 /// Maximum bytes kept from an event SUMMARY for the on-device label.
 pub const SUMMARY_LEN: usize = 31;
@@ -58,6 +56,7 @@ pub struct Event {
 }
 
 impl Event {
+    #[allow(dead_code)] // Only used in tests
     pub fn summary_str(&self) -> &str {
         let n = self
             .summary

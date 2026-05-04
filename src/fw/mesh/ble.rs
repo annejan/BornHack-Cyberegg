@@ -3,6 +3,12 @@
 //! Exposes a Nordic UART Service (NUS) for MeshCore companion app connectivity.
 //! Bonding keys are persisted to QSPI flash via `flash_task`; see flash.rs.
 
+// `needless_borrows_for_generic_args` fires inside the
+// `#[gatt_service]` macro expansion (NusService / NusServer below) —
+// item-level `#[allow]` doesn't propagate into the macro output, so
+// the suppression has to live at module scope.
+#![allow(clippy::needless_borrows_for_generic_args)]
+
 use core::sync::atomic::Ordering;
 
 use rand_core::{CryptoRng, RngCore};
@@ -638,8 +644,7 @@ async fn nus_peripheral_loop<C>(
             // ---------------------------------------------------------------
             if let Some((ref mut slot, ref mut remaining, ref mut most_recent_lastmod)) =
                 contacts_stream
-            {
-                if outbox.is_empty() {
+                && outbox.is_empty() {
                     if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
                         outbox_push(
                             outbox,
@@ -678,7 +683,6 @@ async fn nus_peripheral_loop<C>(
                         }
                     }
                 }
-            }
 
             // ---------------------------------------------------------------
             // Wait for the next event.
@@ -1351,14 +1355,10 @@ async fn nus_peripheral_loop<C>(
                                     client_repeat,
                                 }) => {
                                     // Validate ranges per MeshCore reference firmware.
-                                    if freq_khz >= 300_000
-                                        && freq_khz <= 2_500_000
-                                        && bw_hz >= 7_000
-                                        && bw_hz <= 500_000
-                                        && sf >= 5
-                                        && sf <= 12
-                                        && cr >= 5
-                                        && cr <= 8
+                                    if (300_000..=2_500_000).contains(&freq_khz)
+                                        && (7_000..=500_000).contains(&bw_hz)
+                                        && (5..=12).contains(&sf)
+                                        && (5..=8).contains(&cr)
                                     {
                                         defmt::info!(
                                             "companion: SET_RADIO_PARAMS freq={=u32}kHz bw={=u32}Hz SF={=u8} CR={=u8} → OK",
@@ -1387,7 +1387,7 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::SetRadioTxPower(power)) => {
-                                    if power >= -9 && power <= 22 {
+                                    if (-9..=22).contains(&power) {
                                         defmt::info!(
                                             "companion: SET_RADIO_TX_POWER {=i8} dBm → OK",
                                             power
@@ -1519,10 +1519,8 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::SetAdvertLatLon { lat, lon }) => {
-                                    if lat >= -90_000_000
-                                        && lat <= 90_000_000
-                                        && lon >= -180_000_000
-                                        && lon <= 180_000_000
+                                    if (-90_000_000..=90_000_000).contains(&lat)
+                                        && (-180_000_000..=180_000_000).contains(&lon)
                                     {
                                         defmt::info!(
                                             "companion: SET_ADVERT_LATLON lat={=i32} lon={=i32} → OK",

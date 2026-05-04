@@ -10,7 +10,7 @@ pub mod iso14443_3 {
         fn transmit(&mut self, buf: &[u8]) -> impl Future<Output = Result<(), Self::Error>>;
     }
 
-    impl<'a, T: Card> Card for &'a mut T {
+    impl<T: Card> Card for &mut T {
         type Error = T::Error;
 
         fn receive(&mut self, buf: &mut [u8]) -> impl Future<Output = Result<usize, Self::Error>> {
