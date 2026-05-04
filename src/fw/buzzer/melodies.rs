@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::{Note, Tone};
 
 // BPM 100 note durations:
