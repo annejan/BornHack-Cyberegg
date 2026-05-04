@@ -520,7 +520,7 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
-        // Watch screen consumes Up/Down to toggle digital/analog face.
+        // Clock screen consumes Up/Down to toggle digital/analog face.
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]
         if self.active_screen == crate::SCREEN_WATCH && crate::watch::dispatch(btn) {

@@ -417,7 +417,7 @@ pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
 /// (the user's manual alarm) is left alone.  Used by the Events menu to
 /// undo an `ALARMS.ICS` import without rebooting; the next boot would
 /// overwrite slots 1..7 again from the file anyway, so this is mostly for
-/// "I changed my mind, take them off the watch face *now*" flows.
+/// "I changed my mind, take them off the Clock face *now*" flows.
 pub fn clear_imported_alarms() {
     for slot in 1..N_ALARMS {
         ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
@@ -796,7 +796,7 @@ where
 ///   * Alarm enabled with a future firing today → bell + that `HH:MM`.
 ///
 /// The bell uses the red plane, which only refreshes on a full
-/// tri-color update, so toggling alarms while sitting on the watch face
+/// tri-color update, so toggling alarms while sitting on the Clock face
 /// can leave the bell stale until the next full refresh.  The `HH:MM` is
 /// drawn in black and updates on every redraw.
 pub(super) fn draw_indicator<D>(display: &mut D) -> Result<(), D::Error>

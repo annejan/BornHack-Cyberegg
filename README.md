@@ -508,12 +508,12 @@ To regenerate all PCX files into `assets/to-badge/`:
 ```bash
 cd ../asset-gen
 cargo run -- export \
-    ../hello-graphics/assets/bornpets-bartholomeus.json5 \
-    ../hello-graphics/assets/bornpets-sponsors-cat.json5 \
-    ../hello-graphics/assets/bornpets-sponsors-slug.json5 \
-    ../hello-graphics/assets/sponsors.json5 \
-    ../hello-graphics/assets/bornpets-menu-icons.json5 \
-    --output-dir ../hello-graphics/assets/to-badge \
+    ../bornhack-aegg/assets/bornpets-bartholomeus.json5 \
+    ../bornhack-aegg/assets/bornpets-sponsors-cat.json5 \
+    ../bornhack-aegg/assets/bornpets-sponsors-slug.json5 \
+    ../bornhack-aegg/assets/sponsors.json5 \
+    ../bornhack-aegg/assets/bornpets-menu-icons.json5 \
+    --output-dir ../bornhack-aegg/assets/to-badge \
     --format pcx
 ```
 

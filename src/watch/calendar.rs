@@ -1,10 +1,10 @@
 //! Calendar screen — month-grid view of every enabled one-shot alarm
 //! slot, with a movable cursor and a per-day detail mode.  Sits in the
-//! icon grid right after the Watch screen; reads the same alarm-slot
+//! icon grid right after the Clock screen; reads the same alarm-slot
 //! state that fires the buzzer, so any event you load via `ALARMS.ICS`
 //! automatically shows up here.
 //!
-//! Three modes — same shape as the Watch face's "consume arrows only
+//! Three modes — same shape as the Clock face's "consume arrows only
 //! when needed" pattern, so the user can scroll past Calendar with
 //! Left/Right without it grabbing the input:
 //!
@@ -230,7 +230,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
 
 /// Passive: the only button we consume is Fire/Execute (transitions to
 /// Active).  Everything else falls through so the menu can do
-/// screen-nav, dismiss alarms, etc. — the same shape as the Watch face.
+/// screen-nav, dismiss alarms, etc. — the same shape as the Clock face.
 fn dispatch_passive(btn: ButtonId) -> bool {
     match btn {
         ButtonId::Fire | ButtonId::Execute => {
