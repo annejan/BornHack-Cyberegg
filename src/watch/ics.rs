@@ -34,7 +34,6 @@ pub const SUMMARY_LEN: usize = 31;
 /// One parsed `VEVENT`.  When `DTEND` is missing in the source, the end
 /// fields equal the start fields (zero-duration event).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Only used in tests
 pub struct Event {
     pub year: u16,
     pub month: u8,
