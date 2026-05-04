@@ -355,12 +355,6 @@ pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
     super::signal_settings_dirty();
 }
 
-#[allow(dead_code)]
-pub fn set_alarm_melody_n(slot: usize, melody: u8) {
-    ALARM_MELODY[s(slot)].store(melody, Ordering::Relaxed);
-    super::signal_settings_dirty();
-}
-
 /// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
 #[allow(dead_code)]
 pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
