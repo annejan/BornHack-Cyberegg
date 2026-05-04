@@ -456,6 +456,15 @@ impl<const M: usize> DisplayState<M> {
     /// Dispatch a button press to the menu layer.
     /// Called when the game layer did not consume the event.
     pub fn dispatch_button(&mut self, btn: ButtonId) {
+        // ── Game input: capture BEFORE anything else ─────────────────
+        #[cfg(feature = "game")]
+        {
+            if crate::game::bornjeweled::is_active() {
+                crate::game::bornjeweled::dispatch(btn);
+                return;
+            }
+        }
+
         // A ringing alarm eats the first button press anywhere in the UI:
         // silence the buzzer and consume the event so the user has to press
         // again to actually navigate.

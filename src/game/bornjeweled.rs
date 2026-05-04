@@ -201,20 +201,23 @@ pub fn dispatch(btn: crate::menu::ButtonId) -> bool {
 
 fn gem_style(gem: u8) -> PrimitiveStyle<TriColor> {
     match gem {
-        1 => PrimitiveStyle::with_fill(BLACK),
-        2 => PrimitiveStyle::with_fill(WHITE),
-        3 => PrimitiveStyle::with_fill(RED),
-        4 => PrimitiveStyleBuilder::new()
+        1 => PrimitiveStyle::with_fill(BLACK),                              // solid black
+        2 => PrimitiveStyle::with_fill(WHITE),                              // solid white
+        3 => PrimitiveStyleBuilder::new()                                   // red ring
+            .stroke_color(RED)
+            .stroke_width(4)
+            .build(),
+        4 => PrimitiveStyleBuilder::new()                                   // black center, white ring
             .fill_color(BLACK)
             .stroke_color(WHITE)
             .stroke_width(2)
             .build(),
-        5 => PrimitiveStyleBuilder::new()
+        5 => PrimitiveStyleBuilder::new()                                   // white center, black ring
             .fill_color(WHITE)
             .stroke_color(BLACK)
             .stroke_width(2)
             .build(),
-        6 => PrimitiveStyleBuilder::new()
+        6 => PrimitiveStyleBuilder::new()                                   // red center, white ring
             .fill_color(RED)
             .stroke_color(WHITE)
             .stroke_width(2)

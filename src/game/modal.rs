@@ -290,6 +290,9 @@ impl Item {
             }
             Self::BornJeweled => {
                 super::bornjeweled::open();
+                crate::DISPLAY_STATE.lock(|cell| {
+                    cell.borrow_mut().set_active_screen(crate::SCREEN_GAME);
+                });
                 close();
             }
             Self::PlayMusic => open(ModalKind::Music),

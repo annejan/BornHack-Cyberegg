@@ -252,6 +252,9 @@ where
     if nim::is_active() {
         return nim::draw(display);
     }
+    if bornjeweled::is_active() {
+        return bornjeweled::draw(display);
+    }
 
     // Battery icon — top-right.
     #[cfg(feature = "embassy-base")]
