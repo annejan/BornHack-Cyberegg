@@ -28,14 +28,13 @@
 //! around the SUMMARY/DTSTART/DTEND we care about; if we ever need
 //! richer parsing, swap this for a real crate.
 
-#![cfg_attr(not(test), allow(dead_code))]
-
 /// Maximum bytes kept from an event SUMMARY for the on-device label.
 pub const SUMMARY_LEN: usize = 31;
 
 /// One parsed `VEVENT`.  When `DTEND` is missing in the source, the end
 /// fields equal the start fields (zero-duration event).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(not(test), allow(dead_code))] // Only used in tests
 pub struct Event {
     pub year: u16,
     pub month: u8,
@@ -58,6 +57,7 @@ pub struct Event {
 }
 
 impl Event {
+    #[allow(dead_code)] // Only used in tests
     pub fn summary_str(&self) -> &str {
         let n = self
             .summary
