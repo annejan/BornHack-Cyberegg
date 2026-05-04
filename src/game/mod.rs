@@ -14,6 +14,7 @@
 //! └───────────────────────────────────────┘  y = 152
 //! ```
 
+pub mod bornjeweled;
 pub mod blackhole;
 pub mod engine;
 pub mod input;
