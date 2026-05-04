@@ -2033,6 +2033,8 @@ where
             y += lh + 4;
             Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
             y += lh;
+            Text::with_text_style("AnneJan", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
             Text::with_text_style("Orange_Murker", Point::new(x, y), font, center).draw(display)?;
         }
         2 => {
@@ -2046,6 +2048,8 @@ where
             Text::with_text_style("at-boy", Point::new(x, y), font, center).draw(display)?;
             y += lh;
             Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("AnneJan", Point::new(x, y), font, center).draw(display)?;
         }
         4 => {
             Text::with_text_style("-- Graphics --", Point::new(x, y), font, center)
