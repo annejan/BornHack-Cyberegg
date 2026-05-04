@@ -501,19 +501,19 @@ Missing animation files fall back to the placeholder sprite (`1E000000.PCX`).
 
 #### Generating assets
 
-The PCX sprite files are generated from PNG sprite sheets using the `asset-gen` tool (in the `asset-gen/` directory inside the `bornhack-firmware-2026` repository). Each JSON5 config file in `assets/` describes a sprite sheet layout.
+The PCX sprite files are generated from PNG sprite sheets using the `aegg-asset-assistant` tool, a sibling repository at <https://codeberg.org/Ranzbak/aegg-asset-assistant>. Each JSON5 config file in `assets/` describes a sprite sheet layout.
 
 To regenerate all PCX files into `assets/to-badge/`:
 
 ```bash
-cd ../bornhack-firmware-2026/asset-gen
+cd ../aegg-asset-assistant
 cargo run -- export \
-    ../bornhack-aegg/assets/bornpets-bartholomeus.json5 \
-    ../bornhack-aegg/assets/bornpets-sponsors-cat.json5 \
-    ../bornhack-aegg/assets/bornpets-sponsors-slug.json5 \
-    ../bornhack-aegg/assets/sponsors.json5 \
-    ../bornhack-aegg/assets/bornpets-menu-icons.json5 \
-    --output-dir ../bornhack-aegg/assets/to-badge \
+    ../bornhack-firmware-2026/assets/bornpets-bartholomeus.json5 \
+    ../bornhack-firmware-2026/assets/bornpets-sponsors-cat.json5 \
+    ../bornhack-firmware-2026/assets/bornpets-sponsors-slug.json5 \
+    ../bornhack-firmware-2026/assets/sponsors.json5 \
+    ../bornhack-firmware-2026/assets/bornpets-menu-icons.json5 \
+    --output-dir ../bornhack-firmware-2026/assets/to-badge \
     --format pcx
 ```
 
