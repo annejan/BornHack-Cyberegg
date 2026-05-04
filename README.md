@@ -501,12 +501,12 @@ Missing animation files fall back to the placeholder sprite (`1E000000.PCX`).
 
 #### Generating assets
 
-The PCX sprite files are generated from PNG sprite sheets using the `asset-gen` tool (in the `asset-gen/` sibling directory). Each JSON5 config file in `assets/` describes a sprite sheet layout.
+The PCX sprite files are generated from PNG sprite sheets using the `asset-gen` tool (in the `asset-gen/` directory inside the `bornhack-firmware-2026` repository). Each JSON5 config file in `assets/` describes a sprite sheet layout.
 
 To regenerate all PCX files into `assets/to-badge/`:
 
 ```bash
-cd ../asset-gen
+cd ../bornhack-firmware-2026/asset-gen
 cargo run -- export \
     ../bornhack-aegg/assets/bornpets-bartholomeus.json5 \
     ../bornhack-aegg/assets/bornpets-sponsors-cat.json5 \
