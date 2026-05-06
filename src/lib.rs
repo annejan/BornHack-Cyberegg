@@ -555,7 +555,7 @@ where
         #[cfg(not(feature = "mesh"))]
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "mesh")]
-        SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
+        SCREEN_ADVERT => fw::mesh::people::draw(display, bat_prc),
         SCREEN_TOKEN => token::draw(display),
         #[cfg(feature = "watch")]
         SCREEN_WATCH => watch::draw(display),
@@ -947,110 +947,4 @@ where
     )
     .draw(display)?;
     Ok(())
-}
-
-#[cfg(feature = "mesh")]
-fn draw_screen_advert<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let style_bold = ui::TEXT_BOLD_BLACK;
-    let style_small = ui::TEXT_BLACK;
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
-
-    draw_header(display, "Adverts", bat_prc)?;
-
-    LAST_ADVERT.lock(|cell| -> Result<(), D::Error> {
-        match *cell.borrow() {
-            None => {
-                Text::with_text_style(
-                    "No adverts",
-                    display.bounding_box().center(),
-                    style_bold,
-                    TextStyleBuilder::new()
-                        .baseline(Baseline::Middle)
-                        .alignment(Alignment::Center)
-                        .build(),
-                )
-                .draw(display)?;
-            }
-            Some(ref adv) => {
-                // Row 1: device name (bold) or "Unknown"
-                let name = if adv.name.is_empty() {
-                    "Unknown"
-                } else {
-                    adv.name.as_str()
-                };
-                Text::with_text_style(name, Point::new(4, 14), style_bold, bottom).draw(display)?;
-
-                // Row 2: role
-                let role = match adv.role {
-                    1 => "Chat Node",
-                    2 => "Repeater",
-                    3 => "Room Server",
-                    4 => "Sensor",
-                    _ => "Unknown role",
-                };
-                Text::with_text_style(role, Point::new(4, 28), style_small, bottom)
-                    .draw(display)?;
-
-                // Divider
-                Rectangle::new(Point::new(0, 30), Size::new(152, 1))
-                    .into_styled(PrimitiveStyle::with_fill(BLACK))
-                    .draw(display)?;
-
-                // Key prefix (16 hex chars = 8 bytes)
-                Text::with_text_style("Key:", Point::new(4, 44), style_small, bottom)
-                    .draw(display)?;
-                Text::with_text_style(
-                    adv.pub_key_hex.as_str(),
-                    Point::new(4, 56),
-                    style_small,
-                    bottom,
-                )
-                .draw(display)?;
-
-                // Signature validity
-                let sig_text = if adv.sig_ok {
-                    "Sig: OK"
-                } else {
-                    "Sig: INVALID"
-                };
-                let sig_style = if adv.sig_ok {
-                    ui::TEXT_BLACK
-                } else {
-                    ui::TEXT_RED
-                };
-                Text::with_text_style(sig_text, Point::new(4, 72), sig_style, bottom)
-                    .draw(display)?;
-
-                // GPS coordinates (if present)
-                if adv.lat != 0 || adv.lon != 0 {
-                    let lat_deg = adv.lat / 1_000_000;
-                    let lat_frac = (adv.lat.abs() % 1_000_000) as u32;
-                    let lat_hem = if adv.lat >= 0 { 'N' } else { 'S' };
-                    let lon_deg = adv.lon / 1_000_000;
-                    let lon_frac = (adv.lon.abs() % 1_000_000) as u32;
-                    let lon_hem = if adv.lon >= 0 { 'E' } else { 'W' };
-                    let lat_text =
-                        format!(18; "{}.{:06}{}", lat_deg.abs(), lat_frac, lat_hem).unwrap();
-                    let lon_text =
-                        format!(19; "{}.{:06}{}", lon_deg.abs(), lon_frac, lon_hem).unwrap();
-                    Text::with_text_style(&lat_text, Point::new(4, 88), style_small, bottom)
-                        .draw(display)?;
-                    Text::with_text_style(&lon_text, Point::new(4, 104), style_small, bottom)
-                        .draw(display)?;
-                } else {
-                    Text::with_text_style("No GPS", Point::new(4, 88), style_small, bottom)
-                        .draw(display)?;
-                }
-
-                // RSSI and SNR at bottom
-                let rssi_text = format!(24; "{} dBm / {} dB", adv.rssi, adv.snr_x4 / 4).unwrap();
-                Text::with_text_style(&rssi_text, Point::new(4, 152), style_small, bottom)
-                    .draw(display)?;
-            }
-        }
-        Ok(())
-    })
 }

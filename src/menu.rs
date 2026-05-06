@@ -521,6 +521,19 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
+        // People (Advert) screen intercepts list/popup/detail input.  Returns
+        // true when Cancel/Left/Right should propagate to the screen-swipe
+        // carousel; everything else stays inside the screen.
+        #[cfg(feature = "mesh")]
+        if self.active_screen == crate::SCREEN_ADVERT {
+            let leave = crate::fw::mesh::people::dispatch(btn);
+            if leave {
+                // Fall through to the screen-swipe / cancel handler.
+            } else {
+                return;
+            }
+        }
+
         // Clock screen consumes Up/Down to toggle digital/analog face.
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]
