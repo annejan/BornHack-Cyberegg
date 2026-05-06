@@ -1491,6 +1491,10 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
         kind: MenuItemKind::Back,
     },
     MenuItem {
+        label: label_boot_chime,
+        kind: MenuItemKind::Action(action_boot_chime_toggle),
+    },
+    MenuItem {
         label: || "Bluetooth",
         kind: MenuItemKind::Submenu(&BLE_ITEMS),
     },
@@ -1519,10 +1523,6 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "Events",
         kind: MenuItemKind::Submenu(&EVENTS_ITEMS),
-    },
-    MenuItem {
-        label: label_boot_chime,
-        kind: MenuItemKind::Action(action_boot_chime_toggle),
     },
     MenuItem {
         label: || "",
