@@ -1043,6 +1043,39 @@ impl ContactStore {
         Ok(true)
     }
 
+    /// Set or clear the [`FLAG_FAVORITE`] bit on the contact identified
+    /// by `pub_key`.  Returns `Ok(true)` when the stored flag changed,
+    /// `Ok(false)` when the contact wasn't found or the flag already
+    /// matched the requested state.
+    pub async fn set_favorite(
+        &self,
+        pub_key: &[u8; 32],
+        favorite: bool,
+    ) -> Result<bool, kv::KvError> {
+        let Some(slot) = self.index_lookup(pub_key).await else {
+            return Ok(false);
+        };
+        let key = slot_key(slot);
+        let mut buf = [0u8; CONTACT_SIZE];
+        if self.kv.get(key.as_str(), &mut buf).await.ok() != Some(CONTACT_SIZE) {
+            return Ok(false);
+        }
+        let Some(mut c) = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap()) else {
+            return Ok(false);
+        };
+        let was = c.is_favorite();
+        if was == favorite {
+            return Ok(false); // already in the requested state
+        }
+        if favorite {
+            c.flags |= FLAG_FAVORITE;
+        } else {
+            c.flags &= !FLAG_FAVORITE;
+        }
+        self.kv.set(key.as_str(), &c.to_bytes(), true).await?;
+        Ok(true)
+    }
+
     /// Find a contact whose pub_key starts with `prefix` (6 bytes).
     pub async fn find_by_prefix(&self, prefix: &[u8; 6]) -> Option<Contact> {
         self.index_lookup_prefix(prefix).await.map(|(_, c)| c)

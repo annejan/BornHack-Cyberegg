@@ -31,7 +31,7 @@ use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 use heapless::format;
 
-use super::contacts::{Contact, ContactStore, FLAG_FAVORITE, MAX_CONTACTS};
+use super::contacts::{Contact, ContactStore, FLAG_FAVORITE, MAX_CONTACTS, OUT_PATH_UNKNOWN};
 use super::{TxPrivateMsg, TxRequest, msg_queue, tx_send};
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE, draw_header, ui};
@@ -69,6 +69,15 @@ pub struct ContactRow {
     /// store; useful as a sort hint but unreliable for "last seen" since
     /// most badges advertise `timestamp=0` until their wall clock is set.
     pub last_advert_ts: u32,
+    /// Routing-path length byte.  `OUT_PATH_UNKNOWN` (0xFF) = no path
+    /// established (we have no DM route — only flood works).  Otherwise
+    /// MeshCore encoding: bits 5-0 = hop count, bits 7-6 = hash size.
+    pub out_path_len: u8,
+    /// GPS latitude in microdegrees (1e-6°).  `0` = unset; the advert
+    /// originator has either no GPS lock or chose not to broadcast.
+    pub gps_lat: i32,
+    /// GPS longitude in microdegrees.  `0` = unset (see `gps_lat`).
+    pub gps_lon: i32,
     /// Seconds-since-boot when *we* last heard an advert from this
     /// pub_key during this session.  `None` if not heard since boot.
     /// This is the source of truth for the "Last:" column and the live
@@ -89,6 +98,9 @@ impl ContactRow {
             node_type: c.node_type,
             flags: c.flags,
             last_advert_ts: c.last_advert_ts,
+            out_path_len: c.out_path_len,
+            gps_lat: c.gps_lat,
+            gps_lon: c.gps_lon,
             observed_at_secs,
         }
     }
@@ -242,6 +254,72 @@ fn start_pm_compose(pub_key: [u8; 32]) {
     // 130-byte limit matches MeshCore's `MAX_TXT_TEXT_SIZE` after
     // accounting for the 5-byte header (`timestamp[4] | flags[1]`).
     crate::text_entry::begin(b"", 130, on_pm_compose_done, "PM");
+}
+
+// ── Contact-store mutation queue ───────────────────────────────────────────
+//
+// The popup's Save / Unsave / Forget actions need to write to the
+// persistent ContactStore — but `dispatch()` is sync and the kv ops are
+// async.  Push the requested change here; `mutation_persister_task`
+// drains the channel and applies them.  After each successful write
+// it nudges `ADVERT_SIGNAL` so the cache rebuild picks up the change.
+
+/// Pending mutation against the persistent contact store.
+pub enum Mutation {
+    /// Set or clear the FAVORITE bit on `pub_key`.
+    SetFavorite([u8; 32], bool),
+    /// Remove the contact slot for `pub_key`.
+    Forget([u8; 32]),
+}
+
+pub static MUTATION_QUEUE: embassy_sync::channel::Channel<CriticalSectionRawMutex, Mutation, 4> =
+    embassy_sync::channel::Channel::new();
+
+/// Embassy task: serialise contact-store mutations from the Contacts
+/// screen popup actions, then trigger a cache rebuild.
+#[embassy_executor::task]
+pub async fn mutation_persister_task() {
+    loop {
+        let req = MUTATION_QUEUE.receive().await;
+        let store = ContactStore::new();
+        match req {
+            Mutation::SetFavorite(pk, fav) => {
+                let _ = store.set_favorite(&pk, fav).await;
+            }
+            Mutation::Forget(pk) => {
+                let _ = store.delete(&pk).await;
+            }
+        }
+        // Wake the cache refresh so the UI reflects the change.
+        crate::ADVERT_SIGNAL.signal(());
+    }
+}
+
+/// Apply an in-place edit to `CACHED_CONTACTS` so the UI reflects the
+/// mutation instantly, before the persister task has finished writing
+/// to flash.  Cheap — small heapless Vec scan.
+fn cached_apply_favorite(pub_key: &[u8; 32], favorite: bool) {
+    CACHED_CONTACTS.lock(|c| {
+        for e in c.borrow_mut().iter_mut() {
+            if &e.pub_key == pub_key {
+                if favorite {
+                    e.flags |= FLAG_FAVORITE;
+                } else {
+                    e.flags &= !FLAG_FAVORITE;
+                }
+                break;
+            }
+        }
+    });
+}
+
+fn cached_apply_forget(pub_key: &[u8; 32]) {
+    CACHED_CONTACTS.lock(|c| {
+        let mut list = c.borrow_mut();
+        if let Some(pos) = list.iter().position(|e| &e.pub_key == pub_key) {
+            list.remove(pos);
+        }
+    });
 }
 
 // ── Filtering ───────────────────────────────────────────────────────────────
@@ -492,35 +570,26 @@ fn role_glyph(node_type: u8) -> Option<&'static str> {
     }
 }
 
-/// Role-aware popup item set.  Returned as a fixed-size array of
-/// `Option<&str>`; `None` slots are not rendered.  Index 0 is always the
-/// primary action and is preselected on entry.
-fn popup_items(node_type: u8) -> heapless::Vec<&'static str, 4> {
-    let mut v: heapless::Vec<&'static str, 4> = heapless::Vec::new();
+/// Role-aware popup item set.  Index 0 is the primary action and is
+/// preselected on entry.  Save/Forget appear for every role since the
+/// curate semantics apply equally — only the primary differs.
+fn popup_items(node_type: u8, is_favorite: bool) -> heapless::Vec<&'static str, 6> {
+    let mut v: heapless::Vec<&'static str, 6> = heapless::Vec::new();
+    let fav_label: &'static str = if is_favorite { "Unsave" } else { "Save" };
     match node_type {
         1 => {
-            // Chat Node
+            // Chat Node — PM is the most common action.
             let _ = v.push("PM");
             let _ = v.push("Info");
-            let _ = v.push("< Cancel");
-        }
-        2 => {
-            // Repeater
-            let _ = v.push("Info");
-            let _ = v.push("< Cancel");
-        }
-        3 => {
-            // Room Server
-            let _ = v.push("Info");
-            let _ = v.push("< Cancel");
-        }
-        4 => {
-            // Sensor
-            let _ = v.push("Info");
+            let _ = v.push(fav_label);
+            let _ = v.push("Forget");
             let _ = v.push("< Cancel");
         }
         _ => {
+            // Repeater / Room Server / Sensor / Unknown — no DM action.
             let _ = v.push("Info");
+            let _ = v.push(fav_label);
+            let _ = v.push("Forget");
             let _ = v.push("< Cancel");
         }
     }
@@ -603,8 +672,11 @@ pub fn dispatch(btn: ButtonId) -> bool {
             },
 
             Mode::Popup { target, pos } => {
-                let node_type = filtered_get(filter, target).map(|e| e.node_type);
-                let items = node_type.map(popup_items).unwrap_or_default();
+                let entry_meta =
+                    filtered_get(filter, target).map(|e| (e.pub_key, e.node_type, e.is_favorite()));
+                let items = entry_meta
+                    .map(|(_, nt, fav)| popup_items(nt, fav))
+                    .unwrap_or_default();
                 let n = items.len() as u8;
                 match btn {
                     ButtonId::Up => {
@@ -627,30 +699,41 @@ pub fn dispatch(btn: ButtonId) -> bool {
                     }
                     ButtonId::Fire | ButtonId::Execute => {
                         let label = items.get(pos as usize).copied().unwrap_or("");
-                        // Run the action.  `Cancel` and `Info` resolve here;
-                        // `PM` switches the active screen so we drop our
-                        // mode back to List first to avoid coming back into
-                        // a stale popup if the user navigates back.
-                        match label {
-                            "PM" => {
-                                // Resolve the contact and open the
-                                // keyboard primed for compose.  If the
-                                // entry vanished (cache rebuild
-                                // mid-popup), silently bail back to the
-                                // list rather than open an orphan
-                                // compose with no target.
-                                if let Some(entry) = filtered_get(filter, target) {
-                                    b.mode = Mode::List;
-                                    start_pm_compose(entry.pub_key);
-                                } else {
-                                    b.mode = Mode::List;
-                                }
+                        match (label, entry_meta) {
+                            ("PM", Some((pk, ..))) => {
+                                // Open the keyboard primed for compose.
+                                b.mode = Mode::List;
+                                start_pm_compose(pk);
                             }
-                            "Info" => {
+                            ("Info", _) => {
                                 b.mode = Mode::Detail { target };
                             }
+                            ("Save", Some((pk, ..))) => {
+                                cached_apply_favorite(&pk, true);
+                                let _ = MUTATION_QUEUE.try_send(Mutation::SetFavorite(pk, true));
+                                b.mode = Mode::List;
+                            }
+                            ("Unsave", Some((pk, ..))) => {
+                                cached_apply_favorite(&pk, false);
+                                let _ = MUTATION_QUEUE.try_send(Mutation::SetFavorite(pk, false));
+                                b.mode = Mode::List;
+                            }
+                            ("Forget", Some((pk, ..))) => {
+                                cached_apply_forget(&pk);
+                                let _ = MUTATION_QUEUE.try_send(Mutation::Forget(pk));
+                                // Cursor may now point past the end of
+                                // the filtered list; clamp.
+                                let new_count = filtered_count(filter);
+                                if b.cursor >= new_count {
+                                    b.cursor = new_count.saturating_sub(1);
+                                }
+                                if b.scroll > b.cursor {
+                                    b.scroll = b.cursor;
+                                }
+                                b.mode = Mode::List;
+                            }
                             _ => {
-                                // Cancel
+                                // Cancel or unknown — close the popup.
                                 b.mode = Mode::List;
                             }
                         }
@@ -890,16 +973,16 @@ where
             let n = entry.name.as_str();
             let n = if n.len() > 14 { &n[..14] } else { n };
             let _ = t.push_str(if n.is_empty() { "(unknown)" } else { n });
-            (t, popup_items(entry.node_type))
+            (t, popup_items(entry.node_type, entry.is_favorite()))
         }
         None => (
             heapless::String::<16>::new(),
-            heapless::Vec::<&'static str, 4>::new(),
+            heapless::Vec::<&'static str, 6>::new(),
         ),
     };
 
     // `ui::draw_picker_menu` wants `&[&str]` — convert.
-    let items_ref: heapless::Vec<&str, 4> = items_owned.iter().copied().collect();
+    let items_ref: heapless::Vec<&str, 6> = items_owned.iter().copied().collect();
     ui::draw_picker_menu(display, title.as_str(), items_ref.as_slice(), pos as usize)?;
     Ok(())
 }
@@ -950,27 +1033,65 @@ where
     let line = format!(20; "Last: {}", rel.as_str()).unwrap_or_default();
     Text::with_text_style(line.as_str(), Point::new(4, 66), style_small, bottom).draw(display)?;
 
-    // Key prefix (8 bytes hex)
-    Text::with_text_style("Key:", Point::new(4, 84), style_small, bottom).draw(display)?;
-    let mut hex: heapless::String<24> = heapless::String::new();
-    for (i, &byte) in entry.pub_key.iter().take(8).enumerate() {
-        if i == 4 {
-            let _ = hex.push(' ');
+    // Hops — `out_path_len` encodes hop count in bits 5-0.
+    // `OUT_PATH_UNKNOWN` (0xFF) means we don't know a route yet (only
+    // flood works to reach this contact).  0 = direct neighbour.
+    let hops_line = if entry.out_path_len == OUT_PATH_UNKNOWN {
+        let mut s: heapless::String<20> = heapless::String::new();
+        let _ = s.push_str("Hops: ?");
+        s
+    } else {
+        let n = entry.out_path_len & 0x3F;
+        if n == 0 {
+            let mut s: heapless::String<20> = heapless::String::new();
+            let _ = s.push_str("Hops: 0 (direct)");
+            s
+        } else {
+            format!(20; "Hops: {}", n).unwrap_or_default()
         }
+    };
+    Text::with_text_style(hops_line.as_str(), Point::new(4, 82), style_small, bottom)
+        .draw(display)?;
+
+    // Key prefix (8 bytes hex) on a single line — `"Key: " + 16 hex
+    // chars` = 21 chars × 7 px = 147 px, fits the 152-px display.
+    let mut key_line: heapless::String<24> = heapless::String::new();
+    let _ = key_line.push_str("Key: ");
+    for &byte in entry.pub_key.iter().take(8) {
         let hi = byte >> 4;
         let lo = byte & 0xF;
-        let _ = hex.push(if hi < 10 {
+        let _ = key_line.push(if hi < 10 {
             (b'0' + hi) as char
         } else {
             (b'a' + hi - 10) as char
         });
-        let _ = hex.push(if lo < 10 {
+        let _ = key_line.push(if lo < 10 {
             (b'0' + lo) as char
         } else {
             (b'a' + lo - 10) as char
         });
     }
-    Text::with_text_style(hex.as_str(), Point::new(4, 100), style_small, bottom).draw(display)?;
+    Text::with_text_style(key_line.as_str(), Point::new(4, 100), style_small, bottom)
+        .draw(display)?;
+
+    // GPS — only shown when broadcast.  3-decimal precision (~100 m)
+    // keeps `GPS: 55.612N 12.999E` to 20 chars × 7 px = 140 px on a
+    // 152-px display.
+    if entry.gps_lat != 0 || entry.gps_lon != 0 {
+        let lat_deg = (entry.gps_lat / 1_000_000).abs();
+        let lat_frac = ((entry.gps_lat.abs() % 1_000_000) / 1000) as u32;
+        let lat_hem = if entry.gps_lat >= 0 { 'N' } else { 'S' };
+        let lon_deg = (entry.gps_lon / 1_000_000).abs();
+        let lon_frac = ((entry.gps_lon.abs() % 1_000_000) / 1000) as u32;
+        let lon_hem = if entry.gps_lon >= 0 { 'E' } else { 'W' };
+        let gps = format!(24;
+            "GPS: {}.{:03}{} {}.{:03}{}",
+            lat_deg, lat_frac, lat_hem, lon_deg, lon_frac, lon_hem
+        )
+        .unwrap_or_default();
+        Text::with_text_style(gps.as_str(), Point::new(4, 116), style_small, bottom)
+            .draw(display)?;
+    }
 
     // Footer hint
     Text::with_text_style("Cancel: back", Point::new(4, 148), style_small, bottom).draw(display)?;

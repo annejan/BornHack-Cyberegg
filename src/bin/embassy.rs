@@ -138,6 +138,7 @@ async fn main(spawner: Spawner) {
         spawner.must_spawn(bond_task());
         spawner.must_spawn(persister::run());
         spawner.must_spawn(bornhack_aegg::fw::mesh::contacts_screen::refresh_cache_task());
+        spawner.must_spawn(bornhack_aegg::fw::mesh::contacts_screen::mutation_persister_task());
         ContactStore::new().init().await;
 
         // Load persisted display/runtime settings (timezone, boost-RX) into
