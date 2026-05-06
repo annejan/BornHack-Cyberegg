@@ -542,6 +542,19 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
+        // PM inbox/thread screen intercepts list + thread input.  Same
+        // contract as the Contacts screen: returns true when
+        // Cancel/Left/Right should propagate to the carousel.
+        #[cfg(feature = "mesh")]
+        if self.active_screen == crate::SCREEN_PM {
+            let leave = crate::fw::mesh::pm_inbox::dispatch(btn);
+            if leave {
+                // Fall through.
+            } else {
+                return;
+            }
+        }
+
         // Clock screen consumes Up/Down to toggle digital/analog face.
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]

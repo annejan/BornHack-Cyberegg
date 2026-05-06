@@ -1222,6 +1222,12 @@ async fn nus_peripheral_loop<C>(
                                             );
                                             let is_flood =
                                                 c.out_path_len == contacts::OUT_PATH_UNKNOWN;
+                                            // Mirror phone-originated PMs into the
+                                            // on-device inbox so the user can see
+                                            // their own messages alongside replies.
+                                            if let Ok(s) = core::str::from_utf8(&v) {
+                                                super::pm_inbox::note_outgoing(&c.pub_key, s);
+                                            }
                                             match crate::tx_send(crate::TxRequest::PrivateMsg(
                                                 crate::TxPrivateMsg {
                                                     recipient_pub_key: c.pub_key,

@@ -17,6 +17,7 @@ pub mod discovery;
 pub mod meshcore;
 pub mod msg_queue;
 pub mod persister;
+pub mod pm_inbox;
 pub mod repeater;
 pub mod repeater_time;
 pub mod settings;

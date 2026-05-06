@@ -258,6 +258,13 @@ fn on_pm_compose_done(text: &[u8]) {
     // wall clock isn't seeded yet.  The recipient and/or any repeater
     // along the path will accept either.
     let timestamp = crate::unix_now().unwrap_or(0);
+    // Mirror the outgoing message into the local inbox so the
+    // user's own thread shows it alongside replies.  Done before
+    // the tx_send so a queue-full failure doesn't bury our own
+    // record of "I tried to send this."
+    if let Ok(text_str) = core::str::from_utf8(&payload) {
+        super::pm_inbox::note_outgoing(&pub_key, text_str);
+    }
     let _ = tx_send(TxRequest::PrivateMsg(TxPrivateMsg {
         recipient_pub_key: pub_key,
         timestamp,
@@ -271,7 +278,9 @@ fn on_pm_compose_done(text: &[u8]) {
 /// Stash the recipient first so `on_pm_compose_done` can read it on
 /// submit.  Cancelling the keyboard leaves the target stashed; the
 /// next submit-or-dismiss clears it.
-fn start_pm_compose(pub_key: [u8; 32]) {
+///
+/// `pub` so the inbox-thread Reply action can reuse this flow.
+pub fn start_pm_compose(pub_key: [u8; 32]) {
     PM_COMPOSE_TARGET.lock(|c| {
         *c.borrow_mut() = Some(pub_key);
     });

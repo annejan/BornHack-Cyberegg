@@ -549,7 +549,7 @@ where
         SCREEN_GAME => game::draw_screen_game(display, game::nav::get_nav()),
         SCREEN_MAIN => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "mesh")]
-        SCREEN_PM => draw_screen_pm(display, bat_prc),
+        SCREEN_PM => fw::mesh::pm_inbox::draw(display, bat_prc),
         #[cfg(feature = "mesh")]
         SCREEN_CHANNEL => fw::mesh::channel_browser::draw(display, bat_prc),
         #[cfg(not(feature = "mesh"))]
@@ -844,90 +844,6 @@ where
     menu::draw_menu(display, items, pos, stepper_active)?;
 
     Ok(())
-}
-
-/// Draw `text` line by line, wrapping at `chars_per_line` characters.
-#[cfg(feature = "mesh")]
-fn draw_wrapped<D>(
-    display: &mut D,
-    text: &str,
-    x: i32,
-    y_start: i32,
-    line_height: i32,
-    chars_per_line: usize,
-    style: MonoTextStyle<'_, TriColor>,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
-    let mut remaining = text;
-    let mut y = y_start;
-    while !remaining.is_empty() {
-        let split = remaining
-            .char_indices()
-            .nth(chars_per_line)
-            .map(|(i, _)| i)
-            .unwrap_or(remaining.len());
-        let (line, rest) = remaining.split_at(split);
-        Text::with_text_style(line, Point::new(x, y), style, bottom).draw(display)?;
-        y += line_height;
-        remaining = rest;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "mesh")]
-fn draw_screen_pm<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let style_bold = ui::TEXT_BOLD_BLACK;
-    let style_small = ui::TEXT_BLACK;
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
-
-    draw_header(display, "Direct Message", bat_prc)?;
-
-    LAST_PM.lock(|cell| -> Result<(), D::Error> {
-        match *cell.borrow() {
-            None => {
-                Text::with_text_style(
-                    "No private messages",
-                    display.bounding_box().center(),
-                    style_bold,
-                    TextStyleBuilder::new()
-                        .baseline(Baseline::Middle)
-                        .alignment(Alignment::Center)
-                        .build(),
-                )
-                .draw(display)?;
-            }
-            Some(ref msg) => {
-                // Sender name (bold)
-                Text::with_text_style(
-                    msg.sender_name.as_str(),
-                    Point::new(4, 30),
-                    style_bold,
-                    bottom,
-                )
-                .draw(display)?;
-
-                // Divider
-                Rectangle::new(Point::new(0, 32), Size::new(152, 1))
-                    .into_styled(PrimitiveStyle::with_fill(BLACK))
-                    .draw(display)?;
-
-                // Message text wrapped
-                draw_wrapped(display, msg.text.as_str(), 4, 46, 14, 21, style_small)?;
-
-                // RSSI at bottom
-                let rssi_text = format!(16; "{} dBm", msg.rssi).unwrap();
-                Text::with_text_style(&rssi_text, Point::new(4, 152), style_small, bottom)
-                    .draw(display)?;
-            }
-        }
-        Ok(())
-    })
 }
 
 #[cfg(not(feature = "mesh"))]

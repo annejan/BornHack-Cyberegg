@@ -1151,6 +1151,7 @@ async fn try_handle_txt_msg(
                 rssi,
             });
         });
+        super::pm_inbox::note_incoming(&sender.pub_key, display_name.as_str(), text_str.as_str());
         crate::PM_SIGNAL.signal(());
         crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
 
