@@ -22,6 +22,7 @@ pub mod repeater;
 pub mod repeater_time;
 pub mod settings;
 pub mod sx1262;
+pub mod text_wrap;
 pub mod time_fmt;
 
 // Re-export the meshcore listener entry point for embassy.rs.
