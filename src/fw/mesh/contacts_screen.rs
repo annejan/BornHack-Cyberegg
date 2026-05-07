@@ -148,23 +148,10 @@ pub static CACHED_CONTACTS: Mutex<
 pub static REBUILD_SIGNAL: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
     embassy_sync::signal::Signal::new();
 
-/// `true` when the persistent `ContactStore` has been mutated since
-/// the last cache rebuild, requiring a full 300-slot kv rescan to
-/// pick up the change.  When `false`, `refresh_cache` skips the
-/// expensive rescan and only refreshes `observed_at_secs` and the
-/// discovery overlay — both pure RAM, no flash I/O.
-///
-/// Set by `mutation_persister_task` after a write, by
-/// `meshcore::log_advert` after a successful auto-add, and by the
-/// BLE companion's contact-mutation paths.  Cleared by
-/// `refresh_cache` once it has done a full rescan.
-pub static STORE_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
-
-/// Mark the persistent contact store as having been mutated; the
-/// next `refresh_cache` will do a full kv rescan.
-pub fn mark_store_dirty() {
-    STORE_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
-}
+/// Re-export so `refresh_cache` can read + clear the flag without
+/// reaching across modules.  See [`super::contacts::STORE_DIRTY`]
+/// for ownership and the set-on-mutation contract.
+pub use super::contacts::STORE_DIRTY;
 
 // ── Local-observation table ────────────────────────────────────────────────
 //
@@ -352,9 +339,8 @@ pub async fn mutation_persister_task() {
                 }
             }
         }
-        // Mark the store dirty (the rebuild needs a full rescan to
-        // pick up the kv write) and wake the refresh task.
-        mark_store_dirty();
+        // The mutation methods already marked the store dirty; just
+        // wake the refresh task.
         REBUILD_SIGNAL.signal(());
     }
 }

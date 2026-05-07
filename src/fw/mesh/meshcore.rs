@@ -845,9 +845,8 @@ async fn log_advert(
             );
             match store.add_or_update(&contact).await {
                 Ok(_) => {
-                    // Persistent store actually changed — Contacts
-                    // screen needs a full rescan on next rebuild.
-                    super::contacts_screen::mark_store_dirty();
+                    // `add_or_update` already marks the store dirty
+                    // when bytes actually changed.
                 }
                 Err(crate::fw::kv::KvError::StoreFull) => {
                     // Hash bucket full (`MAX_SLOTS_PER_BUCKET` rejected the insert).

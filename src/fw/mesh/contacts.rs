@@ -72,6 +72,27 @@ pub const FLAG_FAVORITE: u8 = 0x01;
 /// Sentinel `out_path_len` meaning "no routing path established yet".
 pub const OUT_PATH_UNKNOWN: u8 = 0xFF;
 
+/// `true` when [`ContactStore`] has been mutated since an observer
+/// last cleared it.  Currently observed by
+/// `contacts_screen::refresh_cache` so it can skip the 300-slot kv
+/// rescan when only the in-RAM advert/observation tables changed.
+///
+/// Set automatically by every mutation method on `ContactStore`
+/// (`add_or_update`, `set_favorite`, `delete`, `update_path`,
+/// `update_sync_since`, `clear_all`) when the operation actually
+/// changes stored bytes.  Starts `true` so the first read after
+/// boot always does a full rescan.
+pub static STORE_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+#[inline]
+fn mark_dirty() {
+    STORE_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+    // Wake the Contacts-screen cache so any UI consumer reflects the
+    // mutation promptly — covers BLE-companion-driven writes that
+    // wouldn't otherwise produce an `ADVERT_SIGNAL`.
+    super::contacts_screen::REBUILD_SIGNAL.signal(());
+}
+
 // ---------------------------------------------------------------------------
 // On-flash record schema versioning
 // ---------------------------------------------------------------------------
@@ -1002,6 +1023,7 @@ impl ContactStore {
         }
         c.sync_since = timestamp;
         self.kv.set(key.as_str(), &c.to_bytes(), true).await?;
+        mark_dirty();
         Ok(true)
     }
 
@@ -1040,6 +1062,7 @@ impl ContactStore {
         c.out_path_len = out_path_len;
         c.out_path = *out_path;
         self.kv.set(key.as_str(), &c.to_bytes(), true).await?;
+        mark_dirty();
         Ok(true)
     }
 
@@ -1073,6 +1096,7 @@ impl ContactStore {
             c.flags &= !FLAG_FAVORITE;
         }
         self.kv.set(key.as_str(), &c.to_bytes(), true).await?;
+        mark_dirty();
         Ok(true)
     }
 
@@ -1124,6 +1148,7 @@ impl ContactStore {
                 self.kv
                     .set(slot_key(slot).as_str(), &updated.to_bytes(), true)
                     .await?;
+                mark_dirty();
                 return Ok(AddResult::Updated);
             }
             // Index pointed at a stale/deleted slot — fall through to add.
@@ -1199,6 +1224,7 @@ impl ContactStore {
         // the legacy scan fallback, so the store remains functionally correct.
         let _ = self.hash_index_insert(contact_hash, target as u16).await;
         self.kv.set("meta", &meta.to_bytes(), true).await?;
+        mark_dirty();
         Ok(if evicted {
             AddResult::Evicted
         } else {
@@ -1236,11 +1262,13 @@ impl ContactStore {
         self.kv.set(slot_key(idx).as_str(), &zeroed, true).await?;
         meta.count = meta.count.saturating_sub(1);
         self.kv.set("meta", &meta.to_bytes(), true).await?;
+        mark_dirty();
         Ok(true)
     }
 
     /// Delete all contacts by iterating every slot and calling [`Self::delete`]
-    /// on each.
+    /// on each.  `delete` already marks the store dirty per slot, so the
+    /// observer sees a single dirty signal for the wipe.
     pub async fn clear_all(&self) {
         for idx in 0..MAX_CONTACTS {
             if let Some(contact) = self.read_slot(idx).await {

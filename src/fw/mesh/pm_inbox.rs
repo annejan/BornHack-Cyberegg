@@ -616,15 +616,11 @@ where
             }
             let row_y = body_top + painted as i32 * ROW_H + ROW_H - 4;
 
-            // First line of a message: arrow + relative time prefix.
             if chunk_i == 0 {
                 let mut hdr: heapless::String<{ HEADER_CHARS_FIRST }> = heapless::String::new();
                 let _ = hdr.push_str(arrow);
                 let _ = hdr.push(' ');
-                // Right-pad the time to 3 chars so the body alignment
-                // is consistent regardless of "3m" vs "ydy" length.
-                let r = rel.as_str();
-                let _ = hdr.push_str(r);
+                let _ = hdr.push_str(rel.as_str());
                 while hdr.len() < HEADER_CHARS_FIRST.saturating_sub(1) {
                     let _ = hdr.push(' ');
                 }
@@ -637,9 +633,6 @@ where
                 .draw(display)?;
             }
 
-            // Body chunk — indent to BODY_X for both first and
-            // continuation lines (continuations align under the
-            // first chunk's text, not under the arrow).
             let start = chunk_i * BODY_LINE_CHARS;
             let end = (start + BODY_LINE_CHARS).min(bytes.len());
             if start < bytes.len() {
