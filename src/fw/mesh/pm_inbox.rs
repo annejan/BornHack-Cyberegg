@@ -345,10 +345,16 @@ pub static BROWSER: Mutex<CriticalSectionRawMutex, RefCell<InboxState>> =
 
 const ROW_H: i32 = 18;
 const VISIBLE_ROWS: u8 = 7;
-/// Max characters we render in a thread bubble before wrapping is left
-/// to the renderer's natural break.  Each row is ~7 px/char × 144 px =
-/// 20 chars.
-const THREAD_LINE_CHARS: usize = 20;
+
+/// First-line layout for a thread message: arrow + space + 3-char
+/// right-padded relative-time + 2 spaces = 7 chars header.  Body text
+/// fills the remaining width; continuation lines indent to the same
+/// `BODY_X` so wrapped text aligns under the first chunk.
+const HEADER_CHARS_FIRST: usize = 7;
+/// Max body chars per line — `(152 - BODY_X) / 7 px/char` ≈ 14.  Used
+/// for both the first line (after the header) and continuation lines.
+const BODY_LINE_CHARS: usize = 14;
+const BODY_X: i32 = 50; // 7 chars × 7 px = 49, +1 nudge
 const THREAD_VISIBLE_LINES: u8 = 7;
 
 /// Handle a button press.  Returns `true` when Cancel should propagate
@@ -436,20 +442,46 @@ pub fn dispatch(btn: ButtonId) -> bool {
 }
 
 fn total_thread_lines(pub_key: &[u8; 32]) -> usize {
-    // Each entry consumes one header line + ceil(text/THREAD_LINE_CHARS)
-    // body lines.  Cheap walk over the at-most-32 entries.
+    // Layout: each entry takes ceil(text_len / BODY_LINE_CHARS) lines
+    // — the arrow + time prefix sits on the same row as the first
+    // body chunk, so the standalone-arrow row is gone.  Empty
+    // messages still occupy 1 line.
     let entries = thread_for(pub_key);
     let mut lines = 0usize;
     for e in entries.iter() {
-        lines += 1;
         let bytes = e.text.len();
         lines += if bytes == 0 {
             1
         } else {
-            (bytes + THREAD_LINE_CHARS - 1) / THREAD_LINE_CHARS
+            bytes.div_ceil(BODY_LINE_CHARS)
         };
     }
     lines
+}
+
+/// Format `observed_at_secs` (seconds-since-boot) as a 3-char
+/// right-padded relative-time string for the thread view.  Falls
+/// back to spaces when the entry is fresher than 1 s — keeps the
+/// column aligned regardless.
+fn fmt_thread_time(observed_at_secs: u64) -> heapless::String<4> {
+    let mut s: heapless::String<4> = heapless::String::new();
+    let now = embassy_time::Instant::now().as_secs();
+    let delta = now.saturating_sub(observed_at_secs);
+    if delta < 60 {
+        let _ = s.push_str("now");
+    } else if delta < 60 * 60 {
+        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}m", delta / 60));
+    } else if delta < 24 * 60 * 60 {
+        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}h", delta / 3600));
+    } else if delta < 2 * 24 * 60 * 60 {
+        let _ = s.push_str("ydy");
+    } else if delta < 14 * 24 * 60 * 60 {
+        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}d", delta / 86400));
+    } else {
+        let weeks = (delta / (7 * 86400)).min(99);
+        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}w", weeks));
+    }
+    s
 }
 
 pub fn draw<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
@@ -543,6 +575,22 @@ where
         Text::with_text_style(combined.as_str(), Point::new(2, row_mid + 8), small, bottom)
             .draw(display)?;
     }
+
+    // Scroll indicators in the right margin when more peers than fit.
+    if scroll > 0 {
+        Text::with_text_style(
+            "^",
+            Point::new(146, list_top + ROW_H - 4),
+            ui::TEXT_BLACK,
+            bottom,
+        )
+        .draw(display)?;
+    }
+    if (scroll as usize) + (VISIBLE_ROWS as usize) < total as usize {
+        let last_y = list_top + (VISIBLE_ROWS as i32 - 1) * ROW_H + ROW_H - 4;
+        Text::with_text_style("v", Point::new(146, last_y), ui::TEXT_BLACK, bottom)
+            .draw(display)?;
+    }
     Ok(())
 }
 
@@ -570,65 +618,92 @@ where
         return Ok(());
     }
 
-    // Walk entries → produce a flat line list (header + body lines).
-    // Then render the [scroll .. scroll + THREAD_VISIBLE_LINES) window.
+    // Walk entries → flatten to body-only lines (no standalone arrow
+    // rows).  First line of each message gets `< 3m  ` prefix; the
+    // rest indent to `BODY_X`.  Render the [scroll .. scroll +
+    // THREAD_VISIBLE_LINES) window.
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
     let mut painted: u8 = 0;
     let mut skipped: u32 = 0;
     let body_top: i32 = ui::TITLE_BAR_H as i32 + 4;
 
-    for entry in entries.iter() {
-        // Header: a `>` for outgoing, `<` for incoming, plus rough
-        // age or direction indicator.
-        let header = match entry.direction {
+    'messages: for entry in entries.iter() {
+        let arrow = match entry.direction {
             Direction::Incoming => "<",
             Direction::Outgoing => ">",
         };
-        if skipped < scroll as u32 {
-            skipped += 1;
-        } else if painted < THREAD_VISIBLE_LINES {
-            let row_y = body_top + painted as i32 * ROW_H + ROW_H - 4;
-            Text::with_text_style(header, Point::new(2, row_y), ui::TEXT_BOLD_BLACK, bottom)
-                .draw(display)?;
-            painted += 1;
-        }
-        // Body — split into THREAD_LINE_CHARS-wide chunks.
+        let rel = fmt_thread_time(entry.observed_at_secs);
         let bytes = entry.text.as_bytes();
         let total_chunks = if bytes.is_empty() {
             1
         } else {
-            (bytes.len() + THREAD_LINE_CHARS - 1) / THREAD_LINE_CHARS
+            bytes.len().div_ceil(BODY_LINE_CHARS)
         };
+
         for chunk_i in 0..total_chunks {
             if skipped < scroll as u32 {
                 skipped += 1;
                 continue;
             }
             if painted >= THREAD_VISIBLE_LINES {
-                break;
+                break 'messages;
             }
-            let start = chunk_i * THREAD_LINE_CHARS;
-            let end = ((chunk_i + 1) * THREAD_LINE_CHARS).min(bytes.len());
-            let slice = if start < bytes.len() {
-                core::str::from_utf8(&bytes[start..end]).unwrap_or("")
-            } else {
-                ""
-            };
             let row_y = body_top + painted as i32 * ROW_H + ROW_H - 4;
-            // Indent body lines so they line up to the right of the arrow.
-            Text::with_text_style(slice, Point::new(12, row_y), ui::TEXT_BLACK, bottom)
+
+            // First line of a message: arrow + relative time prefix.
+            if chunk_i == 0 {
+                let mut hdr: heapless::String<{ HEADER_CHARS_FIRST }> = heapless::String::new();
+                let _ = hdr.push_str(arrow);
+                let _ = hdr.push(' ');
+                // Right-pad the time to 3 chars so the body alignment
+                // is consistent regardless of "3m" vs "ydy" length.
+                let r = rel.as_str();
+                let _ = hdr.push_str(r);
+                while hdr.len() < HEADER_CHARS_FIRST.saturating_sub(1) {
+                    let _ = hdr.push(' ');
+                }
+                Text::with_text_style(
+                    hdr.as_str(),
+                    Point::new(2, row_y),
+                    ui::TEXT_BOLD_BLACK,
+                    bottom,
+                )
                 .draw(display)?;
+            }
+
+            // Body chunk — indent to BODY_X for both first and
+            // continuation lines (continuations align under the
+            // first chunk's text, not under the arrow).
+            let start = chunk_i * BODY_LINE_CHARS;
+            let end = (start + BODY_LINE_CHARS).min(bytes.len());
+            if start < bytes.len() {
+                let slice = core::str::from_utf8(&bytes[start..end]).unwrap_or("");
+                Text::with_text_style(slice, Point::new(BODY_X, row_y), ui::TEXT_BLACK, bottom)
+                    .draw(display)?;
+            }
             painted += 1;
-        }
-        if painted >= THREAD_VISIBLE_LINES {
-            break;
         }
     }
 
-    // Footer hint.
+    // Scroll indicators in the right margin.
+    let total = total_thread_lines(pub_key);
+    if scroll > 0 {
+        Text::with_text_style(
+            "^",
+            Point::new(146, body_top + ROW_H - 4),
+            ui::TEXT_BLACK,
+            bottom,
+        )
+        .draw(display)?;
+    }
+    if (scroll as usize) + (THREAD_VISIBLE_LINES as usize) < total {
+        let last_y = body_top + (THREAD_VISIBLE_LINES as i32 - 1) * ROW_H + ROW_H - 4;
+        Text::with_text_style("v", Point::new(146, last_y), ui::TEXT_BLACK, bottom)
+            .draw(display)?;
+    }
+
     let hint = "Fire: Reply  Cancel: back";
     Text::with_text_style(hint, Point::new(2, 152), ui::TEXT_BLACK, bottom).draw(display)?;
-    // Avoid unused-lint for the fallback empty path.
     let _ = WHITE;
     Ok(())
 }
