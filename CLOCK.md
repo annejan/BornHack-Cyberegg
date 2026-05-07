@@ -1,6 +1,6 @@
 # Clock, Alarm & Calendar — CyberÆgg Watch App
 
-> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol, [HWTEST.md](HWTEST.md) for the factory hardware-test firmware, [License.md](License.md) for licensing.
+> **See also:** [README.md](README.md) for project overview, [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) for the meshcore chat UI (contacts list, PM inbox + threads), [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol, [HWTEST.md](HWTEST.md) for the factory hardware-test firmware, [License.md](License.md) for licensing.
 
 The badge includes a full-featured watch application with two switchable faces, a 32-slot alarm system, and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
 

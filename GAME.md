@@ -1,6 +1,6 @@
 # BornPets — How to Play
 
-> **See also:** [README.md](README.md) for project overview, [GAMES.md](GAMES.md) for developer reference on all mini-games, [CLOCK.md](CLOCK.md) for watch/alarm/calendar docs.
+> **See also:** [README.md](README.md) for project overview, [GAMES.md](GAMES.md) for developer reference on all mini-games, [CLOCK.md](CLOCK.md) for watch/alarm/calendar docs, [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) for the meshcore chat UI.
 
 The CyberÆgg badge comes with a virtual pet game. Take care of your pet,
 keep it happy, and play mini-games to earn rewards.

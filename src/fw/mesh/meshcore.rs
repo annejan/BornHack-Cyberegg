@@ -375,7 +375,7 @@ pub async fn run_meshcore_listener<'a>(
                                 .await
                             }
                             PayloadType::Advert => {
-                                log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path).await
+                                log_advert(&msg.payload, rssi, path_len, &msg.path).await
                             }
                             PayloadType::Ack => handle_ack_recv(&msg.payload, rssi),
                             PayloadType::Trace => {
@@ -651,7 +651,6 @@ async fn push_grp_txt(
 async fn log_advert(
     payload: &[u8],
     rssi: i16,
-    snr_x4: i8,
     path_len_byte: u8,
     path: &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
 ) {
@@ -707,37 +706,35 @@ async fn log_advert(
     // Upsert into contacts list so TxtMsg can resolve the sender's name.
     CONTACTS.lock(|cell| cell.borrow_mut().upsert(a.pub_key, name_str.clone()));
 
-    let mut pub_key_hex: heapless::String<16> = heapless::String::new();
-    for &b in &a.pub_key[..8] {
-        let hi = b >> 4;
-        let lo = b & 0xF;
-        let _ = pub_key_hex.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        let _ = pub_key_hex.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
-    }
-
     let (lat, lon) = a.position.unwrap_or((0, 0));
 
-    crate::LAST_ADVERT.lock(|cell| {
-        *cell.borrow_mut() = Some(crate::LastAdvert {
-            name: name_str.clone(),
-            pub_key_hex,
-            role: a.role.to_u8(),
-            sig_ok,
-            rssi,
-            snr_x4,
-            lat,
-            lon,
-        });
-    });
+    // Stamp the local-observation table so the Contacts screen can
+    // render an accurate "Last:" relative time and live-dot — the
+    // advert's own timestamp is unreliable (most badges advertise
+    // `timestamp=0` until their wall clock is set).
+    super::contacts_screen::note_observed(&a.pub_key);
+
+    // Record the full advert metadata so the Contacts screen can show
+    // discovery rows (heard but not yet in the persistent store) and
+    // the popup's "Add" action can promote them later.  Always called
+    // — the screen's cache rebuild dedupes against `ContactStore`.
+    super::discovery::note(
+        &a.pub_key,
+        name_str.as_str(),
+        a.role.to_u8(),
+        lat,
+        lon,
+        a.timestamp,
+    );
+
+    // Wake the UI redraw loop (`ADVERT_SIGNAL`) and the Contacts
+    // screen's cache-refresh task (`REBUILD_SIGNAL`).  Two distinct
+    // signals because `embassy_sync::Signal` is single-waiter —
+    // sharing one between the redraw loop and the refresh task
+    // would silently drop wakes for whichever side registered its
+    // waker last.
     crate::ADVERT_SIGNAL.signal(());
+    super::contacts_screen::REBUILD_SIGNAL.signal(());
 
     let mut ble_name: heapless::Vec<u8, 32> = heapless::Vec::new();
     if let Some(ref n) = a.name {
@@ -847,7 +844,10 @@ async fn log_advert(
                 lon,
             );
             match store.add_or_update(&contact).await {
-                Ok(_) => {}
+                Ok(_) => {
+                    // `add_or_update` already marks the store dirty
+                    // when bytes actually changed.
+                }
                 Err(crate::fw::kv::KvError::StoreFull) => {
                     // Hash bucket full (`MAX_SLOTS_PER_BUCKET` rejected the insert).
                     // Matches the spirit of `PUSH_CODE_CONTACTS_FULL` even though
@@ -1159,6 +1159,7 @@ async fn try_handle_txt_msg(
                 rssi,
             });
         });
+        super::pm_inbox::note_incoming(&sender.pub_key, display_name.as_str(), text_str.as_str());
         crate::PM_SIGNAL.signal(());
         crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
 

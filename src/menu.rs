@@ -521,6 +521,32 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
+        // Contacts (Advert) screen intercepts list/popup/detail input.
+        // Returns true when Cancel/Left/Right should propagate to the
+        // screen-swipe carousel; everything else stays inside the screen.
+        #[cfg(feature = "mesh")]
+        if self.active_screen == crate::SCREEN_ADVERT {
+            let leave = crate::fw::mesh::contacts_screen::dispatch(btn);
+            if leave {
+                // Fall through to the screen-swipe / cancel handler.
+            } else {
+                return;
+            }
+        }
+
+        // PM inbox/thread screen intercepts list + thread input.  Same
+        // contract as the Contacts screen: returns true when
+        // Cancel/Left/Right should propagate to the carousel.
+        #[cfg(feature = "mesh")]
+        if self.active_screen == crate::SCREEN_PM {
+            let leave = crate::fw::mesh::pm_inbox::dispatch(btn);
+            if leave {
+                // Fall through.
+            } else {
+                return;
+            }
+        }
+
         // Clock screen consumes Up/Down to toggle digital/analog face.
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]
@@ -832,6 +858,20 @@ fn action_advert_interval_dec() {
         crate::ADVERT_CHANGED_SIGNAL.signal(());
     }
 }
+
+/// Send an advert immediately (flood-routed) regardless of the
+/// scheduled interval.  Useful at events for quickly making yourself
+/// visible to nearby badges without waiting up to 16 hours.
+#[cfg(all(feature = "mesh", feature = "embassy-base"))]
+fn action_advert_send_now() {
+    let _ = crate::fw::mesh::tx_send(crate::fw::mesh::TxRequest::Advert(
+        crate::fw::mesh::meshcore::AdvertMode::Flood,
+    ));
+    defmt::info!("menu: manual flood advert queued");
+}
+
+#[cfg(not(all(feature = "mesh", feature = "embassy-base")))]
+fn action_advert_send_now() {}
 
 // ── Telemetry share ────────────────────────────────────────────────────────
 
@@ -1368,10 +1408,14 @@ static BLE_ITEMS: [MenuItem; 4] = [
     },
 ];
 
-static ADVERTS_ITEMS: [MenuItem; 4] = [
+static ADVERTS_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "Send now",
+        kind: MenuItemKind::Action(action_advert_send_now),
     },
     MenuItem {
         label: label_advert_enabled,

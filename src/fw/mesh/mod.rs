@@ -11,14 +11,18 @@ pub mod bonds;
 pub mod channel_browser;
 pub mod channels;
 pub mod contacts;
+pub mod contacts_screen;
 pub mod device_identity;
+pub mod discovery;
 pub mod meshcore;
 pub mod msg_queue;
 pub mod persister;
+pub mod pm_inbox;
 pub mod repeater;
 pub mod repeater_time;
 pub mod settings;
 pub mod sx1262;
+pub mod time_fmt;
 
 // Re-export the meshcore listener entry point for embassy.rs.
 use core::cell::RefCell;
@@ -136,21 +140,9 @@ pub static CACHED_CHANNELS: Mutex<
     RefCell<heapless::Vec<CachedChannel, { channels::NUM_CHANNELS }>>,
 > = Mutex::new(RefCell::new(heapless::Vec::new()));
 
-/// Last received MeshCore advert.
-pub struct LastAdvert {
-    pub name: heapless::String<32>,
-    pub pub_key_hex: heapless::String<16>,
-    pub role: u8,
-    pub sig_ok: bool,
-    pub rssi: i16,
-    pub snr_x4: i8,
-    pub lat: i32,
-    pub lon: i32,
-}
-
-pub static LAST_ADVERT: Mutex<CriticalSectionRawMutex, RefCell<Option<LastAdvert>>> =
-    Mutex::new(RefCell::new(None));
-
+/// Fired whenever a fresh advert lands in the persistent contact store.
+/// The Contacts screen's cache-refresh task waits on this to rebuild
+/// its in-RAM display cache.
 pub static ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Advert data forwarded to the BLE task for push to the companion app (0x8A).

@@ -1,6 +1,6 @@
 # BornPets mini-games
 
-> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing instructions, [CLOCK.md](CLOCK.md) for watch/alarm/calendar docs.
+> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing instructions, [CLOCK.md](CLOCK.md) for watch/alarm/calendar docs, [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) for the meshcore chat UI.
 
 The BornPets game screen ships with seven mini-games.  Each one is
 opened from the Play modal (`Game screen → Play → <name>`), runs as

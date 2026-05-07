@@ -154,10 +154,28 @@ where
     const BORDER: u32 = 2;
     const ITEM_H: i32 = 18;
     const PADDING_BELOW_TITLE: i32 = 4;
+    /// Maximum rows that fit on the 152-px display: list area is
+    /// `152 - TOP_Y - 2·BORDER - TITLE_BAR_H - PADDING_BELOW_TITLE`
+    /// = 152 - 36 - 4 - 18 - 4 = 90 px ÷ 18 px/row = 5 rows.
+    const MAX_VISIBLE: usize = 5;
+
+    // Cap visible rows so the popover never overflows the screen.
+    let total = items.len();
+    let visible = total.min(MAX_VISIBLE);
+
+    // Slide the scroll window so `pos` is always visible.
+    let scroll = if total <= MAX_VISIBLE {
+        0
+    } else if pos < MAX_VISIBLE {
+        0
+    } else {
+        (pos + 1).saturating_sub(MAX_VISIBLE)
+    };
+    let end = (scroll + visible).min(total);
 
     let title_h = TITLE_BAR_H as i32;
     let total_h =
-        BORDER as i32 + title_h + PADDING_BELOW_TITLE + ITEM_H * items.len() as i32 + BORDER as i32;
+        BORDER as i32 + title_h + PADDING_BELOW_TITLE + ITEM_H * visible as i32 + BORDER as i32;
 
     draw_popover_frame(
         display,
@@ -176,10 +194,11 @@ where
         .alignment(Alignment::Left)
         .build();
 
-    for (i, label) in items.iter().enumerate() {
-        let row_top = list_y + i as i32 * ITEM_H;
+    for (row, label) in items[scroll..end].iter().enumerate() {
+        let abs_idx = scroll + row;
+        let row_top = list_y + row as i32 * ITEM_H;
         let row_mid = row_top + ITEM_H / 2;
-        if i == pos {
+        if abs_idx == pos {
             Rectangle::new(
                 Point::new(inner_x, row_top),
                 Size::new(inner_w, ITEM_H as u32),
@@ -202,6 +221,28 @@ where
             )
             .draw(display)?;
         }
+    }
+
+    // Scroll indicators — small "·" chevrons in the right margin when
+    // there are items above/below the current viewport.
+    if scroll > 0 {
+        Text::with_text_style(
+            "^",
+            Point::new(inner_x + inner_w as i32 - 8, list_y + 9),
+            TEXT_BLACK,
+            left_style,
+        )
+        .draw(display)?;
+    }
+    if end < total {
+        let last_row_mid = list_y + (visible as i32 - 1) * ITEM_H + ITEM_H / 2;
+        Text::with_text_style(
+            "v",
+            Point::new(inner_x + inner_w as i32 - 8, last_row_mid),
+            TEXT_BLACK,
+            left_style,
+        )
+        .draw(display)?;
     }
     Ok(())
 }
