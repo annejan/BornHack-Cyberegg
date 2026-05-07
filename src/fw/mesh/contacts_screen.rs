@@ -246,32 +246,41 @@ static PM_COMPOSE_TARGET: Mutex<CriticalSectionRawMutex, RefCell<Option<[u8; 32]
 fn on_pm_compose_done(text: &[u8]) {
     let pub_key = match PM_COMPOSE_TARGET.lock(|c| c.borrow_mut().take()) {
         Some(k) => k,
-        None => return,
+        None => {
+            defmt::info!("pm-compose: no target stashed — skipping");
+            return;
+        }
     };
     if text.is_empty() {
+        defmt::info!(
+            "pm-compose: empty text → no send (target {=[u8]:02x})",
+            &pub_key[..6]
+        );
         return;
     }
     let mut payload: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
     let n = text.len().min(payload.capacity());
     let _ = payload.extend_from_slice(&text[..n]);
-    // Use our wall clock for the timestamp; falls back to 0 when the
-    // wall clock isn't seeded yet.  The recipient and/or any repeater
-    // along the path will accept either.
     let timestamp = crate::unix_now().unwrap_or(0);
-    // Mirror the outgoing message into the local inbox so the
-    // user's own thread shows it alongside replies.  Done before
-    // the tx_send so a queue-full failure doesn't bury our own
-    // record of "I tried to send this."
     if let Ok(text_str) = core::str::from_utf8(&payload) {
         super::pm_inbox::note_outgoing(&pub_key, text_str);
     }
-    let _ = tx_send(TxRequest::PrivateMsg(TxPrivateMsg {
+    defmt::info!(
+        "pm-compose: tx_send PM to={=[u8]:02x} bytes={=usize} ts={=u32}",
+        &pub_key[..6],
+        n,
+        timestamp,
+    );
+    match tx_send(TxRequest::PrivateMsg(TxPrivateMsg {
         recipient_pub_key: pub_key,
         timestamp,
         text: payload,
-        txt_type: 0, // plain
+        txt_type: 0,
         attempt: 0,
-    }));
+    })) {
+        Ok(()) => defmt::info!("pm-compose: queued"),
+        Err(_) => defmt::warn!("pm-compose: TX queue full — dropped"),
+    }
 }
 
 /// Open the text-entry keyboard primed for sending a PM to `pub_key`.
@@ -794,6 +803,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                         match (label, entry_meta) {
                             ("PM", Some((pk, ..))) => {
                                 // Open the keyboard primed for compose.
+                                defmt::info!("popup: PM → start compose to {=[u8]:02x}", &pk[..6]);
                                 b.mode = Mode::List;
                                 start_pm_compose(pk);
                             }

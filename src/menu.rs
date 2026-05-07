@@ -867,6 +867,20 @@ fn action_advert_interval_dec() {
     }
 }
 
+/// Send an advert immediately (flood-routed) regardless of the
+/// scheduled interval.  Useful at events for quickly making yourself
+/// visible to nearby badges without waiting up to 16 hours.
+#[cfg(all(feature = "mesh", feature = "embassy-base"))]
+fn action_advert_send_now() {
+    let _ = crate::fw::mesh::tx_send(crate::fw::mesh::TxRequest::Advert(
+        crate::fw::mesh::meshcore::AdvertMode::Flood,
+    ));
+    defmt::info!("menu: manual flood advert queued");
+}
+
+#[cfg(not(all(feature = "mesh", feature = "embassy-base")))]
+fn action_advert_send_now() {}
+
 // ── Telemetry share ────────────────────────────────────────────────────────
 
 fn label_telemetry_share() -> &'static str {
@@ -1402,10 +1416,14 @@ static BLE_ITEMS: [MenuItem; 4] = [
     },
 ];
 
-static ADVERTS_ITEMS: [MenuItem; 4] = [
+static ADVERTS_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "Send now",
+        kind: MenuItemKind::Action(action_advert_send_now),
     },
     MenuItem {
         label: label_advert_enabled,
