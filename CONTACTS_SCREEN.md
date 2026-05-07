@@ -1,5 +1,7 @@
 # Contacts screen + PM inbox — meshcore on-badge UI
 
+> **See also:** [README.md](README.md) for project overview, [CLOCK.md](CLOCK.md) for the watch/alarm/calendar app, [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol, [HWTEST.md](HWTEST.md) for the factory hardware-test firmware, [License.md](License.md) for licensing.
+
 The badge is more than a passive Bluetooth companion — it has a working
 chat UI on its own.  This doc captures the design and current behaviour
 of the meshcore-related on-device screens: a discovery-sorted **Contacts**

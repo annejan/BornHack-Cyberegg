@@ -19,6 +19,7 @@ All project documentation is in markdown files at the repository root and in `ve
 | -------- | ----------- |
 | **[README.md](README.md)** | This file — project overview, hardware, build instructions, known issues |
 | **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
+| **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)** | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache |
 | **[GAME.md](GAME.md)** | Player-facing game instructions, controls, stats, mini-games |
 | **[GAMES.md](GAMES.md)** | Developer reference for all seven mini-games, controls, scoring |
 | **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
@@ -226,6 +227,29 @@ Beyond the single recurring alarm in slot 0, the watch carries up to **31 one-sh
 Imported events live in RAM only — they're not persisted to flash, so a reboot re-imports from the FAT12 partition. Settings → Events lists every populated slot read-only (`<n>: HH:MM MM-DD`) plus two actions: **Quick test +5min** (drops a `Quick test` event 5 minutes from now in the first empty slot — handy for verifying the alarm path without USB; silently no-ops if the wall clock isn't synced or all slots are taken) and a destructive **Clear all** that disables and zeros slots 1..31 immediately. Empty slots are auto-hidden — you only scroll past the events that actually exist.
 
 When the wall clock matches an event's date+time, the buzzer plays the user's currently-selected ringtone (the same Settings → Alarm → Tone choice that recurring slot 0 uses), and the slot auto-disables to prevent re-firing.
+
+### Contacts (Adverts)
+
+> **Full documentation:** [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) — list view, popup actions, discovery cache, filter picker, detail view.
+
+The **Adverts** screen surfaces every contact you've heard from the mesh in one discovery-sorted list. Saved contacts (in the persistent `ContactStore`) and recently-heard adverts not yet promoted (the in-RAM discovery cache) appear side by side. Live nodes float to the top; a red dot marks contacts heard within the last 5 minutes.
+
+- **Up at row 0** opens a Filter picker (All / Favorites / People / Repeaters / Rooms / Sensors).
+- **Fire** opens a per-contact popup with role-aware actions: PM, Info, Save / Unsave (toggles `FLAG_FAVORITE`), Forget (deletes), Add (promotes a discovery row to a saved contact).
+- **Info** drills into a per-contact detail view with name, role, last-seen, hop count, key prefix, and GPS (when broadcast).
+
+Visual prefixes: `*` for saved + favorite, `+` for unsaved (discovery) rows.
+
+### Private Messages
+
+> **Full documentation:** [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md#2-pm-inbox--per-peer-threads-fwmeshpm_inbox) — PM inbox + thread layout.
+
+The **Messages** screen is a per-peer inbox with chronological threads. Incoming PMs land in a 32-entry RAM ring (per-boot); outgoing PMs are mirrored alongside replies so threads are two-sided.
+
+- **Inbox view** — one row per distinct peer, sorted by most-recent activity, with `(N)` unread badges.
+- **Thread view** — chronological history with `< 3m  …` direction-and-time prefix on the first body line; word-aware wrapping breaks on space boundaries. Up/Down scrolls long threads, Fire opens the on-screen keyboard for a reply.
+
+PM compose is also reachable from the Contacts screen popup → PM action; the same keyboard plumbing serves both entry points.
 
 ### Channel browser
 
