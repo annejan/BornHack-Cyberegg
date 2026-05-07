@@ -1,6 +1,6 @@
 # Clock, Alarm & Calendar — CyberÆgg Watch App
 
-> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol.
+> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol, [HWTEST.md](HWTEST.md) for the factory hardware-test firmware, [License.md](License.md) for licensing.
 
 The badge includes a full-featured watch application with two switchable faces, a 32-slot alarm system, and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
 
@@ -204,8 +204,9 @@ All watch state is persisted to the `"watch"` KV namespace in ekv (flash key-val
 | `alarm_on` | 1 byte (0/1) | Slot 0 enabled flag |
 | `alarm_days` | 1 byte (bitmask) | Slot 0 day mask |
 | `alarm_mel` | 1 byte (melody index) | Slot 0 tone selection |
+| `boot_chime` | 1 byte (0/1) | Settings → Boot chime toggle (piggybacks on the watch persister so it lands in the same flash batch) |
 
-The `SETTINGS_DIRTY_SIGNAL` is signalled on every setting change; the `settings_persister_task` waits on this signal and persists both clock face and alarm state.
+The `SETTINGS_DIRTY_SIGNAL` is signalled on every setting change; the `settings_persister_task` waits on this signal and persists clock face, alarm state, and the boot-chime toggle in one batch.
 
 Calendar event slots (1..31) are **RAM-only** — they're not persisted to flash. They are re-imported from `ALARMS.ICS` at each boot.
 
