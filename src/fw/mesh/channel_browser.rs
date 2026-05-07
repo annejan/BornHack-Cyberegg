@@ -420,15 +420,13 @@ where
         };
 
         // Lines required by each message: 1 (sender header) + the
-        // wrapped-text line count.
+        // wrapped-text line count.  Wrapping uses the shared
+        // word-aware breaker so embedded `\n` produces real line
+        // breaks and word boundaries are respected.
         let mut lines_per: heapless::Vec<usize, { crate::CHANNEL_MSG_RING_SIZE }> =
             heapless::Vec::new();
         for (_, text, ..) in msgs.iter() {
-            let text_lines = if text.is_empty() {
-                0
-            } else {
-                text.len().div_ceil(chars_per_line)
-            };
+            let text_lines = super::text_wrap::word_wrap(text.as_bytes(), chars_per_line).len();
             let _ = lines_per.push(1 + text_lines);
         }
 
@@ -501,21 +499,12 @@ where
             Text::with_text_style(&nick, Point::new(4, y + 1), FONT_INV, left).draw(display)?;
             y += LH;
 
-            // Message text — wrap on char boundaries
-            let text_str = text.as_str();
-            let mut offset = 0usize;
-            while offset < text_str.len() {
-                let mut end = text_str.len().min(offset + chars_per_line);
-                while end > offset && !text_str.is_char_boundary(end) {
-                    end -= 1;
-                }
-                if end == offset {
-                    break;
-                }
-                Text::with_text_style(&text_str[offset..end], Point::new(8, y), FONT, left)
-                    .draw(display)?;
+            // Message text — word-aware wrap with newline support.
+            let text_bytes = text.as_bytes();
+            for (s, e) in super::text_wrap::word_wrap(text_bytes, chars_per_line) {
+                let slice = core::str::from_utf8(&text_bytes[s as usize..e as usize]).unwrap_or("");
+                Text::with_text_style(slice, Point::new(8, y), FONT, left).draw(display)?;
                 y += LH;
-                offset = end;
             }
         }
 
