@@ -18,10 +18,10 @@ All project documentation is in markdown files at the repository root and in `ve
 | Document | Description |
 | -------- | ----------- |
 | **[README.md](README.md)** | This file — project overview, hardware, build instructions, known issues |
-| **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
-| **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)** | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache |
 | **[GAME.md](GAME.md)** | Player-facing game instructions, controls, stats, mini-games |
 | **[GAMES.md](GAMES.md)** | Developer reference for all seven mini-games, controls, scoring |
+| **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)** | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache |
+| **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
 | **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
 | **[HWTEST.md](HWTEST.md)** | Hardware test firmware — factory diagnostics, beep codes |
 | **[License.md](License.md)** | Apache 2.0 + Empty File License |
