@@ -357,9 +357,11 @@ pub fn dispatch(btn: ButtonId) -> bool {
         let mut b = cell.borrow_mut();
         match b.mode {
             Mode::Inbox => {
-                let count = peer_list().len() as u8;
-                // Defensive clamp for the case where a forget elsewhere
-                // shrinks the list while the cursor was scrolled down.
+                // Compute the peer list once per dispatch — it's not
+                // free (sort + ~7 KiB scratch).  Reuse for the count
+                // clamp, scroll math, and the Fire-arm action target.
+                let summary = peer_list();
+                let count = summary.len() as u8;
                 if b.cursor > count.saturating_sub(1) {
                     b.cursor = count.saturating_sub(1);
                 }
@@ -386,9 +388,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                         false
                     }
                     ButtonId::Fire | ButtonId::Execute => {
-                        if count > 0
-                            && let Some(s) = peer_list().get(b.cursor as usize)
-                        {
+                        if let Some(s) = summary.get(b.cursor as usize) {
                             mark_read(&s.pub_key);
                             b.mode = Mode::Thread { pub_key: s.pub_key };
                             b.thread_scroll = 0;
@@ -396,7 +396,6 @@ pub fn dispatch(btn: ButtonId) -> bool {
                         false
                     }
                     ButtonId::Cancel => true,
-                    // Left/Right propagate to the screen-swipe carousel.
                     ButtonId::Left | ButtonId::Right => true,
                 }
             }

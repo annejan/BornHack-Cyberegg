@@ -139,6 +139,33 @@ pub static CACHED_CONTACTS: Mutex<
     RefCell<heapless::Vec<ContactRow, CACHE_CAP>>,
 > = Mutex::new(RefCell::new(heapless::Vec::new()));
 
+/// Wakes the `refresh_cache_task`.  Separate from `ADVERT_SIGNAL`
+/// because `embassy_sync::Signal` is single-waiter — sharing one
+/// signal between the UI redraw loop (`bin/embassy.rs`) and this
+/// task silently drops wakes for whichever side registered its
+/// waker first.  `meshcore::log_advert` and `mutation_persister_task`
+/// signal both.
+pub static REBUILD_SIGNAL: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
+
+/// `true` when the persistent `ContactStore` has been mutated since
+/// the last cache rebuild, requiring a full 300-slot kv rescan to
+/// pick up the change.  When `false`, `refresh_cache` skips the
+/// expensive rescan and only refreshes `observed_at_secs` and the
+/// discovery overlay — both pure RAM, no flash I/O.
+///
+/// Set by `mutation_persister_task` after a write, by
+/// `meshcore::log_advert` after a successful auto-add, and by the
+/// BLE companion's contact-mutation paths.  Cleared by
+/// `refresh_cache` once it has done a full rescan.
+pub static STORE_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// Mark the persistent contact store as having been mutated; the
+/// next `refresh_cache` will do a full kv rescan.
+pub fn mark_store_dirty() {
+    STORE_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
 // ── Local-observation table ────────────────────────────────────────────────
 //
 // Tracks "I (this badge) heard from `pub_key` at this many seconds since
@@ -278,7 +305,8 @@ pub fn start_pm_compose(pub_key: [u8; 32]) {
 // persistent ContactStore — but `dispatch()` is sync and the kv ops are
 // async.  Push the requested change here; `mutation_persister_task`
 // drains the channel and applies them.  After each successful write
-// it nudges `ADVERT_SIGNAL` so the cache rebuild picks up the change.
+// it marks the store dirty and nudges `REBUILD_SIGNAL` so the cache
+// rebuild picks up the change.
 
 /// Pending mutation against the persistent contact store.
 pub enum Mutation {
@@ -324,8 +352,10 @@ pub async fn mutation_persister_task() {
                 }
             }
         }
-        // Wake the cache refresh so the UI reflects the change.
-        crate::ADVERT_SIGNAL.signal(());
+        // Mark the store dirty (the rebuild needs a full rescan to
+        // pick up the kv write) and wake the refresh task.
+        mark_store_dirty();
+        REBUILD_SIGNAL.signal(());
     }
 }
 
@@ -484,11 +514,27 @@ pub fn reset() {
 /// `N = MAX_CONTACTS`, `K = CACHE_CAP`.  Call from a debounced refresh
 /// task — not from the draw path.
 pub async fn refresh_cache() {
+    use core::sync::atomic::Ordering;
+
+    // Fast path — when the persistent store hasn't been mutated since
+    // the last rebuild, skip the 300-slot kv rescan entirely.  Adverts
+    // populate `OBSERVATIONS` and the discovery cache directly (both
+    // pure RAM); the saved rows already in `CACHED_CONTACTS` only need
+    // their `observed_at_secs` refreshed and the discovery overlay
+    // re-merged.  Saves ≈ 300 ms QSPI + CPU per advert burst, which is
+    // the dominant new energy actor in the Contacts screen.
+    if !STORE_DIRTY.swap(false, Ordering::Relaxed) {
+        refresh_cache_fast();
+        return;
+    }
+
+    // Slow path — full rebuild.  Used after a contact-store mutation
+    // (Save/Forget/Add via the popup, or `meshcore::log_advert`'s
+    // auto-add succeeding).
     let store = ContactStore::new();
     let mut top: heapless::Vec<ContactRow, CACHE_CAP> = heapless::Vec::new();
 
-    // Pass 1: persistent ContactStore.  These are the authoritative
-    // saved rows; insert into the sorted-by-recency window.
+    // Pass 1: persistent ContactStore.
     for idx in 0..MAX_CONTACTS {
         let Some(c) = store.read_slot(idx).await else {
             continue;
@@ -501,13 +547,43 @@ pub async fn refresh_cache() {
         insert_sorted(&mut top, e);
     }
 
-    // Pass 2: discovery-cache entries that aren't already in `top`
-    // (i.e. not persisted).  Merge them in as `is_saved=false`.  The
-    // popup's Add action promotes them; once promoted, the next rebuild
-    // sees them via Pass 1 and the duplicate filter here drops them.
+    // Pass 2: discovery-cache entries that aren't already persisted.
     super::discovery::for_each(|d| {
-        let already = top.iter().any(|x| x.pub_key == d.pub_key);
-        if already {
+        if top.iter().any(|x| x.pub_key == d.pub_key) {
+            return;
+        }
+        insert_sorted(&mut top, ContactRow::from_discovery(d));
+    });
+
+    CACHED_CONTACTS.lock(|cell| {
+        let mut list = cell.borrow_mut();
+        list.clear();
+        for e in top.iter() {
+            let _ = list.push(e.clone());
+        }
+    });
+}
+
+/// In-RAM-only cache refresh: keep the existing saved rows, refresh
+/// their `observed_at_secs` from `OBSERVATIONS`, and re-merge the
+/// discovery overlay.  No flash I/O.
+fn refresh_cache_fast() {
+    let mut top: heapless::Vec<ContactRow, CACHE_CAP> = heapless::Vec::new();
+
+    // Carry over saved rows from the existing cache, refreshing each
+    // row's observed_at_secs.  Drop discovery rows — they're rebuilt
+    // below from the (possibly-aged) discovery snapshot.
+    CACHED_CONTACTS.lock(|cell| {
+        for row in cell.borrow().iter().filter(|r| r.is_saved) {
+            let mut r = row.clone();
+            r.observed_at_secs = lookup_observation(&r.pub_key);
+            insert_sorted(&mut top, r);
+        }
+    });
+
+    // Re-merge discovery entries that aren't shadowed by a saved row.
+    super::discovery::for_each(|d| {
+        if top.iter().any(|x| x.pub_key == d.pub_key) {
             return;
         }
         insert_sorted(&mut top, ContactRow::from_discovery(d));
@@ -551,27 +627,32 @@ fn sort_key(e: &ContactRow) -> u64 {
     }
 }
 
-/// Embassy task: rebuild the cache when adverts arrive.  Debounces bursts
-/// (e.g. multiple adverts during a sync gust) by waiting for a quiet 1 s
-/// window before each rebuild.
+/// Embassy task: rebuild the cache when an advert arrives or a popup
+/// action mutates the persistent store.  Debounces bursts by waiting
+/// for a quiet 1 s window before each rebuild.
+///
+/// Waits on its own [`REBUILD_SIGNAL`] rather than `ADVERT_SIGNAL`
+/// because `embassy_sync::Signal` is single-waiter — sharing one
+/// signal with the UI redraw loop in `bin/embassy.rs` causes wakes
+/// to be silently dropped on whichever side last registered its
+/// waker.  `meshcore::log_advert` and `mutation_persister_task`
+/// signal both.
 #[embassy_executor::task]
 pub async fn refresh_cache_task() {
     use embassy_time::{Duration, Timer, with_timeout};
-    // Initial population at boot.
+    // Initial population at boot — full rescan since the cache is
+    // empty.  STORE_DIRTY starts true so this naturally takes the
+    // slow path.
     refresh_cache().await;
     loop {
-        // Block until at least one advert (or other mutation) arrives.
-        crate::ADVERT_SIGNAL.wait().await;
-        // Coalesce: keep absorbing further signals as long as they keep
-        // arriving within the debounce window.
+        REBUILD_SIGNAL.wait().await;
         loop {
-            match with_timeout(Duration::from_millis(1000), crate::ADVERT_SIGNAL.wait()).await {
-                Ok(()) => continue, // got another, keep waiting
-                Err(_) => break,    // quiet for the window — go rebuild
+            match with_timeout(Duration::from_millis(1000), REBUILD_SIGNAL.wait()).await {
+                Ok(()) => continue,
+                Err(_) => break,
             }
         }
         refresh_cache().await;
-        // Brief breath so we don't hammer kv in pathological burst.
         Timer::after(Duration::from_millis(50)).await;
     }
 }

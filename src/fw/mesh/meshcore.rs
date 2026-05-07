@@ -727,9 +727,14 @@ async fn log_advert(
         a.timestamp,
     );
 
-    // Wake the Contacts-screen cache so it can rebuild from the
-    // persisted contact store now that this advert has landed in it.
+    // Wake the UI redraw loop (`ADVERT_SIGNAL`) and the Contacts
+    // screen's cache-refresh task (`REBUILD_SIGNAL`).  Two distinct
+    // signals because `embassy_sync::Signal` is single-waiter —
+    // sharing one between the redraw loop and the refresh task
+    // would silently drop wakes for whichever side registered its
+    // waker last.
     crate::ADVERT_SIGNAL.signal(());
+    super::contacts_screen::REBUILD_SIGNAL.signal(());
 
     let mut ble_name: heapless::Vec<u8, 32> = heapless::Vec::new();
     if let Some(ref n) = a.name {
@@ -839,7 +844,11 @@ async fn log_advert(
                 lon,
             );
             match store.add_or_update(&contact).await {
-                Ok(_) => {}
+                Ok(_) => {
+                    // Persistent store actually changed — Contacts
+                    // screen needs a full rescan on next rebuild.
+                    super::contacts_screen::mark_store_dirty();
+                }
                 Err(crate::fw::kv::KvError::StoreFull) => {
                     // Hash bucket full (`MAX_SLOTS_PER_BUCKET` rejected the insert).
                     // Matches the spirit of `PUSH_CODE_CONTACTS_FULL` even though
