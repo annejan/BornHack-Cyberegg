@@ -24,6 +24,7 @@ All project documentation is in markdown files at the repository root and in `ve
 | **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
 | **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
 | **[HWTEST.md](HWTEST.md)** | Hardware test firmware — factory diagnostics, beep codes |
+| **[SUBMODULES.md](SUBMODULES.md)** | How `vendor/` git submodules work — cloning, updating pins, hacking on vendor libs, sibling read-only checkouts |
 | **[License.md](License.md)** | Apache 2.0 + Empty File License |
 
 Vendor library documentation:

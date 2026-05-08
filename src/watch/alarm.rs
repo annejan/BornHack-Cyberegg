@@ -773,50 +773,111 @@ where
     Ok(())
 }
 
-/// Header indicator: a small red bell, optionally followed by the time of
-/// the next alarm scheduled for later today (`HH:MM` in black).
+/// Render a chunky red envelope, centred at `(cx, cy)`.  13×9 px solid
+/// red body with a white V-fold marking the flap, so the silhouette
+/// reads clearly even on the e-paper's softer red plane.  Pairs visually
+/// with `draw_bell` — same red, slightly larger footprint.
+#[cfg(feature = "mesh")]
+fn draw_envelope<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use embedded_graphics::primitives::{Line, PrimitiveStyleBuilder};
+    // Solid red body — 13×9.  Filled (not outlined) so the envelope has
+    // visible mass on the e-paper rather than a thin outline that fades
+    // into the surrounding white.
+    Rectangle::new(Point::new(cx - 6, cy - 4), Size::new(13, 9))
+        .into_styled(PrimitiveStyle::with_fill(RED))
+        .draw(display)?;
+    // Flap — two 2-px-thick white lines from the top corners meeting at
+    // the centre, knocking out a V into the red fill.  Width 2 so the
+    // flap reads at this size.
+    let flap = PrimitiveStyleBuilder::new()
+        .stroke_color(WHITE)
+        .stroke_width(2)
+        .build();
+    Line::new(Point::new(cx - 5, cy - 3), Point::new(cx, cy + 1))
+        .into_styled(flap)
+        .draw(display)?;
+    Line::new(Point::new(cx + 5, cy - 3), Point::new(cx, cy + 1))
+        .into_styled(flap)
+        .draw(display)?;
+    Ok(())
+}
+
+/// Header indicator: an optional red envelope (when there are unread PMs,
+/// `feature = "mesh"` only), an optional red bell (when any alarm is
+/// enabled), and an optional `HH:MM` for the next alarm firing today.
 ///
 /// Visibility:
-///   * No alarms enabled anywhere → nothing rendered.
-///   * Alarm(s) enabled but none firing later today → bell only.
-///   * Alarm enabled with a future firing today → bell + that `HH:MM`.
+///   * Nothing → nothing rendered.
+///   * Unread PMs → envelope, optionally followed by `+N`.
+///   * Alarm(s) enabled but none firing later today → bell.
+///   * Alarm enabled with a future firing today → bell + `HH:MM`.
 ///
-/// The bell uses the red plane, which only refreshes on a full
-/// tri-color update, so toggling alarms while sitting on the Clock face
-/// can leave the bell stale until the next full refresh.  The `HH:MM` is
-/// drawn in black and updates on every redraw.
+/// The envelope and bell sit on the red plane, which only refreshes on a
+/// full tri-color update; the `+N` and `HH:MM` are black and update on
+/// every redraw.
 pub(super) fn draw_indicator<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    if !any_alarm_enabled() {
-        return Ok(());
-    }
-
-    // Bell — fixed position in the header band.
     let bell_cx = 56i32;
     let bell_cy = 8i32;
-    draw_bell(display, bell_cx, bell_cy)?;
+    let left = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Left)
+        .build();
 
-    // Time — only if there's an upcoming firing today.
-    let Some(c) = clock::wall_clock() else {
-        return Ok(());
-    };
-    if let Some((h, m)) = next_alarm_today(&c) {
-        let mut buf: heapless::String<8> = heapless::String::new();
-        let _ = core::fmt::write(&mut buf, format_args!("{:02}:{:02}", h, m));
-        let left = TextStyleBuilder::new()
-            .baseline(Baseline::Middle)
-            .alignment(Alignment::Left)
-            .build();
-        Text::with_text_style(
-            &buf,
-            Point::new(bell_cx + 10, bell_cy),
-            MonoTextStyle::new(&FONT_6X10, BLACK),
-            left,
-        )
-        .draw(display)?;
+    // Bell + optional HH:MM keep their existing positions.  Title text
+    // sits left-aligned at x=4..~40, so anything we draw past the bell
+    // (x=56) is in the free zone between the title and the battery icon
+    // at x=128.
+    let mut alarm_time_end_x: i32 = bell_cx + 10;
+    if any_alarm_enabled() {
+        draw_bell(display, bell_cx, bell_cy)?;
+        if let Some(c) = clock::wall_clock()
+            && let Some((h, m)) = next_alarm_today(&c)
+        {
+            let mut buf: heapless::String<8> = heapless::String::new();
+            let _ = core::fmt::write(&mut buf, format_args!("{:02}:{:02}", h, m));
+            Text::with_text_style(
+                &buf,
+                Point::new(alarm_time_end_x, bell_cy),
+                MonoTextStyle::new(&FONT_6X10, BLACK),
+                left,
+            )
+            .draw(display)?;
+            alarm_time_end_x += 32; // 5 chars × ~6 px + small gap
+        }
     }
+
+    // PM envelope — only when mesh is built in and at least one incoming
+    // PM is unread.  Drawn last so it lands right of the bell + alarm
+    // time, well clear of the title text on the left.
+    #[cfg(feature = "mesh")]
+    {
+        let unread = crate::fw::mesh::pm_inbox::unread_total();
+        if unread > 0 {
+            let env_cx = alarm_time_end_x + 7;
+            draw_envelope(display, env_cx, bell_cy)?;
+            // The envelope alone says "you've got one" — only annotate
+            // when a count adds information (≥ 2).
+            if unread >= 2 {
+                let mut buf: heapless::String<8> = heapless::String::new();
+                let _ = core::fmt::write(&mut buf, format_args!("+{}", unread));
+                Text::with_text_style(
+                    &buf,
+                    Point::new(env_cx + 8, bell_cy),
+                    MonoTextStyle::new(&FONT_6X10, BLACK),
+                    left,
+                )
+                .draw(display)?;
+            }
+        }
+    }
+    #[cfg(not(feature = "mesh"))]
+    let _ = alarm_time_end_x;
     Ok(())
 }
 
