@@ -307,8 +307,9 @@ pub struct TxChannelMsg {
     pub text: heapless::Vec<u8, { msg_queue::MAX_TEXT }>,
 }
 
-/// Maximum binary blob carried in a `CMD_SEND_CHANNEL_DATA` (PAYLOAD_TYPE_GRP_DATA).
-/// MeshCore 1.15 caps `data_len` at one byte, so the blob is at most 255 B.
+/// Maximum binary blob carried in a `CMD_SEND_CHANNEL_DATA`
+/// (PAYLOAD_TYPE_GRP_DATA). MeshCore 1.15 caps `data_len` at one byte, so the
+/// blob is at most 255 B.
 pub const MAX_CHANNEL_DATA: usize = 255;
 
 pub struct TxChannelData {

@@ -364,8 +364,14 @@ pub async fn run_meshcore_listener<'a>(
                                     .await
                             }
                             PayloadType::GrpData => {
-                                push_grp_data(&msg.payload, rssi, snr_x4, path_len, &loaded_channels)
-                                    .await
+                                push_grp_data(
+                                    &msg.payload,
+                                    rssi,
+                                    snr_x4,
+                                    path_len,
+                                    &loaded_channels,
+                                )
+                                .await
                             }
                             PayloadType::TxtMsg => {
                                 log_txt_msg(
@@ -1571,7 +1577,11 @@ async fn send_grp_data(
                     req.channel_idx,
                     req.data_type,
                     req.data.len(),
-                    if route == RouteType::Direct { "direct" } else { "flood" },
+                    if route == RouteType::Direct {
+                        "direct"
+                    } else {
+                        "flood"
+                    },
                     len,
                 );
             }

@@ -863,7 +863,9 @@ async fn nus_peripheral_loop<C>(
                             // `None` placeholder is overwritten in the matching arm; the
                             // unused-assignment warning is expected and silenced.
                             #[allow(unused_assignments)]
-                            let mut pending_default_scope: Option<settings::DefaultFloodScope> = None;
+                            let mut pending_default_scope: Option<
+                                settings::DefaultFloodScope,
+                            > = None;
                             // Self-telemetry LPP buffer: voltage (4B) + temperature (4B).
                             let mut self_telem_lpp: [u8; 8] = [0u8; 8];
                             let mut self_telem_lpp_len: usize;
@@ -1017,11 +1019,11 @@ async fn nus_peripheral_loop<C>(
                                                     remaining
                                                 );
                                                 companion::Response::ChannelDataRecv {
-                                                    snr_x4:      msg.snr_x4,
+                                                    snr_x4: msg.snr_x4,
                                                     channel_idx: msg.channel_idx,
-                                                    path_len:    msg.path_len,
-                                                    data_type:   msg.data_type,
-                                                    data:        &msg.text,
+                                                    path_len: msg.path_len,
+                                                    data_type: msg.data_type,
+                                                    data: &msg.text,
                                                 }
                                             }
                                         }
@@ -1383,17 +1385,17 @@ async fn nus_peripheral_loop<C>(
                                             companion::ErrorCode::InvalidParameter,
                                         )
                                     } else {
-                                        let mut data: heapless::Vec<u8, { crate::MAX_CHANNEL_DATA }> =
-                                            heapless::Vec::new();
+                                        let mut data: heapless::Vec<
+                                            u8,
+                                            { crate::MAX_CHANNEL_DATA },
+                                        > = heapless::Vec::new();
                                         let _ = data.extend_from_slice(payload);
                                         let mut path_v: heapless::Vec<
                                             u8,
                                             { ::meshcore::MAX_PATH_SIZE },
                                         > = heapless::Vec::new();
                                         let _ = path_v.extend_from_slice(
-                                            &path[..path
-                                                .len()
-                                                .min(::meshcore::MAX_PATH_SIZE)],
+                                            &path[..path.len().min(::meshcore::MAX_PATH_SIZE)],
                                         );
                                         match crate::tx_send(crate::TxRequest::ChannelData(
                                             crate::TxChannelData {
@@ -1432,7 +1434,7 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::SetDefaultFloodScope(opt)) => {
                                     let value = opt.map(|s| settings::DefaultFloodScope {
                                         name: *s.name,
-                                        key:  *s.key,
+                                        key: *s.key,
                                     });
                                     // Reject names whose first byte is NUL (matches upstream
                                     // ERR_CODE_ILLEGAL_ARG when strlen(name) == 0).
@@ -1457,7 +1459,11 @@ async fn nus_peripheral_loop<C>(
                                         match value {
                                             Some(v) => defmt::info!(
                                                 "companion: SET_DEFAULT_FLOOD_SCOPE name={=[u8]:a} → OK",
-                                                &v.name[..v.name.iter().position(|&b| b == 0).unwrap_or(31)],
+                                                &v.name[..v
+                                                    .name
+                                                    .iter()
+                                                    .position(|&b| b == 0)
+                                                    .unwrap_or(31)],
                                             ),
                                             None => defmt::debug!(
                                                 "companion: SET_DEFAULT_FLOOD_SCOPE (clear) → OK",
@@ -1473,7 +1479,7 @@ async fn nus_peripheral_loop<C>(
                                     let resp_opt = pending_default_scope.as_ref().map(|s| {
                                         companion::response::DefaultScopeRef {
                                             name: &s.name,
-                                            key:  &s.key,
+                                            key: &s.key,
                                         }
                                     });
                                     companion::Response::DefaultFloodScope(resp_opt)

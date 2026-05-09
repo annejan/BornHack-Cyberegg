@@ -73,7 +73,8 @@ pub enum MsgKind {
     ChannelData,
 }
 
-/// A single dequeued message: text channel, private message, or binary channel datagram.
+/// A single dequeued message: text channel, private message, or binary channel
+/// datagram.
 pub struct ReceivedMsg {
     pub kind: MsgKind,
     /// First 6 bytes of the sender's pub_key (zeros for channel/data messages).
@@ -132,10 +133,11 @@ fn slot_key(idx: u16) -> heapless::String<2> {
 fn serialize(msg: &ReceivedMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
     // Common 17-byte header for kinds 0x01 / 0x02 / 0x03.
     // For kind 0x03 (ChannelData) the next 3 bytes are
-    // `[snr_x4:i8][data_type_lo:u8][data_type_hi:u8]` followed by `text_len + text`.
+    // `[snr_x4:i8][data_type_lo:u8][data_type_hi:u8]` followed by `text_len +
+    // text`.
     buf[0] = match msg.kind {
-        MsgKind::Channel     => 0x01,
-        MsgKind::Private     => 0x02,
+        MsgKind::Channel => 0x01,
+        MsgKind::Private => 0x02,
         MsgKind::ChannelData => 0x03,
     };
     buf[1..7].copy_from_slice(&msg.sender_prefix);
@@ -147,7 +149,7 @@ fn serialize(msg: &ReceivedMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
     let text_len = msg.text.len().min(MAX_TEXT) as u8;
     buf[16] = text_len;
     if msg.kind == MsgKind::ChannelData {
-        buf[HEADER]     = msg.snr_x4 as u8;
+        buf[HEADER] = msg.snr_x4 as u8;
         buf[HEADER + 1] = (msg.data_type & 0xFF) as u8;
         buf[HEADER + 2] = (msg.data_type >> 8) as u8;
         buf[HEADER + 3..HEADER + 3 + text_len as usize]

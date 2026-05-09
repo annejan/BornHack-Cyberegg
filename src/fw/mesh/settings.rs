@@ -498,17 +498,19 @@ pub async fn set_flood_scope(key: Option<[u8; 16]>) -> Result<(), kv::KvError> {
 }
 
 // ---------------------------------------------------------------------------
-// Default flood scope  (CMD_GET_DEFAULT_FLOOD_SCOPE 0x40 / CMD_SET_DEFAULT_FLOOD_SCOPE 0x3F)
+// Default flood scope  (CMD_GET_DEFAULT_FLOOD_SCOPE 0x40 /
+// CMD_SET_DEFAULT_FLOOD_SCOPE 0x3F)
 // ---------------------------------------------------------------------------
 
-/// MeshCore 1.15 default flood scope: a named region with a 16-byte transport key.
-/// Persisted as a 47-byte blob `[name:31][key:16]`. `name[0] == 0` means cleared.
+/// MeshCore 1.15 default flood scope: a named region with a 16-byte transport
+/// key. Persisted as a 47-byte blob `[name:31][key:16]`. `name[0] == 0` means
+/// cleared.
 #[derive(Clone, Copy, Debug)]
 pub struct DefaultFloodScope {
     /// 31-byte NUL-padded ASCII name.
     pub name: [u8; 31],
     /// 16-byte transport key.
-    pub key:  [u8; 16],
+    pub key: [u8; 16],
 }
 
 const DEFAULT_SCOPE_BLOB_LEN: usize = 31 + 16;
