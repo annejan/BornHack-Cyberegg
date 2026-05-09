@@ -313,6 +313,19 @@ pub struct TxChannelMsg {
     pub text: heapless::Vec<u8, { msg_queue::MAX_TEXT }>,
 }
 
+/// Maximum binary blob carried in a `CMD_SEND_CHANNEL_DATA` (PAYLOAD_TYPE_GRP_DATA).
+/// MeshCore 1.15 caps `data_len` at one byte, so the blob is at most 255 B.
+pub const MAX_CHANNEL_DATA: usize = 255;
+
+pub struct TxChannelData {
+    pub channel_idx: u8,
+    pub data_type: u16,
+    /// `OUT_PATH_UNKNOWN` (0xFF) → flood. Otherwise number of bytes in `path`.
+    pub path_len: u8,
+    pub path: heapless::Vec<u8, { ::meshcore::MAX_PATH_SIZE }>,
+    pub data: heapless::Vec<u8, MAX_CHANNEL_DATA>,
+}
+
 pub struct TxPrivateMsg {
     pub recipient_pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
     pub timestamp: u32,
@@ -369,6 +382,7 @@ pub struct TxControlData {
 /// send function (encryption, framing, serialization, `lora.send_message`).
 pub enum TxRequest {
     ChannelMsg(TxChannelMsg),
+    ChannelData(TxChannelData),
     PrivateMsg(TxPrivateMsg),
     Trace(TxTracePath),
     Login(TxLogin),

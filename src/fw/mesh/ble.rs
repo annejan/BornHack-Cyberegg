@@ -858,6 +858,12 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_factory_reset = false;
                             let mut pending_reboot: bool = false;
                             let mut pending_contact: Option<contacts::Contact> = None;
+                            // Owned default-scope payload for the GetDefaultFloodScope branch:
+                            // declared up here so the encoded response can borrow from it.
+                            // `None` placeholder is overwritten in the matching arm; the
+                            // unused-assignment warning is expected and silenced.
+                            #[allow(unused_assignments)]
+                            let mut pending_default_scope: Option<settings::DefaultFloodScope> = None;
                             // Self-telemetry LPP buffer: voltage (4B) + temperature (4B).
                             let mut self_telem_lpp: [u8; 8] = [0u8; 8];
                             let mut self_telem_lpp_len: usize;
@@ -893,7 +899,12 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::DeviceQuery(ver)) => {
                                     defmt::debug!("companion: DEVICE_QUERY ver={=u8}", ver);
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
-                                        fw_version: 10,
+                                        // FIRMWARE_VER_CODE bumped 10 → 11 in MeshCore 1.15.0
+                                        // (commit d2fdd6fa).  Advertises support for the
+                                        // PAYLOAD_TYPE_GRP_DATA codec with the 1.15 wire
+                                        // format (no timestamp, u16 data_type, explicit
+                                        // data_len byte).
+                                        fw_version: 11,
                                         // Protocol encodes capacity as (actual ÷ 2); u8 max = 255
                                         // so we saturate at 510 (255 × 2) as the reported limit.
                                         max_contacts_raw: (contacts::MAX_CONTACTS / 2)
@@ -906,7 +917,7 @@ async fn nus_peripheral_loop<C>(
                                         },
                                         fw_build: b"dev",
                                         model: b"BornHack Cyber\xC3\x86gg",
-                                        version: b"v1.14.1",
+                                        version: b"v1.15.0",
                                         client_repeat: false,
                                         path_hash_mode: 0,
                                     })
@@ -996,6 +1007,22 @@ async fn nus_peripheral_loop<C>(
                                                         text: &msg.text,
                                                     },
                                                 )
+                                            }
+                                            msg_queue::MsgKind::ChannelData => {
+                                                defmt::debug!(
+                                                    "companion: SYNC_NEXT_MESSAGE → ch_data ch={=u8} type={=u16:#06x} {=usize}B ({=u16} remaining)",
+                                                    msg.channel_idx,
+                                                    msg.data_type,
+                                                    msg.text.len(),
+                                                    remaining
+                                                );
+                                                companion::Response::ChannelDataRecv {
+                                                    snr_x4:      msg.snr_x4,
+                                                    channel_idx: msg.channel_idx,
+                                                    path_len:    msg.path_len,
+                                                    data_type:   msg.data_type,
+                                                    data:        &msg.text,
+                                                }
                                             }
                                         }
                                     }
@@ -1331,6 +1358,119 @@ async fn nus_peripheral_loop<C>(
                                         ),
                                     }
                                     companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::SendChannelData {
+                                    data_type,
+                                    channel_idx,
+                                    path_len,
+                                    path,
+                                    payload,
+                                }) => {
+                                    if payload.len() > crate::MAX_CHANNEL_DATA {
+                                        defmt::warn!(
+                                            "companion: SEND_CHANNEL_DATA payload too long ({=usize}B > {=usize}B)",
+                                            payload.len(),
+                                            crate::MAX_CHANNEL_DATA,
+                                        );
+                                        companion::Response::Error(
+                                            companion::ErrorCode::InvalidParameter,
+                                        )
+                                    } else {
+                                        let mut data: heapless::Vec<u8, { crate::MAX_CHANNEL_DATA }> =
+                                            heapless::Vec::new();
+                                        let _ = data.extend_from_slice(payload);
+                                        let mut path_v: heapless::Vec<
+                                            u8,
+                                            { ::meshcore::MAX_PATH_SIZE },
+                                        > = heapless::Vec::new();
+                                        let _ = path_v.extend_from_slice(
+                                            &path[..path
+                                                .len()
+                                                .min(::meshcore::MAX_PATH_SIZE)],
+                                        );
+                                        match crate::tx_send(crate::TxRequest::ChannelData(
+                                            crate::TxChannelData {
+                                                channel_idx,
+                                                data_type,
+                                                path_len,
+                                                path: path_v,
+                                                data,
+                                            },
+                                        )) {
+                                            Ok(()) => {
+                                                defmt::info!(
+                                                    "companion: SEND_CHANNEL_DATA ch={=u8} type={=u16:#06x} path_len={=u8} → queued",
+                                                    channel_idx,
+                                                    data_type,
+                                                    path_len,
+                                                );
+                                                companion::Response::Ok
+                                            }
+                                            Err(_) => {
+                                                defmt::warn!(
+                                                    "companion: SEND_CHANNEL_DATA → TX queue full",
+                                                );
+                                                companion::Response::Error(
+                                                    companion::ErrorCode::InsufficientStorage,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // MeshCore 1.15 persistent default flood scope.
+                                // Wire format (upstream commit efdd2b6a):
+                                //   1 B  → clear
+                                //   48 B → name(31) + key(16)
+                                Ok(companion::cmd::Command::SetDefaultFloodScope(opt)) => {
+                                    let value = opt.map(|s| settings::DefaultFloodScope {
+                                        name: *s.name,
+                                        key:  *s.key,
+                                    });
+                                    // Reject names whose first byte is NUL (matches upstream
+                                    // ERR_CODE_ILLEGAL_ARG when strlen(name) == 0).
+                                    if let Some(ref v) = value
+                                        && v.name[0] == 0
+                                    {
+                                        defmt::warn!(
+                                            "companion: SET_DEFAULT_FLOOD_SCOPE empty name → ERR",
+                                        );
+                                        companion::Response::Error(
+                                            companion::ErrorCode::InvalidParameter,
+                                        )
+                                    } else {
+                                        if let Err(e) =
+                                            settings::set_default_flood_scope(value).await
+                                        {
+                                            defmt::warn!(
+                                                "settings: default_flood_scope persist failed: {:?}",
+                                                e
+                                            );
+                                        }
+                                        match value {
+                                            Some(v) => defmt::info!(
+                                                "companion: SET_DEFAULT_FLOOD_SCOPE name={=[u8]:a} → OK",
+                                                &v.name[..v.name.iter().position(|&b| b == 0).unwrap_or(31)],
+                                            ),
+                                            None => defmt::debug!(
+                                                "companion: SET_DEFAULT_FLOOD_SCOPE (clear) → OK",
+                                            ),
+                                        }
+                                        companion::Response::Ok
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::GetDefaultFloodScope) => {
+                                    let scope = settings::get_default_flood_scope().await;
+                                    pending_default_scope = scope;
+                                    let resp_opt = pending_default_scope.as_ref().map(|s| {
+                                        companion::response::DefaultScopeRef {
+                                            name: &s.name,
+                                            key:  &s.key,
+                                        }
+                                    });
+                                    companion::Response::DefaultFloodScope(resp_opt)
                                 }
 
                                 Ok(companion::cmd::Command::SetAdvertName(name)) => {

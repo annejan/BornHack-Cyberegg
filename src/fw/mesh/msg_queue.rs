@@ -49,8 +49,11 @@ pub const MAX_TEXT: usize = 181;
 
 const HEADER: usize = 17;
 
-/// Maximum serialised record size in bytes.
-const MAX_RECORD: usize = HEADER + MAX_TEXT;
+/// Extra bytes for ChannelData kind: `[snr_x4:1][data_type:2]`.
+const CHANNEL_DATA_EXTRA: usize = 3;
+
+/// Maximum serialised record size in bytes (includes the ChannelData trailer).
+const MAX_RECORD: usize = HEADER + CHANNEL_DATA_EXTRA + MAX_TEXT;
 
 /// Total number of KV slots.  Capacity = NUM_SLOTS − 1 = 255 messages.
 const NUM_SLOTS: u16 = 256;
@@ -59,17 +62,21 @@ const NUM_SLOTS: u16 = 256;
 // Record types
 // ---------------------------------------------------------------------------
 
-/// Whether this queued message is a channel (group) or private (P2P) message.
+/// Whether this queued message is a channel (group) text, private (P2P) text,
+/// or 1.15 binary channel datagram (`PAYLOAD_TYPE_GRP_DATA`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MsgKind {
     Channel,
     Private,
+    /// MeshCore 1.15 `PAYLOAD_TYPE_GRP_DATA`. The `text` field carries the
+    /// binary blob; `data_type` and `snr_x4` are populated.
+    ChannelData,
 }
 
-/// A single dequeued message, either channel or private.
+/// A single dequeued message: text channel, private message, or binary channel datagram.
 pub struct ReceivedMsg {
     pub kind: MsgKind,
-    /// First 6 bytes of the sender's pub_key (zeros for channel messages).
+    /// First 6 bytes of the sender's pub_key (zeros for channel/data messages).
     pub sender_prefix: [u8; 6],
     pub channel_idx: u8,
     pub path_len: u8,
@@ -77,6 +84,10 @@ pub struct ReceivedMsg {
     pub timestamp: u32,
     pub rssi: i16,
     pub text: heapless::Vec<u8, MAX_TEXT>,
+    /// Only populated for [`MsgKind::ChannelData`]; otherwise `0`.
+    pub data_type: u16,
+    /// Only populated for [`MsgKind::ChannelData`]; otherwise `0`.
+    pub snr_x4: i8,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,9 +130,13 @@ fn slot_key(idx: u16) -> heapless::String<2> {
 // ---------------------------------------------------------------------------
 
 fn serialize(msg: &ReceivedMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
+    // Common 17-byte header for kinds 0x01 / 0x02 / 0x03.
+    // For kind 0x03 (ChannelData) the next 3 bytes are
+    // `[snr_x4:i8][data_type_lo:u8][data_type_hi:u8]` followed by `text_len + text`.
     buf[0] = match msg.kind {
-        MsgKind::Channel => 0x01,
-        MsgKind::Private => 0x02,
+        MsgKind::Channel     => 0x01,
+        MsgKind::Private     => 0x02,
+        MsgKind::ChannelData => 0x03,
     };
     buf[1..7].copy_from_slice(&msg.sender_prefix);
     buf[7] = msg.channel_idx;
@@ -131,8 +146,17 @@ fn serialize(msg: &ReceivedMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
     buf[14..16].copy_from_slice(&msg.rssi.to_le_bytes());
     let text_len = msg.text.len().min(MAX_TEXT) as u8;
     buf[16] = text_len;
-    buf[HEADER..HEADER + text_len as usize].copy_from_slice(&msg.text[..text_len as usize]);
-    HEADER + text_len as usize
+    if msg.kind == MsgKind::ChannelData {
+        buf[HEADER]     = msg.snr_x4 as u8;
+        buf[HEADER + 1] = (msg.data_type & 0xFF) as u8;
+        buf[HEADER + 2] = (msg.data_type >> 8) as u8;
+        buf[HEADER + 3..HEADER + 3 + text_len as usize]
+            .copy_from_slice(&msg.text[..text_len as usize]);
+        HEADER + 3 + text_len as usize
+    } else {
+        buf[HEADER..HEADER + text_len as usize].copy_from_slice(&msg.text[..text_len as usize]);
+        HEADER + text_len as usize
+    }
 }
 
 fn deserialize(buf: &[u8]) -> Option<ReceivedMsg> {
@@ -142,6 +166,7 @@ fn deserialize(buf: &[u8]) -> Option<ReceivedMsg> {
     let kind = match buf[0] {
         0x01 => MsgKind::Channel,
         0x02 => MsgKind::Private,
+        0x03 => MsgKind::ChannelData,
         _ => return None,
     };
     let sender_prefix: [u8; 6] = buf[1..7].try_into().ok()?;
@@ -151,11 +176,24 @@ fn deserialize(buf: &[u8]) -> Option<ReceivedMsg> {
     let timestamp = u32::from_le_bytes(buf[10..14].try_into().ok()?);
     let rssi = i16::from_le_bytes(buf[14..16].try_into().ok()?);
     let text_len = buf[16] as usize;
-    if buf.len() < HEADER + text_len || text_len > MAX_TEXT {
+    if text_len > MAX_TEXT {
+        return None;
+    }
+    let (snr_x4, data_type, text_start) = if kind == MsgKind::ChannelData {
+        if buf.len() < HEADER + 3 {
+            return None;
+        }
+        let s = buf[HEADER] as i8;
+        let dt = u16::from_le_bytes([buf[HEADER + 1], buf[HEADER + 2]]);
+        (s, dt, HEADER + 3)
+    } else {
+        (0i8, 0u16, HEADER)
+    };
+    if buf.len() < text_start + text_len {
         return None;
     }
     let mut text = heapless::Vec::<u8, MAX_TEXT>::new();
-    text.extend_from_slice(&buf[HEADER..HEADER + text_len])
+    text.extend_from_slice(&buf[text_start..text_start + text_len])
         .ok()?;
     Some(ReceivedMsg {
         kind,
@@ -166,6 +204,8 @@ fn deserialize(buf: &[u8]) -> Option<ReceivedMsg> {
         timestamp,
         rssi,
         text,
+        data_type,
+        snr_x4,
     })
 }
 

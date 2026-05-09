@@ -498,6 +498,45 @@ pub async fn set_flood_scope(key: Option<[u8; 16]>) -> Result<(), kv::KvError> {
 }
 
 // ---------------------------------------------------------------------------
+// Default flood scope  (CMD_GET_DEFAULT_FLOOD_SCOPE 0x40 / CMD_SET_DEFAULT_FLOOD_SCOPE 0x3F)
+// ---------------------------------------------------------------------------
+
+/// MeshCore 1.15 default flood scope: a named region with a 16-byte transport key.
+/// Persisted as a 47-byte blob `[name:31][key:16]`. `name[0] == 0` means cleared.
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultFloodScope {
+    /// 31-byte NUL-padded ASCII name.
+    pub name: [u8; 31],
+    /// 16-byte transport key.
+    pub key:  [u8; 16],
+}
+
+const DEFAULT_SCOPE_BLOB_LEN: usize = 31 + 16;
+
+pub async fn get_default_flood_scope() -> Option<DefaultFloodScope> {
+    let mut b = [0u8; DEFAULT_SCOPE_BLOB_LEN];
+    match ns().get("def_scope", &mut b).await {
+        Ok(DEFAULT_SCOPE_BLOB_LEN) if b[0] != 0 => {
+            let mut name = [0u8; 31];
+            name.copy_from_slice(&b[..31]);
+            let mut key = [0u8; 16];
+            key.copy_from_slice(&b[31..]);
+            Some(DefaultFloodScope { name, key })
+        }
+        _ => None,
+    }
+}
+
+pub async fn set_default_flood_scope(value: Option<DefaultFloodScope>) -> Result<(), kv::KvError> {
+    let mut bytes = [0u8; DEFAULT_SCOPE_BLOB_LEN];
+    if let Some(v) = value {
+        bytes[..31].copy_from_slice(&v.name);
+        bytes[31..].copy_from_slice(&v.key);
+    }
+    ns().set("def_scope", &bytes, true).await
+}
+
+// ---------------------------------------------------------------------------
 // Tuning parameters  (CMD_SET_TUNING_PARAMS 0x15 / CMD_GET_TUNING_PARAMS 0x2B)
 // ---------------------------------------------------------------------------
 

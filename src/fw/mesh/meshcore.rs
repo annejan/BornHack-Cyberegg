@@ -363,6 +363,10 @@ pub async fn run_meshcore_listener<'a>(
                                 push_grp_txt(&msg.payload, rssi, snr_x4, path_len, &loaded_channels)
                                     .await
                             }
+                            PayloadType::GrpData => {
+                                push_grp_data(&msg.payload, rssi, snr_x4, path_len, &loaded_channels)
+                                    .await
+                            }
                             PayloadType::TxtMsg => {
                                 log_txt_msg(
                                     &mut lora,
@@ -634,6 +638,8 @@ async fn push_grp_txt(
                 timestamp: dec.timestamp,
                 rssi,
                 text: queued_text,
+                data_type: 0,
+                snr_x4: 0,
             })
             .await;
             defmt::debug!("msg_queue: {} message(s) waiting", msg_queue::count());
@@ -646,6 +652,85 @@ async fn push_grp_txt(
             );
         }
     }
+}
+
+/// Receive handler for `PAYLOAD_TYPE_GRP_DATA` (MeshCore 1.15).
+///
+/// Looks up the channel by hash, verifies MAC, decrypts, and queues the
+/// binary blob as a `MsgKind::ChannelData` record so the companion app can
+/// retrieve it via `CMD_SYNC_NEXT_MESSAGE` (delivered as
+/// `RESP_CODE_CHANNEL_DATA_RECV` 0x1B).
+async fn push_grp_data(
+    payload: &[u8],
+    rssi: i16,
+    snr_x4: i8,
+    path_len: u8,
+    channels: &[LoadedChannel],
+) {
+    use meshcore::payload::grp_data;
+
+    let grp = match grp_data::deserialize(payload) {
+        Ok(g) => g,
+        Err(_) => {
+            defmt::warn!("GrpData: failed to parse payload");
+            return;
+        }
+    };
+
+    let Some(ch) = channels.iter().find(|c| c.hash == grp.channel_hash) else {
+        defmt::debug!(
+            "GrpData: no channel match for hash={=u8:#04x}",
+            grp.channel_hash
+        );
+        return;
+    };
+
+    if grp_data::verify_mac(&ch.key, &grp).is_err() {
+        defmt::warn!(
+            "GrpData [channel={=u8}] MAC mismatch on hash={=u8:#04x}",
+            ch.slot_idx,
+            grp.channel_hash,
+        );
+        return;
+    }
+
+    let dec = match grp_data::decrypt(&ch.key, &grp) {
+        Ok(d) => d,
+        Err(_) => {
+            defmt::warn!(
+                "GrpData: decryption failed on channel slot {=u8}",
+                ch.slot_idx
+            );
+            return;
+        }
+    };
+
+    defmt::info!(
+        "MeshCore GrpData [ch={=u8} type={=u16:#06x} {=usize}B {=i16}dBm path={=u8}]",
+        ch.slot_idx,
+        dec.data_type,
+        dec.data.len(),
+        rssi,
+        path_len,
+    );
+
+    // Queue the binary blob for the companion app.
+    let mut blob: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+    let _ = blob.extend_from_slice(&dec.data[..dec.data.len().min(msg_queue::MAX_TEXT)]);
+    msg_queue::push(&msg_queue::ReceivedMsg {
+        kind: msg_queue::MsgKind::ChannelData,
+        sender_prefix: [0u8; 6],
+        channel_idx: ch.slot_idx,
+        path_len,
+        text_type: 0,
+        timestamp: 0, // GRP_DATA carries no timestamp in 1.15
+        rssi,
+        text: blob,
+        data_type: dec.data_type,
+        snr_x4,
+    })
+    .await;
+    crate::MESSAGES_WAITING_SIGNAL.signal(());
 }
 
 async fn log_advert(
@@ -1072,6 +1157,8 @@ async fn try_handle_txt_msg(
             timestamp: dec.timestamp,
             rssi,
             text: text_bytes,
+            data_type: 0,
+            snr_x4: 0,
         })
         .await;
         crate::MESSAGES_WAITING_SIGNAL.signal(());
@@ -1236,6 +1323,7 @@ async fn dispatch_tx(
 ) {
     match req {
         crate::TxRequest::ChannelMsg(msg) => send_grp_txt(lora, loaded_channels, msg).await,
+        crate::TxRequest::ChannelData(msg) => send_grp_data(lora, loaded_channels, msg).await,
         crate::TxRequest::PrivateMsg(msg) => send_txt_msg(lora, msg, identity).await,
         crate::TxRequest::Trace(msg) => send_trace(lora, msg).await,
         crate::TxRequest::Login(msg) => send_login(lora, msg, identity).await,
@@ -1384,6 +1472,107 @@ async fn send_grp_txt(
         Err(e) => {
             defmt::warn!(
                 "send_grp_txt: packet serialize failed: {:?}",
+                defmt::Debug2Format(&e)
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Channel binary-data transmission (PAYLOAD_TYPE_GRP_DATA, MeshCore 1.15)
+// ---------------------------------------------------------------------------
+
+/// Encrypt and broadcast an application-defined binary blob on a channel
+/// using the MeshCore 1.15 `PAYLOAD_TYPE_GRP_DATA` envelope.
+///
+/// When `req.path_len == OUT_PATH_UNKNOWN` the packet is flood-routed.
+/// Otherwise it is sent `RouteType::Direct` along the supplied path
+/// (mirrors upstream `BaseChatMesh::sendGroupData` ed326255).
+async fn send_grp_data(
+    lora: &mut SimpleLoRa<'_>,
+    loaded_channels: &[LoadedChannel],
+    req: crate::TxChannelData,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::payload::grp_data;
+    use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
+
+    let Some(ch) = loaded_channels
+        .iter()
+        .find(|c| c.slot_idx == req.channel_idx)
+    else {
+        defmt::warn!(
+            "send_grp_data: channel slot {=u8} not in RAM table, dropping",
+            req.channel_idx
+        );
+        return;
+    };
+    let (key, hash) = (ch.key, ch.hash);
+
+    let grp = match grp_data::encrypt(&key, hash, req.data_type, &req.data) {
+        Ok(g) => g,
+        Err(e) => {
+            defmt::warn!(
+                "send_grp_data: encrypt failed: {:?}",
+                defmt::Debug2Format(&e)
+            );
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = grp_data::serialize(&grp, &mut payload_buf, &mut payload_len) {
+        defmt::warn!(
+            "send_grp_data: serialize failed: {:?}",
+            defmt::Debug2Format(&e)
+        );
+        return;
+    }
+
+    let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
+    let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
+
+    let (route, path_len_byte, path_bytes, transport_code) =
+        if req.path_len == contacts::OUT_PATH_UNKNOWN {
+            let (r, code) = flood_route(PayloadType::GrpData.to_u8(), &msg_payload);
+            (r, flood_path_len_byte(), heapless::Vec::new(), code)
+        } else {
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let copy = (req.path_len as usize).min(req.path.len());
+            let _ = pv.extend_from_slice(&req.path[..copy]);
+            (RouteType::Direct, req.path_len, pv, 0u16)
+        };
+
+    let msg = Message {
+        payload_type: PayloadType::GrpData,
+        route,
+        version: 0,
+        transport_code,
+        path_len_byte,
+        path: path_bytes,
+        payload: msg_payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_grp_data: TX failed: {:?}", e);
+            } else {
+                defmt::info!(
+                    "GrpData sent: ch={=u8} type={=u16:#06x} blob={=usize}B route={=str} len={=usize}B",
+                    req.channel_idx,
+                    req.data_type,
+                    req.data.len(),
+                    if route == RouteType::Direct { "direct" } else { "flood" },
+                    len,
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!(
+                "send_grp_data: packet serialize failed: {:?}",
                 defmt::Debug2Format(&e)
             );
         }
