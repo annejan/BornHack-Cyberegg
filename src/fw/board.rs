@@ -1,4 +1,8 @@
-//! Board pin assignments for NRF52840 with SSD1680 EPD.
+// Board pin assignments for NRF52840 with SSD1675 EPD.
+//
+// This file is `include!`-ed by `bootloader/src/board.rs`, which doesn't
+// allow the leading `//!` inner doc comment.  Keep this as a regular `//`
+// comment so both the main app and the bootloader compile.
 
 /// Extract a board pin by name.
 ///
