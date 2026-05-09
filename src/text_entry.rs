@@ -103,7 +103,11 @@ impl TextEntry {
         Self {
             text,
             max_len,
-            shift: false,
+            // Start in Shift so the first letter is uppercase by
+            // default — matches every other on-screen keyboard
+            // people are used to.  Auto-resets to lowercase on the
+            // first push (see `push_char`).
+            shift: true,
             state: InputState::Root,
             on_complete,
             title,
@@ -710,14 +714,18 @@ where
         Text::with_text_style(label, Point::new(x, KB_CY), font, ts).draw(display)?;
     }
 
-    // Hint at the bottom
+    // Hint at the bottom — `FONT_7X13_BOLD` is 13 px tall, display
+    // is 152 px tall, so a `Baseline::Top` text starting at y=144
+    // would draw down to y=157 and clip.  Use `Baseline::Bottom` at
+    // y=151 instead so the glyphs sit flush against the bottom edge
+    // with one pixel of breathing room.
     let hint_ts = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
+        .baseline(Baseline::Bottom)
         .alignment(Alignment::Center)
         .build();
     Text::with_text_style(
         "</>: move  Fire: select",
-        Point::new(KB_CX, 144),
+        Point::new(KB_CX, 151),
         FONT,
         hint_ts,
     )
