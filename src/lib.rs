@@ -181,8 +181,10 @@ pub const SONG_DAISY_BELL_INDEX: u8 = 9;
 pub const SONG_NOKIA_INDEX: u8 = 10;
 pub const SONG_OVER_THE_HORIZON_INDEX: u8 = 11;
 
-/// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
-pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
+/// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: on,
+/// matching MeshCore 1.15.0 (upstream commit `ff5aad71`).  Boot path
+/// overwrites this from persisted KV via [`fw::mesh::settings::get_boost_rx`].
+pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(true);
 
 /// UTC offset in whole hours (-12..=+14).  Default: +2 (Europe/Copenhagen
 /// summer time / CEST) — matches Bornhack's typical July/August venue.

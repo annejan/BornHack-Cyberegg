@@ -421,10 +421,18 @@ pub async fn set_timezone(offset: i8) -> Result<(), kv::KvError> {
     ns().set("tz", &[offset as u8], true).await
 }
 
-/// Read the persisted boost-RX flag.  Returns `false` if not stored.
+/// Read the persisted boost-RX flag.
+///
+/// Returns `true` on first boot (no KV value yet) to match MeshCore 1.15.0's
+/// `radio.rxgain = true` default (upstream commit `ff5aad71`).  Once the
+/// user toggles the menu setting at least once, the persisted value wins
+/// — even an explicit `false` sticks across reboots.
 pub async fn get_boost_rx() -> bool {
     let mut b = [0u8; 1];
-    matches!(ns().get("boost_rx", &mut b).await, Ok(1) if b[0] != 0)
+    match ns().get("boost_rx", &mut b).await {
+        Ok(1) => b[0] != 0,
+        _ => true,
+    }
 }
 
 /// Persist the boost-RX flag to flash.
