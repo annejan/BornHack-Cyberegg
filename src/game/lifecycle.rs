@@ -461,6 +461,17 @@ pub fn wake_from_hibernation() -> bool {
     with_state(|s| s.wake_from_hibernation())
 }
 
+/// Read-only accessor: is the pet currently hibernating?
+///
+/// Returns `false` when no game has been started yet.  Used by the modal
+/// dispatcher to suppress action modals (Feed / Heal / Play / Rest) and
+/// every mini-game while hibernating — only Stats and Defrost remain
+/// reachable.
+pub fn is_hibernating() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    state.is_some_and(|s| s.hibernating)
+}
+
 /// Award inspiration for winning a mini-game.  Starts only the
 /// matching game's cooldown so other games stay playable.
 pub fn award_inspiration(game: super::engine::MiniGame) {

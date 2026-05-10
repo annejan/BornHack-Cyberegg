@@ -172,13 +172,24 @@ impl Item {
             Self::Song(crate::SONG_OVER_THE_HORIZON_INDEX) => "Samsung",
             Self::Song(_) => "?",
             Self::Hibernate => "Hibernate",
-            Self::WakeUp => "Wake up",
+            Self::WakeUp => "Defrost",
         }
     }
 
     /// Is the action currently available?  Cooldown-gated items
     /// return false until the cooldown decays to 0.
+    ///
+    /// While the pet is hibernating EVERY action is locked except the
+    /// Defrost button, plus passive info screens (Cancel / ViewStats /
+    /// RolledStats).  The pet must be defrosted before mini-games or
+    /// stat actions can run again.
     fn available(self, stats: &super::engine::PetStats) -> bool {
+        if stats.hibernating {
+            return matches!(
+                self,
+                Self::Cancel | Self::ViewStats | Self::RolledStats | Self::WakeUp,
+            );
+        }
         match self {
             Self::Cancel
             | Self::ViewStats
@@ -197,8 +208,8 @@ impl Item {
             Self::Maze => stats.can_play_maze,
             Self::TripleBorn => stats.can_play_tripleborn,
             Self::BornJeweled => stats.can_play_bornjeweled,
-            Self::Hibernate => !stats.hibernating,
-            Self::WakeUp => stats.hibernating,
+            Self::Hibernate => true,
+            Self::WakeUp => false,
         }
     }
 
@@ -322,7 +333,18 @@ fn cooldown_string(ticks: u16) -> Option<heapless::String<10>> {
 }
 
 /// Map an icon (row, col) to the modal it should open.
+///
+/// While the pet is hibernating, every action icon (bottom row) is a
+/// no-op — only Stats and Hibernate (which holds the Defrost button)
+/// can be opened.  Defence-in-depth alongside [`Item::available`].
 pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
+    if super::lifecycle::is_hibernating() {
+        return match (row, col) {
+            (Row::Top, 0) => ModalKind::Stats,
+            (Row::Top, 1) => ModalKind::Hibernate,
+            _             => ModalKind::None,
+        };
+    }
     match (row, col) {
         // Top row: info / meta.
         (Row::Top, 0) => ModalKind::Stats,
