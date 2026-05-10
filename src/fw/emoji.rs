@@ -916,9 +916,47 @@ const WIZARD: [u8; GLYPH_BYTES] = pack_glyph([
     ".##.......##.",
 ]);
 
+// 🔔 — bell.  Hanging loop at the top, bell body widening from
+// narrow at the shoulder to a full-width rim, small triangular
+// clapper poking out below the rim.
+const BELL: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....#.#.....",
+    "......#......",
+    ".....###.....",
+    "....#...#....",
+    "...#.....#...",
+    "...#.....#...",
+    "..#.......#..",
+    "..#.......#..",
+    ".#.........#.",
+    ".###########.",
+    ".....###.....",
+    "......#......",
+]);
+
+// ✉ — envelope.  Rectangle outline with the back flap drawn as a
+// V pointing down from the upper corners to a vertex in the middle,
+// blank body below.
+const ENVELOPE: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    ".###########.",
+    ".#.........#.",
+    ".##.......##.",
+    ".#.##...##.#.",
+    ".#..##.##..#.",
+    ".#...###...#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".###########.",
+    ".............",
+]);
+
 /// All atlas bitmaps in their fixed index order.  Indices are referenced
 /// by [`EMOJI_LOOKUP`].
-const ATLAS: [&[u8; GLYPH_BYTES]; 48] = [
+const ATLAS: [&[u8; GLYPH_BYTES]; 50] = [
     &HEART,       // 0
     &SMILE,       // 1
     &LAUGH,       // 2
@@ -967,6 +1005,8 @@ const ATLAS: [&[u8; GLYPH_BYTES]; 48] = [
     &UNICORN,     // 45  🦄
     &DRAGON,      // 46  🐉
     &WIZARD,      // 47  🧙
+    &BELL,        // 48  🔔
+    &ENVELOPE,    // 49  ✉ / 📧 / 📨 / 📩 (email aliases)
 ];
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1026,7 @@ const EMOJI_LOOKUP: &[(u32, u8)] = &[
     (0x026A0, 37), // ⚠ warning sign
     (0x026A1, 38), // ⚡ high voltage
     (0x02705, 17), // ✅ white heavy check mark
+    (0x02709, 49), // ✉ envelope
     (0x02714, 17), // ✔ heavy check mark
     (0x0274C, 21), // ❌ cross mark
     (0x02764, 0),  // ❤ red heart
@@ -1020,7 +1061,11 @@ const EMOJI_LOOKUP: &[(u32, u8)] = &[
     (0x1F4AA, 5),  // 💪 muscle
     (0x1F4AF, 22), // 💯 hundred points
     (0x1F4CE, 30), // 📎 paperclip (clippy)
+    (0x1F4E7, 49), // 📧 e-mail (aliased to ENVELOPE)
+    (0x1F4E8, 49), // 📨 incoming envelope (aliased to ENVELOPE)
+    (0x1F4E9, 49), // 📩 envelope with downward arrow (aliased to ENVELOPE)
     (0x1F506, 15), // 🔆 high brightness (sun)
+    (0x1F514, 48), // 🔔 bell
     (0x1F525, 6),  // 🔥 fire
     (0x1F55C, 27), // 🕜 one-thirty (aliased to CLOCK)
     (0x1F55D, 27), // 🕝 two-thirty (aliased to CLOCK)
