@@ -800,6 +800,46 @@ fn action_path_hash_dec() {
     }
 }
 
+// ── EPD LUT speed stepper ─────────────────────────────────────────────────
+//
+// Scales the cycle-duration bytes in the SSD1675/B OTP LUT applied at
+// every refresh.  100 = OEM duration, 30 = floor (any lower risks an
+// unreadable display — user couldn't see menu to recover), 200 = double
+// duration.  Step size 5 in 30..=200.
+//
+// Writes EPD_LUT_SPEED atomic + fires EPD_LUT_SPEED_DIRTY so the
+// persister loop in fw/mesh/persister.rs writes the new value to the
+// "settings" KV namespace alongside every other persisted setting.
+
+const EPD_LUT_SPEED_STEP: u8 = 5;
+const EPD_LUT_SPEED_MAX:  u8 = 200;
+
+fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
+    let _ = write!(buf, "EPD speed: {}%", v);
+}
+
+fn action_epd_lut_speed_inc() {
+    let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
+    let new = v.saturating_add(EPD_LUT_SPEED_STEP).min(EPD_LUT_SPEED_MAX);
+    if new != v {
+        crate::fw::epd::EPD_LUT_SPEED.store(new, Ordering::Relaxed);
+        #[cfg(feature = "embassy-base")]
+        crate::fw::epd::EPD_LUT_SPEED_DIRTY.signal(());
+    }
+}
+
+fn action_epd_lut_speed_dec() {
+    let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
+    let new = v.saturating_sub(EPD_LUT_SPEED_STEP).max(crate::fw::epd::EPD_LUT_SPEED_MIN);
+    if new != v {
+        crate::fw::epd::EPD_LUT_SPEED.store(new, Ordering::Relaxed);
+        #[cfg(feature = "embassy-base")]
+        crate::fw::epd::EPD_LUT_SPEED_DIRTY.signal(());
+    }
+}
+
 // ── Advert scheduling ──────────────────────────────────────────────────────
 
 fn label_advert_enabled() -> &'static str {
@@ -1605,7 +1645,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    9 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    10 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1639,6 +1679,14 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             format: fmt_timezone,
             inc: action_tz_inc,
             dec: action_tz_dec,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_epd_lut_speed,
+            inc: action_epd_lut_speed_inc,
+            dec: action_epd_lut_speed_dec,
         },
     },
     #[cfg(feature = "watch")]

@@ -1,5 +1,19 @@
+//! EPD display driver wiring (SSD1675 / SSD1675B over SPI3).
+//!
+//! ## LUT cycle-duration tuning
+//!
+//! [`EPD_LUT_SPEED`] scales every non-zero byte in the OTP LUT timing
+//! region before each refresh: `100` = OEM duration (per-variant default
+//! in `vendor/ssd1675`), `0` = no delay, values >100 stretch linearly.
+//! Persisted in the `"settings"` KV namespace under `"epd_lut"`.
+
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+
+#[cfg(feature = "embassy-base")]
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+#[cfg(feature = "embassy-base")]
+use embassy_sync::signal::Signal;
 
 use defmt_rtt as _;
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin as GpioPin, Port, Pull};
@@ -299,4 +313,65 @@ pub async fn init_epd<'a>(
     );
 
     Ok(gfx)
+}
+
+// ---------------------------------------------------------------------------
+// LUT cycle-duration scale: runtime atomic + persister glue
+// ---------------------------------------------------------------------------
+
+/// Lower bound on the LUT cycle-duration scale exposed to the user.
+///
+/// Anything below this risks producing a display so washed-out / blank
+/// that the user cannot read the menu to dial it back up — a soft
+/// lock-out.  Enforced by the menu inc/dec, the boot loader, and the
+/// persister so the floor sticks across reboots.
+pub const EPD_LUT_SPEED_MIN: u8 = 30;
+
+/// Effective LUT cycle-duration scale. Default `100` (OEM); menu inc/dec
+/// writes here and fires [`EPD_LUT_SPEED_DIRTY`]. `load_persisted_lut_speed`
+/// also writes here at boot (without firing the signal).
+pub static EPD_LUT_SPEED: AtomicU8 = AtomicU8::new(100);
+
+/// Fired when [`EPD_LUT_SPEED`] is updated from the menu — drives the
+/// persister loop in [`epd_lut_speed_persist_loop`].
+#[cfg(feature = "embassy-base")]
+pub static EPD_LUT_SPEED_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Load the persisted LUT-speed override (if any) into [`EPD_LUT_SPEED`].
+/// Call once at boot, after [`init_epd`]. Falls back to `100` when no
+/// override has been stored.
+///
+/// Clamps to `[EPD_LUT_SPEED_MIN, 255]` — defends against a stale KV
+/// value (e.g. from a build that allowed lower values) locking the user
+/// out of an unreadable display.
+#[cfg(feature = "embassy-base")]
+pub async fn load_persisted_lut_speed() {
+    let scale = crate::fw::mesh::settings::get_epd_lut_speed()
+        .await
+        .unwrap_or(100)
+        .max(EPD_LUT_SPEED_MIN);
+    EPD_LUT_SPEED.store(scale, Ordering::Relaxed);
+}
+
+/// Read the current effective LUT-speed scale. Pass this to
+/// [`ssd1675::GraphicDisplay::update_bw`] / `update_tc`.
+pub fn current_lut_speed() -> u8 {
+    EPD_LUT_SPEED.load(Ordering::Relaxed)
+}
+
+/// Persister loop: waits on [`EPD_LUT_SPEED_DIRTY`], writes the current
+/// [`EPD_LUT_SPEED`] value to the `"settings"` KV namespace.  Spawned by
+/// [`crate::fw::mesh::persister::run`] alongside the other settings loops.
+#[cfg(feature = "embassy-base")]
+pub async fn epd_lut_speed_persist_loop() -> ! {
+    loop {
+        EPD_LUT_SPEED_DIRTY.wait().await;
+        // Clamp to the lock-out floor before persisting so a future menu
+        // bug can't write an unrecoverable value.
+        let scale = EPD_LUT_SPEED.load(Ordering::Relaxed).max(EPD_LUT_SPEED_MIN);
+        match crate::fw::mesh::settings::set_epd_lut_speed(scale).await {
+            Ok(()) => defmt::debug!("settings: epd_lut_speed={} persisted", scale),
+            Err(e) => defmt::warn!("settings: epd_lut_speed persist failed: {:?}", e),
+        }
+    }
 }

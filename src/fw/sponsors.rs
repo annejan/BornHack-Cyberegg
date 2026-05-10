@@ -136,7 +136,7 @@ pub async fn run(
     let _ = Text::with_text_style("sponsors!", Point::new(76, 98), font, centered).draw(display);
 
     let _ = display.reset().await;
-    let _ = display.update_tc().await;
+    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
     let _ = display.deep_sleep().await;
 
     wait_or_button(button_rcvr, SLIDE_DURATION_SECS).await;
@@ -156,7 +156,7 @@ pub async fn run(
         let _ = &file; // Suppress unused warning when game feature is off.
 
         let _ = display.reset().await;
-        let _ = display.update_tc().await;
+        let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
         let _ = display.deep_sleep().await;
 
         wait_or_button(button_rcvr, SLIDE_DURATION_SECS).await;
@@ -204,7 +204,7 @@ async fn show_missing_assets_forever(display: &mut EpdGfx<'_>) {
         .draw(display);
 
     let _ = display.reset().await;
-    let _ = display.update_tc().await;
+    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
     let _ = display.deep_sleep().await;
 
     // Block forever.  USB mass storage is running on its own task and stays

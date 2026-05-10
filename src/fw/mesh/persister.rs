@@ -44,9 +44,7 @@ pub async fn run() -> ! {
             contact_reset_loop(),
             clear_bonds_loop(),
         ),
-        // join4 needs four args; we only have 12 logical loops, so
-        // the 13th slot waits on a future that never resolves.
-        join(core::future::pending::<()>(), core::future::pending::<()>()),
+        join(crate::fw::epd::epd_lut_speed_persist_loop(), core::future::pending::<()>()),
     )
     .await;
     // Unreachable — every inner loop is `loop {}`.  The signature
@@ -226,3 +224,4 @@ async fn clear_bonds_loop() -> ! {
         embassy_time::Timer::after_secs(5).await;
     }
 }
+

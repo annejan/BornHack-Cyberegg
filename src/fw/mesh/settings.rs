@@ -20,6 +20,7 @@
 //! | `"other"`        | manual_add, telemetry, advert_loc, multi_acks  | 6     |
 //! | `"autoadd"`      | autoadd_config + autoadd_max_hops              | 2     |
 //! | `"path_hash"`    | path_hash_mode (0/1/2)                         | 1     |
+//! | `"epd_lut"`      | EPD LUT cycle-duration scale override          | 1     |
 //!
 //! # Companion protocol mapping
 //!
@@ -619,4 +620,25 @@ pub async fn get_path_hash_mode() -> u8 {
 /// Persist the path hash mode to flash.
 pub async fn set_path_hash_mode(mode: u8) -> Result<(), kv::KvError> {
     ns().set("path_hash", &[mode], true).await
+}
+
+// ---------------------------------------------------------------------------
+// EPD LUT cycle-duration scale (per-refresh patching of SSD1675/B OTP LUT)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted EPD LUT cycle-duration scale override, or `None` if
+/// the user has never adjusted it (caller should fall back to the
+/// per-variant default in the ssd1675 driver).
+pub async fn get_epd_lut_speed() -> Option<u8> {
+    let mut b = [0u8; 1];
+    match ns().get("epd_lut", &mut b).await {
+        Ok(1) => Some(b[0]),
+        _ => None,
+    }
+}
+
+/// Persist the EPD LUT cycle-duration scale (`0..=200`, `100` = OEM speed,
+/// `0` = no delay).
+pub async fn set_epd_lut_speed(scale: u8) -> Result<(), kv::KvError> {
+    ns().set("epd_lut", &[scale], true).await
 }

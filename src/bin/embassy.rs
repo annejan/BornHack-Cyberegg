@@ -283,6 +283,8 @@ async fn main(spawner: Spawner) {
     .unwrap();
     defmt::info!("EPD initialized");
 
+    bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
+
     // Boot breadcrumb #2 — switch from red to blue while the boot
     // tri-color refresh + remaining task spawns finish.  This is the
     // longest dark phase in the original boot, ~13s, so a colour change
@@ -296,7 +298,7 @@ async fn main(spawner: Spawner) {
     // first fast-LUT refresh paints over it.
     display.clear(Color::White);
     let _ = display.reset().await;
-    let _ = display.update_tc().await;
+    let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
     let _ = display.deep_sleep().await;
 
     // LEDs are initialised earlier (above the mesh stack) so the led_task is
@@ -486,10 +488,11 @@ async fn display_loop(
         let sprite_advance = match select(
             async {
                 let _ = display.reset().await;
+                let speed = bornhack_aegg::fw::epd::current_lut_speed();
                 if do_full {
-                    let _ = display.update_tc().await;
+                    let _ = display.update_tc(speed).await;
                 } else {
-                    let _ = display.update_bw(UpdateMode::Mode1).await;
+                    let _ = display.update_bw(UpdateMode::Mode1, speed).await;
                 }
                 let _ = display.deep_sleep().await;
             },
@@ -796,6 +799,6 @@ async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryE
     let _ = Text::with_text_style("battery", Point::new(76, 130), font, centered).draw(display);
 
     let _ = display.reset().await;
-    let _ = display.update_bw(UpdateMode::Mode1).await;
+    let _ = display.update_bw(UpdateMode::Mode1, bornhack_aegg::fw::epd::current_lut_speed()).await;
     let _ = display.deep_sleep().await;
 }
