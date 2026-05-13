@@ -122,7 +122,23 @@ pub struct HardwareInfo {
     /// QWIIC SCL (P1_11) reads high with no internal pull — same
     /// check as [`Self::qwiic_sda_ok`].
     pub qwiic_scl_ok: bool,
+    /// Internal die-temperature sample in °C (rounded i16).  `None`
+    /// if the probe was skipped or errored; outside the 0..=60 °C
+    /// range counts as a fail.
+    pub die_temp_c: Option<i16>,
+    /// SX1262 LoRa radio responded to `GetStatus` (0xC0) with a
+    /// plausible mode bit-field.  `false` → SPI handshake failed,
+    /// radio is missing / RST stuck / BUSY stuck.  Only meaningful
+    /// when built with the `mesh` feature.
+    pub lora_ok: bool,
 }
+
+/// Inclusive lower bound for a "sane" die-temperature reading.
+const DIE_TEMP_MIN_C: i16 = 0;
+/// Inclusive upper bound for a "sane" die-temperature reading —
+/// matches the typical indoor / room-temp factory floor.  A reading
+/// outside this range likely means the sensor is broken.
+const DIE_TEMP_MAX_C: i16 = 60;
 
 /// Inclusive lower bound for a "sane" battery reading, mirroring
 /// `bin/hwtest.rs::VBAT_MIN_MV`.
@@ -132,11 +148,16 @@ const VBAT_MAX_MV: u16 = 5_000;
 
 impl HardwareInfo {
     /// `true` when every populated probe passed.  `battery_mv: None`
-    /// counts as a fail (the probe ran but couldn't get a sample).
+    /// and `die_temp_c: None` both count as fails (the probe ran but
+    /// couldn't get a sample).
     pub fn all_pass(&self) -> bool {
         let bat_ok = self
             .battery_mv
             .map(|mv| (VBAT_MIN_MV..=VBAT_MAX_MV).contains(&mv))
+            .unwrap_or(false);
+        let temp_ok = self
+            .die_temp_c
+            .map(|c| (DIE_TEMP_MIN_C..=DIE_TEMP_MAX_C).contains(&c))
             .unwrap_or(false);
         self.hfxo_ok
             && self.lfxo_ok
@@ -144,6 +165,8 @@ impl HardwareInfo {
             && self.buzzer_pin_ok
             && self.qwiic_sda_ok
             && self.qwiic_scl_ok
+            && temp_ok
+            && self.lora_ok
     }
 }
 
@@ -172,6 +195,8 @@ pub async fn probe() -> HardwareInfo {
         embassy_nrf::peripherals::P1_11::steal()
     });
     let battery_mv = probe_battery().await;
+    let die_temp_c = probe_temperature().await;
+    let lora_ok = probe_lora().await;
     let info = HardwareInfo {
         hfxo_ok,
         lfxo_ok,
@@ -179,6 +204,8 @@ pub async fn probe() -> HardwareInfo {
         buzzer_pin_ok,
         qwiic_sda_ok,
         qwiic_scl_ok,
+        die_temp_c,
+        lora_ok,
     };
     defmt::info!("hwtest: probe done — {:?}", info);
     info
@@ -227,6 +254,108 @@ where
         defmt::info!("hwtest: QWIIC {} OK", label);
     }
     ok
+}
+
+/// Internal die-temperature sample via the nRF52 TEMP peripheral.
+/// Uses the existing `fw::temperature::read_and_cache` so the
+/// reading is also pre-warmed for the watch / battery UI later.
+///
+/// Returns `None` if the read errored (shouldn't happen on healthy
+/// silicon — TEMP is internal and self-contained).
+async fn probe_temperature() -> Option<i16> {
+    let t = crate::fw::temperature::read_and_cache().await;
+    defmt::info!("hwtest: die temp = {} °C", t);
+    Some(t)
+}
+
+/// SX1262 LoRa radio probe — RST pulse, wait for BUSY low, then
+/// `GetStatus` (0xC0).  PASS when the returned status byte's mode
+/// bits land in the valid `2..=6` range (i.e. the chip is not in
+/// the reserved 0 or 7 modes and didn't return all-ones / all-
+/// zeros).  Mirrors `bin/hwtest.rs::probe_lora` but uses the
+/// existing `mesh::sx1262::Irqs` so there's no double-binding of
+/// `SPI2 => spim::InterruptHandler<SPI2>`.
+///
+/// Only run when built with the `mesh` feature; otherwise the
+/// radio peripheral isn't owned by the firmware at all and the
+/// row is reported as `true` (the radio is intentionally absent).
+///
+/// # Safety
+///
+/// `unsafe steal()` of `SPI2`, the 7 LoRa pins, and the local
+/// `Spim` / `Output` / `Input` handles all drop at end of this
+/// function — releasing the GPIO + SPI config so the later
+/// `run_meshcore_listener` in `main` re-acquires cleanly.
+async fn probe_lora() -> bool {
+    #[cfg(feature = "mesh")]
+    {
+        use embassy_nrf::Peri;
+        use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
+        use embassy_nrf::peripherals;
+        use embassy_nrf::spim::{self, Frequency, Spim};
+
+        // Pin assignments from `fw::board::board!` — keep these in
+        // sync with that macro if the hardware changes.
+        let spi_periph: Peri<'static, peripherals::SPI2> = unsafe { peripherals::SPI2::steal() };
+        let sck: Peri<'static, AnyPin> = unsafe { peripherals::P1_13::steal() }.into();
+        let mosi: Peri<'static, AnyPin> = unsafe { peripherals::P0_03::steal() }.into();
+        let miso: Peri<'static, AnyPin> = unsafe { peripherals::P1_14::steal() }.into();
+        let rst: Peri<'static, AnyPin> = unsafe { peripherals::P0_30::steal() }.into();
+        let nss: Peri<'static, AnyPin> = unsafe { peripherals::P1_12::steal() }.into();
+        let busy: Peri<'static, AnyPin> = unsafe { peripherals::P0_28::steal() }.into();
+        let rf_sw: Peri<'static, AnyPin> = unsafe { peripherals::P0_04::steal() }.into();
+
+        let _rf_sw = Output::new(rf_sw, Level::Low, OutputDrive::Standard);
+        let mut rst_out = Output::new(rst, Level::Low, OutputDrive::Standard);
+        let mut nss_out = Output::new(nss, Level::High, OutputDrive::Standard);
+        let busy_in = Input::new(busy, Pull::None);
+
+        Timer::after_micros(500).await;
+        rst_out.set_high();
+
+        let mut ready = false;
+        for _ in 0..50u8 {
+            if !busy_in.is_high() {
+                ready = true;
+                break;
+            }
+            Timer::after_millis(1).await;
+        }
+        if !ready {
+            defmt::warn!("hwtest: LoRa BUSY stuck high after reset");
+            return false;
+        }
+
+        let mut spi_cfg = spim::Config::default();
+        spi_cfg.frequency = Frequency::M1;
+        let mut spi = Spim::new(spi_periph, crate::fw::mesh::sx1262::Irqs, sck, mosi, miso, spi_cfg);
+
+        let tx = [0xC0u8, 0x00];
+        let mut rx = [0u8; 2];
+        nss_out.set_low();
+        let r = spi.transfer(&mut rx, &tx).await;
+        nss_out.set_high();
+
+        match r {
+            Ok(()) => {
+                let status = rx[1];
+                defmt::info!("hwtest: LoRa GetStatus = 0x{:02X}", status);
+                let mode = (status >> 4) & 0x07;
+                mode != 0 && mode != 7 && status != 0xFF
+            }
+            Err(_) => {
+                defmt::warn!("hwtest: LoRa SPI transfer failed");
+                false
+            }
+        }
+    }
+    #[cfg(not(feature = "mesh"))]
+    {
+        // Radio isn't owned by the firmware in non-mesh builds —
+        // there's nothing to test, so don't claim a fail.
+        defmt::info!("hwtest: LoRa probe skipped (mesh feature disabled)");
+        true
+    }
 }
 
 /// Battery voltage sample via SAADC (P0_31 / AIN7 through the
@@ -431,35 +560,49 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
     draw_text(display, "FACTORY TEST", Point::new(20, 4), font, style);
     let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
 
-    // ── Step 3: EPD row ───────────────────────────────────────────────
-    // Implicit pass: reaching this point means init_epd returned (SPI +
-    // RESET + BUSY + OTP LUT all worked), tri-color Mode 2 worked, and
-    // fast Mode 1 worked.  Anything else would have hung above.
-    draw_test_row(display, font, style, "EPD", Some(true), 30);
-    let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
-
-    // ── Step 4 onwards: per-test rows.  Each test draws its name
-    //    first (partial refresh), then its result (partial refresh).
-    //    Compact 14-px row pitch fits the 6 probed tests + EPD +
-    //    header + footer on the 152-px-tall screen.
+    // ── Step 3: two-column test grid ──────────────────────────────────
+    // 8 tests in 4 rows × 2 columns.  EPD is no longer a dedicated
+    // row — its pass is already implicit (you wouldn't see *any*
+    // of this if EPD init / Mode 2 / Mode 1 hadn't all worked).
+    //
+    // Column layout (FONT_7X13 = 7 px wide, 13 px tall):
+    //   Col 1 label:  x=4    Col 1 result: x=44
+    //   Col 2 label:  x=80   Col 2 result: x=120
+    //
+    // To minimise refresh count: draw all 8 names in one refresh,
+    // then all 8 results in one refresh.  Two refreshes total for
+    // the entire test grid (vs the old 12-refresh per-test loop).
     let battery_ok = hw
         .battery_mv
         .map(|mv| (VBAT_MIN_MV..=VBAT_MAX_MV).contains(&mv))
         .unwrap_or(false);
+    let temp_ok = hw
+        .die_temp_c
+        .map(|c| (DIE_TEMP_MIN_C..=DIE_TEMP_MAX_C).contains(&c))
+        .unwrap_or(false);
 
-    for (label, result, y) in [
-        ("HFXO", hw.hfxo_ok, 44),
-        ("LFXO", hw.lfxo_ok, 58),
-        ("VBAT", battery_ok, 72),
-        ("BUZZ", hw.buzzer_pin_ok, 86),
-        ("SDA",  hw.qwiic_sda_ok, 100),
-        ("SCL",  hw.qwiic_scl_ok, 114),
-    ] {
-        draw_test_row(display, font, style, label, None, y);
-        let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
-        draw_test_row(display, font, style, label, Some(result), y);
-        let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
+    // (col1_label, col1_result, col2_label, col2_result, y)
+    let rows = [
+        ("HFXO", hw.hfxo_ok,        "VBAT", battery_ok,            30),
+        ("LFXO", hw.lfxo_ok,        "TEMP", temp_ok,               48),
+        ("SDA",  hw.qwiic_sda_ok,   "BUZZ", hw.buzzer_pin_ok,      66),
+        ("SCL",  hw.qwiic_scl_ok,   "LORA", hw.lora_ok,            84),
+    ];
+
+    // First pass: just the labels (no results) — partial refresh.
+    for (l1, _, l2, _, y) in rows {
+        draw_text(display, l1, Point::new(4, y),  font, style);
+        draw_text(display, l2, Point::new(80, y), font, style);
     }
+    let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
+
+    // Second pass: stamp each result next to its label.  Single
+    // refresh paints all 8 PASS/FAIL outcomes at once.
+    for (_, r1, _, r2, y) in rows {
+        draw_text(display, if r1 { "PASS" } else { "FAIL" }, Point::new(44,  y), font, style);
+        draw_text(display, if r2 { "PASS" } else { "FAIL" }, Point::new(120, y), font, style);
+    }
+    let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
 
     // ── Footer ───────────────────────────────────────────────────────
     let all_pass = hw.all_pass();
@@ -531,27 +674,3 @@ async fn wait_for_fire_press() {
     defmt::info!("hwtest: Fire pressed");
 }
 
-/// Draw one test row: name on the left, status on the right.  Status
-/// is `None` (blank — used when the test hasn't run yet), `Some(true)`
-/// (`"PASS"`), or `Some(false)` (`"FAIL"`).  The blank-status form is
-/// what the hang-detection pattern relies on: draw the row with
-/// `status = None`, refresh, run the test, then redraw with the
-/// actual result and refresh again.
-fn draw_test_row(
-    display: &mut crate::fw::epd::EpdGfx<'_>,
-    font: embedded_graphics::mono_font::MonoTextStyle<'_, ssd1675::graphics::Color>,
-    style: embedded_graphics::text::TextStyle,
-    name: &str,
-    status: Option<bool>,
-    y: i32,
-) {
-    use embedded_graphics::Drawable;
-    use embedded_graphics::geometry::Point;
-    use embedded_graphics::text::Text;
-
-    let _ = Text::with_text_style(name, Point::new(4, y), font, style).draw(display);
-    if let Some(ok) = status {
-        let label = if ok { "PASS" } else { "FAIL" };
-        let _ = Text::with_text_style(label, Point::new(110, y), font, style).draw(display);
-    }
-}

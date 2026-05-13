@@ -152,7 +152,7 @@ impl<'a> RfSwitch
     }
 }
 
-bind_interrupts!(struct Irqs {
+bind_interrupts!(pub struct Irqs {
     SPI2 => InterruptHandler<peripherals::SPI2>;
 });
 
