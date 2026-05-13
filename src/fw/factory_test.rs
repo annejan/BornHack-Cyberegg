@@ -1,83 +1,218 @@
-//! Factory test gate — runs on first boot, stamps a KV flag on pass,
-//! skips automatically on subsequent boots.
+//! Factory test / boot supervisor — probes hardware at every cold
+//! boot, returns a [`HardwareInfo`] summary the rest of the firmware
+//! conditions on, and stamps a KV flag so first-boot interactive
+//! tests only run once.
 //!
-//! ## Phase 2 (current)
+//! ## Design (Phase 3): always-boots architecture
 //!
-//! Two raw-register peripheral checks:
+//! Prior phases ran *after* `embassy_nrf::init(ExternalXtal)`, which
+//! hangs forever on a dead 32 MHz crystal — so a broken-HFXO badge
+//! would never reach the gate.  Phase 3 inverts the dependency:
 //!
-//! - **HFXO** (32 MHz crystal): verify `HFCLKSTAT.STATE` reports the
-//!   crystal is the current source.
-//! - **LFXO** (32.768 kHz crystal): verify `LFCLKSTAT` reports it
-//!   running, with source = Xtal.
+//! 1. `bin/embassy.rs::main` calls `embassy_nrf::init(Internal)`
+//!    (always safe — no crystal dependency, runs on HFINT/64 MHz RC).
+//! 2. Bare-minimum init runs: watchdog, QSPI flash, LEDs, KV store.
+//!    None of these need HFXO.
+//! 3. [`probe`] runs.  It actively *requests* HFXO with a short
+//!    timeout and records the outcome.  On success the chip now runs
+//!    on HFXO (precise clock for USB + BLE).  On failure it
+//!    `TASKS_HFCLKSTOP`s the abandoned request and the chip stays
+//!    on HFINT.  Either way [`probe`] **returns** — it never hangs.
+//! 4. `main` consumes the returned [`HardwareInfo`] to gate the
+//!    spawn of HFXO-dependent tasks (BLE, USB mass storage).
+//!    HFINT-tolerant tasks (LoRa SPI, display, buzzer, watch,
+//!    game) spawn unconditionally.
 //!
-//! Both are non-invasive: just register reads, no peripheral
-//! ownership.  Triggered late enough in boot that `embassy_nrf::init`
-//! has already requested HFXO on healthy badges, so checking
-//! `STATE = 1` confirms the request actually completed.
+//! Net effect: the firmware *always* boots and reports what works,
+//! gracefully degrades when peripherals are dead, and never bricks
+//! itself trying to wait for hardware that isn't there.
 //!
-//! **Caveat for cold-boot HFXO failure**: if HFXO never starts, the
-//! `HfclkSource::ExternalXtal` config in `bin/embassy.rs::main`
-//! makes `embassy_nrf::init()` itself block forever waiting for the
-//! `HFCLKSTARTED` event, so we never reach this gate.  Detecting
-//! that failure requires a separate pre-init register check (Phase
-//! 3+).  For now the cold-boot HFXO case is handled by the
-//! `hfxo-workaround` branch which switches the config to `Internal`.
+//! ## What the boundaries are
 //!
-//! ## Planned phases
+//! Recoverable in firmware (degrade gracefully):
+//!
+//! - HFXO crystal (lose USB + BLE, keep everything else)
+//! - LFXO crystal (fall back to RC, lose long-term accuracy)
+//! - Per-peripheral failures (battery ADC, buzzer, etc. — Phase 4+)
+//!
+//! Not recoverable in firmware (would need external tooling):
+//!
+//! - nRF52840 CPU itself, internal RAM / flash hardware, bootloader
+//!   region corruption, power supply.  All detectable via SWD —
+//!   factory floor catches them, the firmware doesn't try.
+//!
+//! ## Phases
 //!
 //! 1. Skeleton + KV gate ✓
-//! 2. Automatic post-init clock checks (this commit) — HFXO + LFXO
-//!    state reads.  Lays the [`TestResults`] infrastructure for
-//!    future tests to plug into.
-//! 3. Peripheral-ownership tests — QSPI JEDEC re-read, SX1262 LoRa
+//! 2. Post-init `STATE` reads (replaced by Phase 3's active probe) ✓
+//! 3. **Active probe + conditional spawning** (this commit)
+//! 4. Per-peripheral probes — QSPI JEDEC re-read, SX1262 LoRa
 //!    version, SSD1675 EPD BUSY transitions, battery ADC sanity,
-//!    buzzer.  Requires `bin/embassy.rs::main` to thread peripheral
-//!    handles into [`run`].
-//! 4. Interactive — joystick + buttons, LED cycle, qwiic continuity,
-//!    full-screen display test pattern with human sign-off.
-//! 5. Polish — beep codes, retry-from-fail path, dev override.
+//!    buzzer beep — requires threading `Peripherals` into `probe`.
+//! 5. Interactive — joystick + buttons one-at-a-time, LED cycle,
+//!    qwiic continuity, full-screen display test pattern with human
+//!    sign-off, beep-code feedback.
+//! 6. Polish — dev override (Cancel + Execute combo at boot to
+//!    re-run), KV-cache stable-result optimisation.
 //!
-//! ## Failure behaviour
+//! ## KV gate
 //!
-//! On any test failure the gate enters an infinite loop without
-//! stamping the KV flag.  This:
-//!
-//! - Keeps the badge in factory-test mode across reboots until the
-//!   issue is fixed (re-flash / re-flow), so a factory worker can
-//!   spot the dead badge.
-//! - Lets a future Phase 3 LED/display indicator surface *which*
-//!   test failed.
-//! - Does not call [`mark_passed`] — the badge boots back into the
-//!   test next power-up.
-//!
-//! ## Recovery (developer override)
-//!
-//! No combo wired up yet.  Phase 4 will add a "Cancel + Execute
-//! held at boot" override that clears [`KEY_PASSED`].  Until then,
-//! the bootloader's factory-reset combo (Execute + Cancel + Fire on
-//! power-up) wipes the KV store and forces a re-test.
+//! Separate from the live [`HardwareInfo`] probe.  The KV flag
+//! (`hwtest:passed`) only records that the *interactive* first-boot
+//! tests have been signed off by a human at the factory.  Hardware
+//! state is re-probed every cold boot regardless — important
+//! because crystal contact is intermittent and "good once" doesn't
+//! mean "good always".
 
 use crate::fw::kv;
 use embassy_time::Timer;
 
 // ---------------------------------------------------------------------------
-// KV gate
+// nRF52840 CLOCK peripheral — raw register addresses (PAC-free).
 // ---------------------------------------------------------------------------
 
-/// KV namespace used by the factory-test gate.  Kept separate from
-/// settings / game / mesh so a future "factory diagnostics" submenu
-/// can dump its own state without poking other namespaces.
-const NAMESPACE: &str = "hwtest";
+const CLOCK_TASKS_HFCLKSTART: *mut u32 = 0x4000_0000 as *mut u32;
+const CLOCK_TASKS_HFCLKSTOP: *mut u32 = 0x4000_0004 as *mut u32;
+const CLOCK_EVENTS_HFCLKSTARTED: *mut u32 = 0x4000_0100 as *mut u32;
+const CLOCK_HFCLKSTAT: *const u32 = 0x4000_0408 as *const u32;
+const CLOCK_LFCLKSTAT: *const u32 = 0x4000_0418 as *const u32;
 
-/// Sentinel key — presence-only check via [`crate::fw::kv::KvNamespace::exists`].
-/// Stored value is a 4-byte LE marker (currently `0x01`) reserved for
-/// a future "schema version" if we ever need to retest after firmware
-/// rev bumps.
+/// `HFCLKSTAT.STATE` bit (16): 1 when the requested HFCLK source is
+/// the current source.  For HFXO requests, this means the crystal
+/// is running and the chip has switched to it.
+const HFCLKSTAT_STATE_RUNNING: u32 = 1 << 16;
+/// `LFCLKSTAT.STATE` bit (16): 1 when LFCLK is running.
+const LFCLKSTAT_STATE_RUNNING: u32 = 1 << 16;
+
+// ---------------------------------------------------------------------------
+// HardwareInfo
+// ---------------------------------------------------------------------------
+
+/// Discovered hardware state for this boot.  Returned by [`probe`]
+/// for the rest of the firmware to gate conditional task spawning
+/// on.
+///
+/// All fields default to `false`; a probe that wasn't run (or that
+/// failed) leaves its corresponding field at `false`.  Callers
+/// **must** treat unknown fields as "not available" — never as a
+/// silent default-to-OK.
+#[derive(Default, Copy, Clone, Eq, PartialEq, defmt::Format)]
+pub struct HardwareInfo {
+    /// 32 MHz HFXO crystal started successfully within the probe
+    /// timeout.  Required for USB peripheral (48 MHz clock domain)
+    /// and BLE radio (RF accuracy).
+    pub hfxo_ok: bool,
+    /// 32.768 kHz LFXO crystal is running.  Required for accurate
+    /// long-term timekeeping (drift < 20 ppm); falling back to the
+    /// internal RC means timers drift by ~250 ppm.  `false` does
+    /// **not** block boot — RTC keeps ticking on either source.
+    pub lfxo_ok: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Probe
+// ---------------------------------------------------------------------------
+
+/// Probe the on-die clock hardware and return what works.  Runs
+/// every cold boot — see module docs for why this is not cached
+/// across boots.  Total wall-clock cost on healthy hardware:
+/// ~5 ms (HFXO typically starts in <1 ms).
+///
+/// **Side effect** on success: the chip is now running on HFXO.
+/// On failure it stays on HFINT (whatever the caller's
+/// `embassy_nrf::init` config selected, which Phase 3 mandates be
+/// `Internal`).
+pub async fn probe() -> HardwareInfo {
+    defmt::info!("hwtest: probe start");
+    let hfxo_ok = probe_hfxo().await;
+    let lfxo_ok = probe_lfxo();
+    let info = HardwareInfo { hfxo_ok, lfxo_ok };
+    defmt::info!("hwtest: probe done — {:?}", info);
+    info
+}
+
+/// Actively start HFXO with a short timeout.  Mirrors
+/// `bin/hwtest.rs::probe_hfxo` but with a tighter 100 ms cap
+/// because every boot pays this cost; healthy crystals start in
+/// well under a millisecond.
+///
+/// On timeout the abandoned request is cancelled via
+/// `TASKS_HFCLKSTOP` so the controller stops driving the dead
+/// crystal.  HFCLK remains on whichever source `embassy_nrf::init`
+/// selected (HFINT for the Phase 3 always-boots config).
+async fn probe_hfxo() -> bool {
+    // If HFXO is already the current source (e.g. embassy was
+    // configured with ExternalXtal and init waited for it), bail
+    // out immediately — no re-request needed.
+    if unsafe { CLOCK_HFCLKSTAT.read_volatile() } & HFCLKSTAT_STATE_RUNNING != 0 {
+        defmt::info!("hwtest: HFXO already running at probe entry");
+        return true;
+    }
+
+    // Trigger a fresh start request.
+    unsafe {
+        CLOCK_EVENTS_HFCLKSTARTED.write_volatile(0);
+        CLOCK_TASKS_HFCLKSTART.write_volatile(1);
+    }
+
+    // Poll for up to 100 ms.  Healthy nRF52840 HFXO starts in
+    // ~360 µs typical, ~1.5 ms worst-case per the datasheet, so
+    // 100 ms is generous slack without making boot feel sluggish.
+    for _ in 0..100u16 {
+        if unsafe { CLOCK_EVENTS_HFCLKSTARTED.read_volatile() } != 0 {
+            defmt::info!("hwtest: HFXO probe passed");
+            return true;
+        }
+        Timer::after_millis(1).await;
+    }
+
+    // Timeout — abandon the request so the dead crystal isn't
+    // left being driven, and so a later `TASKS_HFCLKSTART` from
+    // a different code path doesn't get confused.
+    unsafe { CLOCK_TASKS_HFCLKSTOP.write_volatile(1) };
+    defmt::warn!(
+        "hwtest: HFXO probe FAILED (event never fired in 100 ms — \
+         crystal dead or bad solder joint).  Boot continues on HFINT; \
+         USB + BLE will be disabled this session.",
+    );
+    false
+}
+
+/// Read `LFCLKSTAT.STATE`.  `embassy_nrf::init` brings LFCLK up
+/// regardless of source (needed by RTC1 = embassy-time), so this
+/// is a "did init succeed at all" check more than a crystal probe.
+/// A proper LFXO crystal test (stop-and-restart-with-XTAL) is
+/// risky enough that it's deferred to Phase 4.
+fn probe_lfxo() -> bool {
+    let stat = unsafe { CLOCK_LFCLKSTAT.read_volatile() };
+    let running = stat & LFCLKSTAT_STATE_RUNNING != 0;
+    if running {
+        defmt::info!("hwtest: LFXO check passed (LFCLKSTAT={:#010x})", stat);
+    } else {
+        defmt::warn!(
+            "hwtest: LFXO check FAILED — LFCLKSTAT={:#010x}, expected STATE bit set",
+            stat,
+        );
+    }
+    running
+}
+
+// ---------------------------------------------------------------------------
+// KV gate (Phase 1+2 — interactive sign-off)
+// ---------------------------------------------------------------------------
+//
+// The first-boot interactive tests (Phase 5) stamp `hwtest:passed`
+// once a human has signed off button / display / LED / sound
+// behaviour.  Independent from the per-boot [`HardwareInfo`] probe
+// above — the KV flag is "factory worker said yes", not "the chip
+// is currently OK".
+
+const NAMESPACE: &str = "hwtest";
 const KEY_PASSED: &str = "passed";
 
-/// Returns `true` if the badge has already passed the factory test.
-/// Errors are treated as "not passed" so a flaky read at boot doesn't
-/// silently let an untested badge through.
+/// Returns `true` if the badge has already passed the interactive
+/// factory test.  Errors are treated as "not passed" so a flaky
+/// read at boot doesn't silently let an untested badge through.
 pub async fn is_passed() -> bool {
     matches!(kv::namespace(NAMESPACE).exists(KEY_PASSED).await, Ok(true))
 }
@@ -95,139 +230,16 @@ pub async fn mark_passed() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Result accounting
-// ---------------------------------------------------------------------------
-
-/// Stable per-test error code.  Matches `bin/hwtest.rs::ERR_*` so beep-code
-/// lookups against `HWTEST.md` agree across both binaries.
-#[derive(Copy, Clone, Eq, PartialEq, defmt::Format)]
-pub enum TestCode {
-    Hfxo,
-    Lfxo,
-}
-
-impl TestCode {
-    /// Matches the numeric `ERR_*` constants in `bin/hwtest.rs`.
-    pub const fn beep_code(self) -> u8 {
-        match self {
-            Self::Hfxo => 22,
-            Self::Lfxo => 21,
-        }
-    }
-}
-
-/// Fixed-capacity accumulator for failed checks.  Each variant in
-/// [`TestCode`] can fail at most once per run, so a small heapless
-/// `Vec` (or array slot) is enough; using a `u32` bit-mask keeps the
-/// type Copy and avoids dragging `heapless` in for two slots.
-#[derive(Default, Copy, Clone)]
-pub struct TestResults {
-    fail_mask: u32,
-}
-
-impl TestResults {
-    pub fn record(&mut self, code: TestCode, ok: bool) {
-        if !ok {
-            self.fail_mask |= 1 << code.beep_code();
-        }
-    }
-
-    pub fn any_failed(&self) -> bool {
-        self.fail_mask != 0
-    }
-}
-
-// ---------------------------------------------------------------------------
-// nRF52840 CLOCK peripheral — raw register addresses (PAC-free).
-// ---------------------------------------------------------------------------
-//
-// Matches `bin/hwtest.rs`.  Read-only here in Phase 2; Phase 3 may
-// add the request/timeout pattern used by `probe_hfxo` / `probe_lfxo`
-// in the standalone test binary.
-
-const CLOCK_HFCLKSTAT: *const u32 = 0x4000_0408 as *const u32;
-const CLOCK_LFCLKSTAT: *const u32 = 0x4000_0418 as *const u32;
-
-/// `HFCLKSTAT.STATE` bit (16): 1 when HFXO is the current source.
-const HFCLKSTAT_STATE_RUNNING: u32 = 1 << 16;
-/// `LFCLKSTAT.STATE` bit (16): 1 when LFCLK is running.
-const LFCLKSTAT_STATE_RUNNING: u32 = 1 << 16;
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-/// HFXO check — confirm the 32 MHz crystal is the current HFCLK
-/// source post-`embassy_nrf::init`.  On a healthy badge with
-/// `HfclkSource::ExternalXtal`, `STATE = 1` by the time we get here
-/// because the init waited for the start event.  If init *had*
-/// hung on a broken crystal we wouldn't be running — that case
-/// needs the pre-init detection path (Phase 3+).
-fn check_hfxo() -> bool {
-    let stat = unsafe { CLOCK_HFCLKSTAT.read_volatile() };
-    let running = stat & HFCLKSTAT_STATE_RUNNING != 0;
-    if running {
-        defmt::info!("hwtest: HFXO check passed (HFCLKSTAT={:#010x})", stat);
-    } else {
-        defmt::warn!(
-            "hwtest: HFXO check FAILED — HFCLKSTAT={:#010x}, expected STATE bit set",
-            stat,
-        );
-    }
-    running
-}
-
-/// LFXO check — `embassy_nrf::init` always brings LFCLK up (RTC1 is
-/// LFCLK-driven), so this should always pass on any working chip
-/// regardless of which low-frequency source is in use.
-fn check_lfxo() -> bool {
-    let stat = unsafe { CLOCK_LFCLKSTAT.read_volatile() };
-    let running = stat & LFCLKSTAT_STATE_RUNNING != 0;
-    if running {
-        defmt::info!("hwtest: LFXO check passed (LFCLKSTAT={:#010x})", stat);
-    } else {
-        defmt::warn!(
-            "hwtest: LFXO check FAILED — LFCLKSTAT={:#010x}, expected STATE bit set",
-            stat,
-        );
-    }
-    running
-}
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-/// Run the Phase 2 test suite.  Returns normally on pass (after
-/// stamping the KV flag); loops forever on fail so the badge stays
-/// in factory-test mode until repaired or KV-cleared.
-pub async fn run() {
-    defmt::info!("hwtest: factory test entered (Phase 2)");
-
-    // Small splash so any future LED/EPD indicator has time to
-    // register visually before tests start firing.
+/// Phase-3 placeholder for the first-boot interactive test path.
+/// Currently auto-stamps after a 500 ms splash so the rest of the
+/// integration (boot supervisor, conditional spawns) can be
+/// exercised end-to-end.  Phase 5 will replace the body with real
+/// joystick / display / buzzer prompts and only call [`mark_passed`]
+/// after the human confirms.
+pub async fn run_first_boot_interactive(hw: &HardwareInfo) {
+    defmt::info!("hwtest: first-boot interactive entered (Phase 3 stub)");
+    defmt::info!("hwtest:   hardware seen at first boot: {:?}", hw);
     Timer::after_millis(500).await;
-
-    let mut results = TestResults::default();
-    results.record(TestCode::Hfxo, check_hfxo());
-    results.record(TestCode::Lfxo, check_lfxo());
-
-    if results.any_failed() {
-        defmt::error!(
-            "hwtest: one or more checks FAILED (fail_mask={:#x}) — \
-             holding in factory-test mode, KV flag NOT stamped",
-            results.fail_mask,
-        );
-        // Spin forever, feeding nothing.  The shared watchdog task
-        // is already running so the badge will reset on its own,
-        // hit this gate again, fail again, and stay visibly broken
-        // until a technician intervenes.
-        loop {
-            Timer::after_millis(1000).await;
-        }
-    }
-
     mark_passed().await;
-    defmt::info!("hwtest: all checks passed — continuing to normal boot");
+    defmt::info!("hwtest: first-boot stub complete");
 }

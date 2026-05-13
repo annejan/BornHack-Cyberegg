@@ -44,8 +44,16 @@ use static_cell::StaticCell;
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // ── Core hardware init ───────────────────────────────────────────────
+    // Phase 3 boot-supervisor pattern: always-boots architecture.
+    //
+    // We init on HFINT (internal 64 MHz RC) so this call can never hang
+    // waiting for the 32 MHz crystal — a dead or intermittent HFXO won't
+    // brick the badge.  `factory_test::probe()` below will actively
+    // request HFXO with a short timeout; if it starts the chip switches
+    // over (giving USB + BLE their precise clock), and if it doesn't we
+    // stay on HFINT and gate the HFXO-dependent task spawns accordingly.
     let mut config = embassy_nrf::config::Config::default();
-    config.hfclk_source = HfclkSource::ExternalXtal;
+    config.hfclk_source = HfclkSource::Internal;
     let p = embassy_nrf::init(config);
 
     embassy_nrf::pac::POWER.tasks_constlat().write_value(1);
@@ -126,16 +134,18 @@ async fn main(spawner: Spawner) {
     // task reads or writes flash-backed state.
     kv::init().await;
 
-    // ── Factory test gate ────────────────────────────────────────────────
-    // On a virgin badge (no `hwtest:passed` flag in the KV store) run the
-    // factory test sequence before the rest of the firmware initialises.
-    // Currently a Phase 1 stub that auto-passes after a short splash; the
-    // intent is to grow the per-peripheral checks from `bin/hwtest.rs`
-    // into here so a factory-floor flash → power-on cycle exercises the
-    // hardware once, stamps the flag, and ships.  See
-    // [`bornhack_aegg::fw::factory_test`] for the phase plan.
+    // ── Hardware probe (boot supervisor) ─────────────────────────────────
+    // Always runs.  Active probe of HFXO + LFXO — see
+    // `bornhack_aegg::fw::factory_test` module docs for the design.
+    // The returned `HardwareInfo` drives conditional task spawning
+    // below (BLE + USB MSC need HFXO; everything else tolerates HFINT).
+    let hw = bornhack_aegg::fw::factory_test::probe().await;
+
+    // First-boot interactive sign-off path — only on a virgin badge.
+    // Currently a stub that auto-marks pass; Phase 5 will plug in
+    // button / display / sound interactive prompts.
     if !bornhack_aegg::fw::factory_test::is_passed().await {
-        bornhack_aegg::fw::factory_test::run().await;
+        bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw).await;
     }
 
     // ── Watch app — load persisted alarm state and start the persister ───
@@ -240,40 +250,51 @@ async fn main(spawner: Spawner) {
         }
 
         let identity = settings::load_or_create_identity().await;
-        let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
 
-        static SDC_MEM: StaticCell<nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>> =
-            StaticCell::new();
-        let sdc = init_ble(
-            &spawner,
-            p.RTC0,
-            p.TIMER0,
-            p.TEMP,
-            p.PPI_CH19,
-            p.PPI_CH30,
-            p.PPI_CH31,
-            p.PPI_CH17,
-            p.PPI_CH18,
-            p.PPI_CH20,
-            p.PPI_CH21,
-            p.PPI_CH22,
-            p.PPI_CH23,
-            p.PPI_CH24,
-            p.PPI_CH25,
-            p.PPI_CH26,
-            p.PPI_CH27,
-            p.PPI_CH28,
-            p.PPI_CH29,
-            p.RNG,
-            SDC_MEM.init(nrf_sdc::Mem::new()),
-        );
-        spawner.must_spawn(run_ble_peripheral(
-            sdc,
-            CompanionContext {
-                pub_key: identity.pub_key,
-            },
-            ble_prng_seed,
-        ));
+        // BLE companion needs HFXO (the SoftDevice Controller's radio
+        // demands 32 MHz crystal accuracy).  Spawn it only when our
+        // probe found a working crystal; otherwise log + skip and the
+        // rest of the firmware (LoRa, watch, game, display) carries on.
+        if hw.hfxo_ok {
+            let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
+            static SDC_MEM: StaticCell<nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>> =
+                StaticCell::new();
+            let sdc = init_ble(
+                &spawner,
+                p.RTC0,
+                p.TIMER0,
+                p.TEMP,
+                p.PPI_CH19,
+                p.PPI_CH30,
+                p.PPI_CH31,
+                p.PPI_CH17,
+                p.PPI_CH18,
+                p.PPI_CH20,
+                p.PPI_CH21,
+                p.PPI_CH22,
+                p.PPI_CH23,
+                p.PPI_CH24,
+                p.PPI_CH25,
+                p.PPI_CH26,
+                p.PPI_CH27,
+                p.PPI_CH28,
+                p.PPI_CH29,
+                p.RNG,
+                SDC_MEM.init(nrf_sdc::Mem::new()),
+            );
+            spawner.must_spawn(run_ble_peripheral(
+                sdc,
+                CompanionContext {
+                    pub_key: identity.pub_key,
+                },
+                ble_prng_seed,
+            ));
+        } else {
+            defmt::warn!(
+                "BLE companion disabled this boot — HFXO unavailable, \
+                 LoRa mesh continues on HFINT"
+            );
+        }
         identity
     };
 
@@ -374,8 +395,15 @@ async fn main(spawner: Spawner) {
     // partition and drop in sponsor PCX files on a fresh badge without
     // waiting for the main display loop to come up.  VBUS detection is
     // automatic — the USB PHY powers up when a cable is connected.
+    // USB peripheral derives its 48 MHz clock from HFXO via the PLL —
+    // no crystal, no enumeration.  Skip the spawn cleanly on a
+    // degraded boot rather than letting the USB stack hang.
     #[cfg(feature = "usb-storage")]
-    spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
+    if hw.hfxo_ok {
+        spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
+    } else {
+        defmt::warn!("USB mass storage disabled this boot — HFXO unavailable");
+    }
 
     // ── Boot-complete chime ───────────────────────────────────────────────
     // Plays once on every boot (first boot included) when the user
