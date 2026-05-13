@@ -408,25 +408,35 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
 
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
     let style = TextStyleBuilder::new().baseline(Baseline::Top).build();
-    let lut_speed = crate::fw::epd::current_lut_speed();
+
+    // Use the fastest patched-LUT timing for the per-test partial
+    // refreshes — at the `EPD_LUT_SPEED_MIN` scale the waveform
+    // duration is ~30 % of normal (≈3× speedup).  Some ghosting
+    // between rows is acceptable since each row's text is the
+    // primary content; the final NEEDS REWORK / Press FIRE footer
+    // is the only line a worker dwell-reads.  The initial
+    // tri-color clear keeps full timing — its job is to wipe
+    // ghosting from the previous power-on session.
+    let full_lut = crate::fw::epd::current_lut_speed();
+    let fast_lut = crate::fw::epd::EPD_LUT_SPEED_MIN;
 
     // ── Step 1: full clean (tri-color Mode 2) ─────────────────────────
     // First real EPD test: if `update_tc` hangs or errors here, the
     // EPD line below never gets drawn — failure pin-pointed.
     display.clear(Color::White);
-    let _ = display.update_tc(lut_speed).await;
+    let _ = display.update_tc(full_lut).await;
 
     // ── Step 2: header + partial refresh (Mode 1) ─────────────────────
     // Second real EPD test: validates the fast LUT path.
     draw_text(display, "FACTORY TEST", Point::new(20, 4), font, style);
-    let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+    let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
 
     // ── Step 3: EPD row ───────────────────────────────────────────────
     // Implicit pass: reaching this point means init_epd returned (SPI +
     // RESET + BUSY + OTP LUT all worked), tri-color Mode 2 worked, and
     // fast Mode 1 worked.  Anything else would have hung above.
     draw_test_row(display, font, style, "EPD", Some(true), 30);
-    let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+    let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
 
     // ── Step 4 onwards: per-test rows.  Each test draws its name
     //    first (partial refresh), then its result (partial refresh).
@@ -446,9 +456,9 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
         ("SCL",  hw.qwiic_scl_ok, 114),
     ] {
         draw_test_row(display, font, style, label, None, y);
-        let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+        let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
         draw_test_row(display, font, style, label, Some(result), y);
-        let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+        let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
     }
 
     // ── Footer ───────────────────────────────────────────────────────
@@ -459,7 +469,7 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
         "NEEDS REWORK"
     };
     draw_text(display, footer, Point::new(4, 130), font, style);
-    let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+    let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
 
     if !all_pass {
         defmt::error!(
