@@ -607,7 +607,7 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
     // ── Footer ───────────────────────────────────────────────────────
     let all_pass = hw.all_pass();
     let footer = if all_pass {
-        "Press FIRE to ship"
+        "ALL PASS - shipping"
     } else {
         "NEEDS REWORK"
     };
@@ -628,7 +628,11 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
         }
     }
 
-    wait_for_fire_press().await;
+    // All pass → auto-stamp + draw ship image.  No human-input gate
+    // needed: a healthy badge requires zero worker interaction beyond
+    // plugging in USB and watching the screen.  Brief pause lets the
+    // worker read the green column before the screen turns over.
+    Timer::after_secs(3).await;
     mark_passed().await;
     defmt::info!("hwtest: first-boot complete — drawing ship image");
 
@@ -718,31 +722,4 @@ fn draw_text(
     let _ = Text::with_text_style(text, pos, font, style).draw(display);
 }
 
-/// Block until the joystick Fire button is pressed (P1_02 goes low).
-///
-/// Runs before `bin/embassy.rs::main` spawns the `run_buttons` task,
-/// so we can't use the `BTN_WATCH` channel yet.  Instead we briefly
-/// steal the `P1_02` peripheral, build a transient `Input` with
-/// pull-up, await the falling edge, then drop — the GPIO config is
-/// released so the later `Input::new(board!(p, joy_fire), ..)` in
-/// `main` re-initialises cleanly.
-///
-/// # Safety
-///
-/// `unsafe { P1_02::steal() }` is sound here because:
-///
-/// 1. This function only runs from `run_first_boot_interactive`, which
-///    main calls before any other code touches `joy_fire`.
-/// 2. The stolen `Peri` is consumed by `Input::new` and dropped at
-///    end-of-block, releasing the pin before `main` continues.
-async fn wait_for_fire_press() {
-    use embassy_nrf::gpio::{Input, Pull};
-    use embassy_nrf::peripherals;
-
-    defmt::info!("hwtest: waiting for Fire button to acknowledge results");
-    let pin = unsafe { peripherals::P1_02::steal() };
-    let mut fire = Input::new(pin, Pull::Up);
-    fire.wait_for_falling_edge().await;
-    defmt::info!("hwtest: Fire pressed");
-}
 
