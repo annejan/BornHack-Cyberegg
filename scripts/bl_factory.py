@@ -68,7 +68,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BOOTLOADER_DIR = REPO_ROOT / "bootloader"
 BOOTLOADER_ELF = REPO_ROOT / "bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader"
-APP_ELF = REPO_ROOT / "target/thumbv7em-none-eabihf/debug/embassy"
+APP_ELF_RELEASE = REPO_ROOT / "target/thumbv7em-none-eabihf/release/embassy"
+APP_ELF_DEBUG = REPO_ROOT / "target/thumbv7em-none-eabihf/debug/embassy"
 CHIP = "nRF52840_xxAA"
 POLL_INTERVAL_SEC = 1.0
 # 0x10000000 is the start of the nRF52 FICR — always readable on a
@@ -105,7 +106,7 @@ def build_bootloader():
         sys.exit(1)
 
 
-def flash_one(probe_id, *, with_app):
+def flash_one(probe_id, *, with_app, app_elf):
     """Erase + bootloader write + (optional) app write + reset."""
     t0 = time.monotonic()
 
@@ -125,12 +126,13 @@ def flash_one(probe_id, *, with_app):
     print(f"{time.monotonic() - t1:.1f}s")
 
     if with_app:
-        if not APP_ELF.is_file():
-            print(f"  WARN  app ELF missing ({APP_ELF}) — run 'make fw' first")
+        if not app_elf.is_file():
+            print(f"  WARN  app ELF missing ({app_elf}) — run 'make fw-release' first "
+                  f"(or --debug + 'make fw')")
         else:
             print("  app…", end=" ", flush=True)
             t2 = time.monotonic()
-            r = run(_with_probe(["download", "--chip", CHIP, "--verify", str(APP_ELF)], probe_id))
+            r = run(_with_probe(["download", "--chip", CHIP, "--verify", str(app_elf)], probe_id))
             if r.returncode != 0:
                 print(f"FAILED\n    {r.stderr.strip()}")
                 return False
@@ -150,9 +152,12 @@ def main():
                         help="J-Link probe selector (VID:PID or serial).  "
                              "Default: probe-rs picks the only attached one.")
     parser.add_argument("--with-app", action="store_true",
-                        help="Also flash the debug App ELF via SWD (slower).  "
+                        help="Also flash the App ELF via SWD (slower).  "
                              "Default: bootloader only; load App via DFU later.")
+    parser.add_argument("--debug", action="store_true",
+                        help="Use the debug App ELF instead of release (dev only).")
     args = parser.parse_args()
+    app_elf = APP_ELF_DEBUG if args.debug else APP_ELF_RELEASE
 
     if not BOOTLOADER_ELF.is_file():
         build_bootloader()
@@ -161,7 +166,13 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    label = "bootloader" + (" + app" if args.with_app else "")
+    variant = "debug" if args.debug else "release"
+    label = "bootloader" + (f" + app ({variant})" if args.with_app else "")
+    if args.with_app and not app_elf.is_file():
+        print(f"ERROR: app ELF missing at {app_elf}", file=sys.stderr)
+        print(f"       run 'make fw-release' first (or --debug + 'make fw')",
+              file=sys.stderr)
+        sys.exit(1)
     print(f"Factory SWD station — auto-flashing {label} on every fresh board.")
     print(f"Probe: {args.probe or 'auto'}   chip: {CHIP}")
     print("Place a board on the SWD jig; lift after DONE.  Ctrl-C to exit.\n")
@@ -172,7 +183,7 @@ def main():
             present = probe_target(args.probe)
             if armed and present:
                 print("BOARD detected.")
-                if flash_one(args.probe, with_app=args.with_app):
+                if flash_one(args.probe, with_app=args.with_app, app_elf=app_elf):
                     armed = False
                     if args.once:
                         return
