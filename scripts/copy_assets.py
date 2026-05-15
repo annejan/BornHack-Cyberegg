@@ -50,6 +50,7 @@ Behaviour notes
 """
 
 import argparse
+import concurrent.futures
 import ctypes
 import ctypes.util
 import os
@@ -58,6 +59,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -135,38 +137,58 @@ def is_volume_empty(mount_point):
     return True
 
 
-def copy_assets_to(mount_point, *, quiet):
+def copy_assets_to(mount_point, *, label, quiet):
     files_copied = 0
     total_bytes = 0
+    t0 = time.monotonic()
     for src in sorted(ASSETS_DIR.iterdir()):
         if not src.is_file():
             continue
         dst = mount_point / src.name
         if not quiet:
-            print(f"    {src.name}")
+            _say(f"  [{label}]   {src.name}")
         shutil.copy2(src, dst)
         files_copied += 1
         total_bytes += src.stat().st_size
     subprocess.run(["sync"], check=False)
-    print(f"  → {files_copied} files, {total_bytes // 1024} KiB copied + flushed")
+    elapsed = time.monotonic() - t0
+    _say(f"  [{label}] → {files_copied} files, "
+         f"{total_bytes // 1024} KiB copied + flushed in {elapsed:.1f}s")
     return files_copied > 0
 
 
+# Lock guarding stdout — multiple worker threads print interleaved
+# otherwise, which makes terminal output unreadable.
+_PRINT_LOCK = threading.Lock()
+
+
+def _say(*args):
+    with _PRINT_LOCK:
+        print(*args, flush=True)
+
+
 def process_device(devnode, label, *, quiet):
-    """Full mount → copy → sync → unmount cycle for one block device."""
-    print(f"FRESH {label}  ({devnode})")
+    """Full mount → copy → sync → unmount cycle for one block device.
+
+    Thread-safe: each worker thread takes its own devnode, runs its
+    own subprocesses (udisksctl / sync / shutil), and only contends
+    with peers on the stdout lock.
+    """
+    _say(f"FRESH {label}  ({devnode})")
     mount_point = mount_via_udisks(devnode)
     if mount_point is None:
         return False
     if not is_volume_empty(mount_point):
-        print(f"SKIP  {mount_point}  (not empty — already provisioned?)")
+        _say(f"SKIP  {mount_point}  (not empty — already provisioned?)")
         unmount_via_udisks(devnode)
         return False
-    if not copy_assets_to(mount_point, quiet=quiet):
+    if not copy_assets_to(mount_point, label=label, quiet=quiet):
         unmount_via_udisks(devnode)
         return False
     unmount_via_udisks(devnode)
-    print(f"DONE  {label}  ✓\n")
+    # Audible "ding" so a worker watching multiple badges hears the
+    # completion without staring at the terminal.  ASCII BEL.
+    _say(f"DONE  {label}  ✓  \a")
     return True
 
 
@@ -174,15 +196,17 @@ def process_device(devnode, label, *, quiet):
 # Event source: udev monitor (preferred — device-level detection)
 # ---------------------------------------------------------------------------
 
-def initial_sweep(quiet, once):
-    """Handle any CYBR* volumes already plugged in at startup.
+def initial_sweep_parallel(submit):
+    """Hand any already-mounted CYBR* volumes off to the thread pool.
 
-    Uses ``lsblk`` to find every block partition; for any whose
-    FAT label matches, we run the full process_device.
+    Pre-startup sweep — ``udev monitor`` only delivers *future* events,
+    so anything already plugged in when the script starts needs an
+    explicit lsblk-driven pass.  Submits to the pool the same way
+    runtime events do.
     """
     r = _run(["lsblk", "-rno", "NAME,LABEL,TYPE"])
     if r.returncode != 0:
-        return False
+        return
     for line in r.stdout.splitlines():
         parts = line.split(None, 2)
         if len(parts) < 3:
@@ -192,14 +216,14 @@ def initial_sweep(quiet, once):
             continue
         if not VOLUME_PATTERN.match(label):
             continue
-        devnode = f"/dev/{name}"
-        if process_device(devnode, label, quiet=quiet) and once:
-            return True
-    return False
+        submit(f"/dev/{name}", label)
 
 
-def watch_udev(quiet, once):
-    """Block on udev block-device add events; process each CYBR*."""
+def watch_udev(quiet, once, max_workers):
+    """Block on udev block-device add events; dispatch each CYBR* to a
+    thread-pool worker so multiple badges plugged into a hub process
+    in parallel (USB bus + host filesystems are I/O-bound, GIL is
+    irrelevant)."""
     cmd = [
         "udevadm", "monitor", "--udev",
         "--subsystem-match=block", "--property",
@@ -211,16 +235,41 @@ def watch_udev(quiet, once):
     except FileNotFoundError:
         raise RuntimeError("udevadm not in PATH — install systemd or eudev")
 
-    print(f"Watching (udev) for CYBR* USB-MSC volumes — press Ctrl-C to exit.\n")
+    print(f"Watching (udev) for CYBR* USB-MSC volumes with {max_workers} "
+          f"parallel workers — press Ctrl-C to exit.\n")
 
-    # Handle pre-mounted volumes first.
-    if initial_sweep(quiet=quiet, once=once) and once:
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="copy",
+    )
+    done_event = threading.Event()
+    success_count = [0]
+    success_lock = threading.Lock()
+
+    def submit(devnode, label):
+        def worker():
+            ok = process_device(devnode, label, quiet=quiet)
+            if ok:
+                with success_lock:
+                    success_count[0] += 1
+                    if once:
+                        done_event.set()
+        pool.submit(worker)
+
+    # Handle pre-mounted volumes first (also parallelised).
+    initial_sweep_parallel(submit)
+    if once and done_event.wait(timeout=5.0):
         proc.terminate()
+        pool.shutdown(wait=True)
         return
 
     seen = set()
     event = {}
     for line in proc.stdout:
+        if once and done_event.is_set():
+            proc.terminate()
+            pool.shutdown(wait=True)
+            return
         line = line.rstrip("\n")
         if not line:
             # End-of-record: dispatch if it's an ADD on a CYBR* partition.
@@ -229,15 +278,11 @@ def watch_udev(quiet, once):
                 devnode = event.get("DEVNAME", "")
                 if VOLUME_PATTERN.match(label) and devnode and devnode not in seen:
                     seen.add(devnode)
-                    if process_device(devnode, label, quiet=quiet) and once:
-                        proc.terminate()
-                        return
+                    submit(devnode, label)
             event = {}
         elif "=" in line:
             k, v = line.split("=", 1)
             event[k] = v
-        # Header lines like "UDEV  [123.456] add /devices/..." carry no
-        # key=value, but the property dump that follows them does.
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +303,7 @@ def candidate_mount_roots():
     yield Path("/media")
 
 
-def watch_inotify_fallback(quiet, once):
+def watch_inotify_fallback(quiet, once, max_workers):
     """If udev monitoring fails, fall back to watching mount-point dirs.
 
     This catches volumes the desktop env auto-mounts, but won't see
@@ -287,14 +332,33 @@ def watch_inotify_fallback(quiet, once):
     if not wd_to_path:
         raise FileNotFoundError("no mount roots exist to watch")
 
-    print(f"Watching (inotify) {', '.join(str(p) for p in wd_to_path.values())}\n")
+    print(f"Watching (inotify) {', '.join(str(p) for p in wd_to_path.values())} "
+          f"with {max_workers} parallel workers\n")
+
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="copy",
+    )
+    done_event = threading.Event()
+
+    def submit(devnode, label):
+        def worker():
+            ok = process_device(devnode, label, quiet=quiet)
+            if ok and once:
+                done_event.set()
+        pool.submit(worker)
 
     # Initial sweep handles anything already mounted.
-    if initial_sweep(quiet=quiet, once=once) and once:
+    initial_sweep_parallel(submit)
+    if once and done_event.wait(timeout=5.0):
+        pool.shutdown(wait=True)
         return
 
     seen = set()
     while True:
+        if once and done_event.is_set():
+            pool.shutdown(wait=True)
+            return
         buf = os.read(fd, 4096)
         offset = 0
         while offset < len(buf):
@@ -321,8 +385,7 @@ def watch_inotify_fallback(quiet, once):
             if r.returncode != 0 or not r.stdout.strip():
                 continue
             devnode = r.stdout.strip()
-            if process_device(devnode, name, quiet=quiet) and once:
-                return
+            submit(devnode, name)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +400,10 @@ def main():
                         help="Suppress per-file progress output.")
     parser.add_argument("--fallback", action="store_true",
                         help="Force the inotify mount-point fallback (debug).")
+    parser.add_argument("-j", "--jobs", type=int, default=8,
+                        help="Max parallel copy workers (default: 8).  Each "
+                             "badge on a USB hub gets its own thread; "
+                             "throughput scales with bus + host I/O.")
     args = parser.parse_args()
 
     if not ASSETS_DIR.is_dir():
@@ -349,13 +416,16 @@ def main():
     print(f"Asset bundle: {ASSETS_DIR}/")
     try:
         if args.fallback:
-            watch_inotify_fallback(quiet=args.quiet, once=args.once)
+            watch_inotify_fallback(quiet=args.quiet, once=args.once,
+                                   max_workers=args.jobs)
         else:
             try:
-                watch_udev(quiet=args.quiet, once=args.once)
+                watch_udev(quiet=args.quiet, once=args.once,
+                           max_workers=args.jobs)
             except (RuntimeError, FileNotFoundError) as e:
                 print(f"WARN  udev unavailable: {e}", file=sys.stderr)
-                watch_inotify_fallback(quiet=args.quiet, once=args.once)
+                watch_inotify_fallback(quiet=args.quiet, once=args.once,
+                                       max_workers=args.jobs)
     except KeyboardInterrupt:
         print("\nBye.")
 

@@ -615,6 +615,13 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
     let _ = display.update_bw(UpdateMode::Mode1, fast_lut).await;
 
     if !all_pass {
+        // Visible-across-the-bench fault indicator so a worker can
+        // tell a "needs rework" badge from a passing one without
+        // squinting at the e-paper.  Blue + green off so red is the
+        // only colour.
+        crate::fw::led::set_led(&crate::fw::led::LED_BLUE, crate::fw::led::LedState::Off);
+        crate::fw::led::set_led(&crate::fw::led::LED_GREEN, crate::fw::led::LedState::Off);
+        crate::fw::led::set_led(&crate::fw::led::LED_RED, crate::fw::led::LedState::Duty50);
         defmt::error!(
             "hwtest: FAILURE on first boot — halting in factory-test mode forever \
              (HardwareInfo: {:?})",
@@ -632,6 +639,17 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
     // human-input gate, no read-pause: factory line throughput
     // matters more than a worker reading the PASS column, and the
     // ship image itself confirms a pass anyway.
+    //
+    // Visible-across-the-bench LED indicator so the factory worker
+    // can tell at a glance which badges are done: red off, blue off,
+    // green pulsing at 50 % duty.  Pairs with the ship image to give
+    // both "look at the screen" and "look at the side of the badge"
+    // confirmation of pass.  Stays on through the rest of the halt;
+    // USB MSC continues running in parallel for the asset-copy
+    // script to land sprites.
+    crate::fw::led::set_led(&crate::fw::led::LED_RED, crate::fw::led::LedState::Off);
+    crate::fw::led::set_led(&crate::fw::led::LED_BLUE, crate::fw::led::LedState::Off);
+    crate::fw::led::set_led(&crate::fw::led::LED_GREEN, crate::fw::led::LedState::Duty50);
     mark_passed().await;
     defmt::info!("hwtest: first-boot complete — drawing ship image");
 
