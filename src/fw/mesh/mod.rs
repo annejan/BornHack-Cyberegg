@@ -38,20 +38,8 @@ pub use meshcore::run_meshcore_listener;
 // Display data — written by meshcore task, read by display renderer
 // ---------------------------------------------------------------------------
 
-/// Last decoded LoRa group-text message.
-pub struct LoraMessage {
-    pub channel: heapless::String<32>,
-    pub sender: heapless::String<32>,
-    pub text: heapless::String<128>,
-    pub timestamp: u32,
-    pub rssi: i16,
-    pub snr_x4: i8,
-}
-
-pub static LAST_LORA_MSG: Mutex<CriticalSectionRawMutex, RefCell<Option<LoraMessage>>> =
-    Mutex::new(RefCell::new(None));
-
-/// Fired whenever a new channel message is stored in `LAST_LORA_MSG`.
+/// Fired whenever a new channel message arrives — wakes the display
+/// renderer to re-draw whichever channel-related screen is active.
 pub static LORA_MSG_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // ---------------------------------------------------------------------------
@@ -164,17 +152,7 @@ pub static ADVERT_BLE_CHANNEL: embassy_sync::channel::Channel<
     4,
 > = embassy_sync::channel::Channel::new();
 
-/// Last received private message (TxtMsg).
-pub struct LastPm {
-    pub sender_name: heapless::String<32>,
-    pub text: heapless::String<{ ::meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }>,
-    pub timestamp: u32,
-    pub rssi: i16,
-}
-
-pub static LAST_PM: Mutex<CriticalSectionRawMutex, RefCell<Option<LastPm>>> =
-    Mutex::new(RefCell::new(None));
-
+/// Fired whenever a new PM arrives — wakes the display renderer.
 pub static PM_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // ---------------------------------------------------------------------------

@@ -329,7 +329,7 @@ pub async fn run_meshcore_listener<'a>(
 
                 let frame = &raw[..len];
 
-                defmt::info!("RX [{=usize}B {=i16}dBm]: {=[u8]:02x}", len, rssi, frame,);
+                defmt::debug!("RX [{=usize}B {=i16}dBm]: {=[u8]:02x}", len, rssi, frame,);
 
                 match meshcore::packet::deserialize(frame) {
                     Err(_) => {
@@ -490,7 +490,7 @@ pub async fn run_meshcore_listener<'a>(
 async fn push_grp_txt(
     payload: &[u8],
     rssi: i16,
-    snr_x4: i8,
+    _snr_x4: i8,
     path_len: u8,
     channels: &[LoadedChannel],
 ) {
@@ -640,20 +640,6 @@ async fn push_grp_txt(
             if let Some(token_val) = msg_str.strip_prefix("token:") {
                 crate::token::set_token(token_val);
             }
-            let mut sender: heapless::String<32> = heapless::String::new();
-            let _ = sender.push_str(sender_str);
-            let mut text_str: heapless::String<128> = heapless::String::new();
-            let _ = text_str.push_str(msg_str);
-            crate::LAST_LORA_MSG.lock(|cell| {
-                *cell.borrow_mut() = Some(crate::LoraMessage {
-                    channel: ch_name,
-                    sender,
-                    text: text_str,
-                    timestamp: dec.timestamp,
-                    rssi,
-                    snr_x4,
-                });
-            });
             crate::LORA_MSG_SIGNAL.signal(());
 
             // Add to the channel message ring for the on-device browser.
@@ -1290,18 +1276,7 @@ async fn try_handle_txt_msg(
                 s
             }
         };
-        let mut text_str: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }> =
-            heapless::String::new();
-        let _ = text_str.push_str(text);
-        crate::LAST_PM.lock(|cell| {
-            *cell.borrow_mut() = Some(crate::LastPm {
-                sender_name: display_name.clone(),
-                text: text_str.clone(),
-                timestamp: dec.timestamp,
-                rssi,
-            });
-        });
-        super::pm_inbox::note_incoming(&sender.pub_key, display_name.as_str(), text_str.as_str());
+        super::pm_inbox::note_incoming(&sender.pub_key, display_name.as_str(), text);
         super::sounds::play(super::sounds::SoundEvent::PmReceived);
         crate::PM_SIGNAL.signal(());
         crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);

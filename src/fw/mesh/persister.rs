@@ -88,7 +88,7 @@ async fn lora_radio_loop() -> ! {
         rp.tx_power = crate::LORA_TX_POWER.load(Relaxed);
         rp.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
         match settings::set_radio_params(rp).await {
-            Ok(()) => defmt::info!("settings: radio params persisted from menu"),
+            Ok(()) => defmt::debug!("settings: radio params persisted"),
             Err(e) => defmt::warn!("settings: radio params persist failed: {:?}", e),
         }
         // Fan out to the listener so the SX1262 is reprogrammed live.
@@ -107,23 +107,19 @@ async fn other_params_loop() -> ! {
             .unwrap_or(settings::OtherParams {
                 manual_add_contacts: 0,
                 telemetry_mode_base: 0,
-                telemetry_mode_loc: 0,
-                telemetry_mode_env: 0,
                 advert_loc_policy: 0,
                 multi_acks: 0,
             });
         op.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
         op.multi_acks = crate::MULTI_ACKS.load(Relaxed);
         op.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
-        op.telemetry_mode_loc = 0;
-        op.telemetry_mode_env = 0;
         match settings::set_other_params(op).await {
-            Ok(()) => defmt::info!("settings: other_params persisted from menu"),
+            Ok(()) => defmt::debug!("settings: other_params persisted"),
             Err(e) => defmt::warn!("settings: other_params persist failed: {:?}", e),
         }
         let ignore = crate::IGNORE_BLINK.load(Relaxed);
         match settings::set_ignore_blink(ignore).await {
-            Ok(()) => defmt::info!("settings: ignore_blink={=bool} persisted", ignore),
+            Ok(()) => defmt::debug!("settings: ignore_blink={=bool} persisted", ignore),
             Err(e) => defmt::warn!("settings: ignore_blink persist failed: {:?}", e),
         }
     }
@@ -138,7 +134,7 @@ async fn advert_loop() -> ! {
             interval_hours: crate::ADVERT_INTERVAL_HOURS.load(Relaxed),
         };
         match settings::set_advert_config(cfg).await {
-            Ok(()) => defmt::info!(
+            Ok(()) => defmt::debug!(
                 "settings: advert_config persisted (enabled={=bool} interval={=u8}h)",
                 cfg.enabled,
                 cfg.interval_hours
@@ -153,7 +149,7 @@ async fn path_hash_loop() -> ! {
         crate::PATH_HASH_CHANGED_SIGNAL.wait().await;
         let mode = crate::fw::mesh::PATH_HASH_MODE.load(core::sync::atomic::Ordering::Relaxed);
         match settings::set_path_hash_mode(mode).await {
-            Ok(()) => defmt::info!("settings: path_hash_mode={=u8} persisted", mode),
+            Ok(()) => defmt::debug!("settings: path_hash_mode={=u8} persisted", mode),
             Err(e) => defmt::warn!("settings: path_hash persist failed: {:?}", e),
         }
     }
@@ -170,7 +166,7 @@ async fn node_name_loop() -> ! {
             (buf, n)
         });
         match settings::set_node_name(&buf[..n]).await {
-            Ok(()) => defmt::info!("settings: node_name persisted from menu"),
+            Ok(()) => defmt::debug!("settings: node_name persisted"),
             Err(e) => defmt::warn!("settings: node_name persist failed: {:?}", e),
         }
     }
@@ -181,7 +177,7 @@ async fn lora_disabled_loop() -> ! {
         crate::LORA_DISABLED_CHANGED.wait().await;
         let enabled = !crate::LORA_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
         match settings::set_lora_enabled(enabled).await {
-            Ok(()) => defmt::info!("settings: lora_enabled={=bool} persisted", enabled),
+            Ok(()) => defmt::debug!("settings: lora_enabled={=bool} persisted", enabled),
             Err(e) => defmt::warn!("settings: lora_enabled persist failed: {:?}", e),
         }
     }
@@ -192,7 +188,7 @@ async fn ble_disabled_loop() -> ! {
         crate::BLE_DISABLED_CHANGED.wait().await;
         let enabled = !crate::BLE_DISABLED.load(core::sync::atomic::Ordering::Relaxed);
         match settings::set_ble_enabled(enabled).await {
-            Ok(()) => defmt::info!("settings: ble_enabled={=bool} persisted", enabled),
+            Ok(()) => defmt::debug!("settings: ble_enabled={=bool} persisted", enabled),
             Err(e) => defmt::warn!("settings: ble_enabled persist failed: {:?}", e),
         }
     }

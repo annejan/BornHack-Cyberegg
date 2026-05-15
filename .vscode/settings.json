@@ -21,6 +21,7 @@
         "Initialise",
         "Irqs",
         "jedec",
+        "Meshcore",
         "QSPI",
         "redrive",
         "tickv"

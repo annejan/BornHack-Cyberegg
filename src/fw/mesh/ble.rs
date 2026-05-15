@@ -413,11 +413,6 @@ pub async fn run_ble_peripheral(
     } = stack.build();
 
     let bond_tx = BOND_CMD_CHANNEL.sender();
-    channels::init().await;
-    defmt::info!(
-        "BLE: channel store ready ({} active)",
-        channels::count_active().await
-    );
 
     // Run the HCI runner in parallel with the advertising loop.
     embassy_futures::join::join(
@@ -519,8 +514,6 @@ async fn nus_peripheral_loop<C>(
         .unwrap_or(settings::OtherParams {
             manual_add_contacts: 0,
             telemetry_mode_base: 0,
-            telemetry_mode_loc: 0,
-            telemetry_mode_env: 0,
             advert_loc_policy: 0,
             multi_acks: 0,
         });
@@ -548,8 +541,6 @@ async fn nus_peripheral_loop<C>(
             other_params.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
             other_params.multi_acks = crate::MULTI_ACKS.load(Relaxed);
             other_params.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
-            other_params.telemetry_mode_loc = 0; // no GPS hardware
-            other_params.telemetry_mode_env = 0; // no environment sensors
         }
 
         // When BLE is disabled, stop advertising and wait until re-enabled.
@@ -881,9 +872,7 @@ async fn nus_peripheral_loop<C>(
                                         lon: position.lon,
                                         multi_acks: other_params.multi_acks,
                                         adv_location_policy: other_params.advert_loc_policy,
-                                        telemetry_mode: other_params.telemetry_mode_base
-                                            | (other_params.telemetry_mode_loc << 2)
-                                            | (other_params.telemetry_mode_env << 4),
+                                        telemetry_mode: other_params.telemetry_mode_base,
                                         manual_add_contacts: other_params.manual_add_contacts,
                                         frequency_hz: radio_params.freq_hz,
                                         bandwidth_hz: radio_params.bw_hz,
@@ -1343,23 +1332,16 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
+                                // Pre-MeshCore-1.15 `SET_FLOOD_SCOPE` (0x36).
+                                // Older phone-app builds still send this.
+                                // Apply at runtime so they aren't broken,
+                                // but don't persist — `SET_DEFAULT_FLOOD_SCOPE`
+                                // (0x3F) is the persistent path on 1.15+.
                                 Ok(companion::cmd::Command::SetFloodScope(key)) => {
                                     crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(key));
-                                    if let Err(e) = settings::set_flood_scope(key).await {
-                                        defmt::warn!(
-                                            "settings: flood_scope persist failed: {:?}",
-                                            e
-                                        );
-                                    }
-                                    match key {
-                                        Some(k) => defmt::info!(
-                                            "companion: SET_FLOOD_SCOPE key={:02X} → OK (persisted)",
-                                            k
-                                        ),
-                                        None => defmt::debug!(
-                                            "companion: SET_FLOOD_SCOPE (clear) → OK (persisted)"
-                                        ),
-                                    }
+                                    defmt::debug!(
+                                        "companion: SET_FLOOD_SCOPE (legacy) → applied, not persisted"
+                                    );
                                     companion::Response::Ok
                                 }
 
@@ -1654,9 +1636,9 @@ async fn nus_peripheral_loop<C>(
                                     );
                                     pending_other = Some(settings::OtherParams {
                                         manual_add_contacts,
+                                        // loc/env bits (telemetry >> 2/4) ignored
+                                        // — no GPS / environment sensors on this device.
                                         telemetry_mode_base: telemetry & 0x03,
-                                        telemetry_mode_loc: (telemetry >> 2) & 0x03,
-                                        telemetry_mode_env: (telemetry >> 4) & 0x03,
                                         advert_loc_policy,
                                         multi_acks,
                                     });

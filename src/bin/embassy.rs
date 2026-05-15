@@ -9,6 +9,7 @@ use bornhack_aegg::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, ini
 use bornhack_aegg::fw::mesh::{
     ble::{CompanionContext, init_ble, run_ble_peripheral},
     bonds::bond_task,
+    channels,
     contacts::ContactStore,
     meshcore::run_meshcore_listener,
     persister, settings,
@@ -148,6 +149,16 @@ async fn main(spawner: Spawner) {
         spawner.must_spawn(bornhack_aegg::fw::mesh::contacts_screen::mutation_persister_task());
         ContactStore::new().init().await;
 
+        // Seed channel KV slots before the meshcore listener or BLE task
+        // load them.  Previously this lived inside `run_ble_peripheral`
+        // after a spin-wait on `INITIAL_BONDS`, which let the meshcore
+        // listener load an empty channel set on a fresh-flash boot.
+        channels::init().await;
+        defmt::info!(
+            "channels: store ready ({} active)",
+            channels::count_active().await
+        );
+
         // Load persisted display/runtime settings (timezone, boost-RX) into
         // their in-RAM atomics SYNCHRONOUSLY here — before any task that
         // reads them starts rendering. Previously the load lived inside the
@@ -164,12 +175,17 @@ async fn main(spawner: Spawner) {
             core::sync::atomic::Ordering::Relaxed,
         );
 
-        // Flood-scope key: load from flash, seeding the dk-bornhack default
-        // on first boot so badges ship region-scoped to BornHack repeaters.
-        // Operators can override via the companion `SET_FLOOD_SCOPE` (0x36)
-        // command; that change persists.
+        // Flood-scope key: load the MeshCore-1.15 `def_scope` slot
+        // (CMD_SET_DEFAULT_FLOOD_SCOPE / 0x3F) if the phone has set one,
+        // else derive the dk-bornhack key inline so badges ship
+        // region-scoped to BornHack repeaters out of the box — no flash
+        // write at first boot.  `flood_route()` wraps every outbound
+        // flood packet in this key.
         {
-            let scope = settings::get_flood_scope_or_init_default().await;
+            let scope = match settings::get_default_flood_scope().await {
+                Some(s) => Some(s.key),
+                None => Some(settings::dk_bornhack_default_scope()),
+            };
             bornhack_aegg::fw::mesh::FLOOD_SCOPE_KEY.lock(|c| c.set(scope));
         }
 
@@ -465,13 +481,6 @@ async fn display_loop(
         // changed to dithered B/W) would otherwise stick around.
         // Consume the flag with `swap` so the upgrade applies once.
         //
-        // We also force a full tri-color refresh whenever the BLE
-        // pairing PIN dialog is up.  Without it the PIN box renders
-        // cleanly on the B/W plane but RED pixels from the underlying
-        // screen (e.g. Calendar's today-fill or event dots) bleed
-        // through, which makes the PIN unreadable on the Calendar
-        // screen specifically.  The pairing window is short, so the
-        // slower refresh per cycle is fine.
         // The Name screen's HELLO/my-name-is banner sits on the red
         // plane, which the fast Mode1 LUT skips entirely.  Without
         // forcing the full path here, the banner renders stale (or
@@ -479,9 +488,13 @@ async fn display_loop(
         // tri-color paint.  Redraws on this screen are rare —
         // button-driven only, no minute-tick — so the per-redraw
         // cost is acceptable.
+        //
+        // BLE pairing PIN: intentionally NOT forced full.  Mode1 is
+        // visually quiet (no flicker) and the PIN box is large enough
+        // to read even if a few red pixels from the underlying screen
+        // (e.g. Calendar dots) bleed through behind it.
         let do_full = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
-            || bornhack_aegg::BLE_PASSKEY.load(core::sync::atomic::Ordering::Relaxed) != u32::MAX
             || active_screen == SCREEN_NAME;
 
         let sprite_advance = match select(

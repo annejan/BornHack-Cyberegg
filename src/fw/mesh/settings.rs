@@ -320,6 +320,11 @@ pub async fn set_advert_config(cfg: AdvertConfig) -> Result<(), kv::KvError> {
 // ---------------------------------------------------------------------------
 
 /// Miscellaneous node behaviour settings.
+///
+/// `telemetry_mode_loc` and `telemetry_mode_env` are not present here —
+/// this device has no GPS or environment sensors, so those wire-protocol
+/// bits are always emitted as zero.  The KV layout still reserves them
+/// in the packed telemetry byte for forward compatibility.
 #[derive(Clone, Copy, Debug, defmt::Format)]
 pub struct OtherParams {
     /// 0 = auto-add contacts, 1 = manual approval required.
@@ -327,10 +332,6 @@ pub struct OtherParams {
     /// Telemetry mode — base sensors (0 = deny, 1 = use contact.flags, 2 =
     /// allow all).
     pub telemetry_mode_base: u8,
-    /// Telemetry mode — location.
-    pub telemetry_mode_loc: u8,
-    /// Telemetry mode — environment.
-    pub telemetry_mode_env: u8,
     /// Location broadcast policy: 0 = off, 1 = share.
     pub advert_loc_policy: u8,
     /// Multi-ACK aggregation: 0 = off, 1 = on.
@@ -341,9 +342,7 @@ impl OtherParams {
     fn to_bytes(self) -> [u8; 6] {
         [
             self.manual_add_contacts,
-            self.telemetry_mode_base
-                | (self.telemetry_mode_loc << 2)
-                | (self.telemetry_mode_env << 4),
+            self.telemetry_mode_base, // upper bits (loc/env) intentionally 0
             self.advert_loc_policy,
             self.multi_acks,
             0, // reserved
@@ -352,12 +351,9 @@ impl OtherParams {
     }
 
     fn from_bytes(b: &[u8; 6]) -> Self {
-        let tele = b[1];
         Self {
             manual_add_contacts: b[0],
-            telemetry_mode_base: tele & 0x03,
-            telemetry_mode_loc: (tele >> 2) & 0x03,
-            telemetry_mode_env: (tele >> 4) & 0x03,
+            telemetry_mode_base: b[1] & 0x03,
             advert_loc_policy: b[2],
             multi_acks: b[3],
         }
@@ -456,54 +452,11 @@ pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
 // The companion `SET_FLOOD_SCOPE` (0x36) command lets ops re-key or clear
 // the scope at runtime, and the change is persisted so it survives reboots.
 
-/// SHA-256-truncated derivation from the literal string `"dk-bornhack"`.
-///
-/// Reusing [`meshcore::channel::key_from_hashtag`] for the bytes (it just
-/// SHA-256s and truncates — same algorithm; the function name is a misnomer
-/// in this context but the result is the deterministic 16-byte key the
-/// BornHack repeaters expect).
-fn dk_bornhack_default_scope() -> [u8; 16] {
+/// First-boot default flood-scope key: SHA-256-truncated from `"dk-bornhack"`.
+/// Derived on demand — no flash write at first boot.  Used only when neither
+/// the MeshCore-1.15 `def_scope` slot nor a phone-set scope is present.
+pub fn dk_bornhack_default_scope() -> [u8; 16] {
     meshcore::channel::key_from_hashtag("dk-bornhack")
-}
-
-/// Read the persisted flood-scope key, seeding the first-boot default if no
-/// value has ever been stored.
-///
-/// Returns:
-/// - `Some(key)` when a non-zero key is stored or the default is just seeded.
-/// - `None` when an all-zero "explicitly cleared" value is stored (set by the
-///   BLE companion when the operator clears the scope).
-pub async fn get_flood_scope_or_init_default() -> Option<[u8; 16]> {
-    let mut b = [0u8; 16];
-    match ns().get("flood_scope", &mut b).await {
-        Ok(16) => {
-            if b.iter().all(|&x| x == 0) {
-                None
-            } else {
-                Some(b)
-            }
-        }
-        _ => {
-            // First boot (no key persisted yet): seed with dk-bornhack.
-            let default = dk_bornhack_default_scope();
-            if let Err(e) = ns().set("flood_scope", &default, true).await {
-                defmt::warn!("settings: flood_scope seed failed: {:?}", e);
-            } else {
-                defmt::info!("settings: flood_scope seeded with dk-bornhack default");
-            }
-            Some(default)
-        }
-    }
-}
-
-/// Persist a flood-scope key (or clear it) to flash.
-///
-/// Passing `None` writes 16 zero bytes; the next call to
-/// [`get_flood_scope_or_init_default`] then reads it back as `None` instead
-/// of re-seeding the default — i.e. an explicit clear sticks across reboots.
-pub async fn set_flood_scope(key: Option<[u8; 16]>) -> Result<(), kv::KvError> {
-    let bytes = key.unwrap_or([0u8; 16]);
-    ns().set("flood_scope", &bytes, true).await
 }
 
 // ---------------------------------------------------------------------------
