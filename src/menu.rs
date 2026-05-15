@@ -812,7 +812,7 @@ fn action_path_hash_dec() {
 // "settings" KV namespace alongside every other persisted setting.
 
 const EPD_LUT_SPEED_STEP: u8 = 5;
-const EPD_LUT_SPEED_MAX:  u8 = 200;
+const EPD_LUT_SPEED_MAX: u8 = 200;
 
 fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
@@ -832,7 +832,9 @@ fn action_epd_lut_speed_inc() {
 
 fn action_epd_lut_speed_dec() {
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
-    let new = v.saturating_sub(EPD_LUT_SPEED_STEP).max(crate::fw::epd::EPD_LUT_SPEED_MIN);
+    let new = v
+        .saturating_sub(EPD_LUT_SPEED_STEP)
+        .max(crate::fw::epd::EPD_LUT_SPEED_MIN);
     if new != v {
         crate::fw::epd::EPD_LUT_SPEED.store(new, Ordering::Relaxed);
         #[cfg(feature = "embassy-base")]
@@ -1847,6 +1849,13 @@ pub static LORA_PRESETS: &[LoRaPreset] = &[
         bw_hz: 62_500,
         sf: 8,
         cr: 8,
+    },
+    LoRaPreset {
+        title: "NL narrow (75)",
+        freq_hz: 869_618_000,
+        bw_hz: 62_500,
+        sf: 7,
+        cr: 5,
     },
     LoRaPreset {
         title: "EU/UK (Deprecated)",
