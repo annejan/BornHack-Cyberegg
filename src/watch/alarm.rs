@@ -33,7 +33,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
@@ -742,67 +742,39 @@ fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
     earliest
 }
 
-/// Render a small red bell, centred at `(cx, cy)`.  Roughly 13×13 pixels:
-/// a circular dome on top blended into a slightly flared skirt, then a
-/// wider rim, and a clapper hanging below.  The dome+skirt avoids the
-/// pointy "Christmas tree" silhouette a triangle gives at this size.
+/// Render a 13×13 red bell, centred at `(cx, cy)`, blitting the shared
+/// `fw::emoji::ATLAS_BELL` glyph in red instead of the default black.
+///
+/// Previously this function drew the bell from primitive shapes (circle
+/// dome + rectangles).  Now it shares the bitmap with in-message emoji
+/// rendering so a 🔔 typed in a PM and the watch-face indicator look
+/// identical — only the colour plane differs (red here vs black in text).
 fn draw_bell<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let red = PrimitiveStyle::with_fill(RED);
-    // Dome — 9 px circle, top-left at (cx-4, cy-5).  Gives a rounded
-    // top instead of a sharp triangular apex.
-    Circle::new(Point::new(cx - 4, cy - 5), 9)
-        .into_styled(red)
-        .draw(display)?;
-    // Skirt — straight-sided rectangle blended into the bottom of the
-    // dome, 2 px wider than the dome's max diameter to give the bell
-    // its characteristic flare.
-    Rectangle::new(Point::new(cx - 5, cy + 1), Size::new(11, 3))
-        .into_styled(red)
-        .draw(display)?;
-    // Rim — 13 px wide, sits flush below the skirt.
-    Rectangle::new(Point::new(cx - 6, cy + 4), Size::new(13, 2))
-        .into_styled(red)
-        .draw(display)?;
-    // Clapper — small dot hanging below the rim.
-    Rectangle::new(Point::new(cx - 1, cy + 7), Size::new(2, 2))
-        .into_styled(red)
-        .draw(display)?;
-    Ok(())
+    crate::fw::emoji::draw_emoji(
+        display,
+        crate::fw::emoji::ATLAS_BELL,
+        Point::new(cx - 6, cy - 6),
+        RED,
+    )
 }
 
-/// Render a chunky red envelope, centred at `(cx, cy)`.  13×9 px solid
-/// red body with a white V-fold marking the flap, so the silhouette
-/// reads clearly even on the e-paper's softer red plane.  Pairs visually
-/// with `draw_bell` — same red, slightly larger footprint.
+/// Render a 13×13 red envelope, centred at `(cx, cy)`, blitting the
+/// shared `fw::emoji::ATLAS_ENVELOPE` glyph in red.  Same atlas bitmap
+/// the in-message ✉ / 📧 / 📨 / 📩 codepoints use.
 #[cfg(feature = "mesh")]
 fn draw_envelope<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use embedded_graphics::primitives::{Line, PrimitiveStyleBuilder};
-    // Solid red body — 13×9.  Filled (not outlined) so the envelope has
-    // visible mass on the e-paper rather than a thin outline that fades
-    // into the surrounding white.
-    Rectangle::new(Point::new(cx - 6, cy - 4), Size::new(13, 9))
-        .into_styled(PrimitiveStyle::with_fill(RED))
-        .draw(display)?;
-    // Flap — two 2-px-thick white lines from the top corners meeting at
-    // the centre, knocking out a V into the red fill.  Width 2 so the
-    // flap reads at this size.
-    let flap = PrimitiveStyleBuilder::new()
-        .stroke_color(WHITE)
-        .stroke_width(2)
-        .build();
-    Line::new(Point::new(cx - 5, cy - 3), Point::new(cx, cy + 1))
-        .into_styled(flap)
-        .draw(display)?;
-    Line::new(Point::new(cx + 5, cy - 3), Point::new(cx, cy + 1))
-        .into_styled(flap)
-        .draw(display)?;
-    Ok(())
+    crate::fw::emoji::draw_emoji(
+        display,
+        crate::fw::emoji::ATLAS_ENVELOPE,
+        Point::new(cx - 6, cy - 6),
+        RED,
+    )
 }
 
 /// Header indicator: an optional red envelope (when there are unread PMs,

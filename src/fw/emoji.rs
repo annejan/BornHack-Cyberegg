@@ -1009,6 +1009,15 @@ const ATLAS: [&[u8; GLYPH_BYTES]; 50] = [
     &ENVELOPE,    // 49  ✉ / 📧 / 📨 / 📩 (email aliases)
 ];
 
+// Stable atlas indices for callers that want to render a specific
+// glyph directly (i.e. without going through `decode_with_emojis` on
+// a string).  Keep in sync with [`ATLAS`] above; the watch-face
+// header indicator uses these to share its bell + envelope artwork
+// with the in-message emoji rendering instead of carrying its own
+// hand-drawn primitives.
+pub const ATLAS_BELL: u8 = 48;
+pub const ATLAS_ENVELOPE: u8 = 49;
+
 // ---------------------------------------------------------------------------
 // Codepoint → atlas index lookup
 // ---------------------------------------------------------------------------
