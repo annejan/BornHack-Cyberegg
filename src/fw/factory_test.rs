@@ -628,11 +628,10 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
         }
     }
 
-    // All pass → auto-stamp + draw ship image.  No human-input gate
-    // needed: a healthy badge requires zero worker interaction beyond
-    // plugging in USB and watching the screen.  Brief pause lets the
-    // worker read the green column before the screen turns over.
-    Timer::after_secs(3).await;
+    // All pass → auto-stamp + draw ship image immediately.  No
+    // human-input gate, no read-pause: factory line throughput
+    // matters more than a worker reading the PASS column, and the
+    // ship image itself confirms a pass anyway.
     mark_passed().await;
     defmt::info!("hwtest: first-boot complete — drawing ship image");
 
