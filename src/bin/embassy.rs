@@ -317,6 +317,13 @@ async fn main(spawner: Spawner) {
         }
 
         let identity = settings::load_or_create_identity().await;
+        // Cache the public key for the "My QR" screen — it builds a
+        // meshcore://contact/add?... URL on demand and needs the 32-byte
+        // pubkey to render.  Identity is otherwise consumed by the
+        // mesh task and not accessible from the draw thread.
+        bornhack_aegg::MY_PUB_KEY.lock(|cell| {
+            cell.borrow_mut().copy_from_slice(&identity.pub_key);
+        });
 
         // BLE companion needs HFXO (the SoftDevice Controller's radio
         // demands 32 MHz crystal accuracy).  Spawn it only when our

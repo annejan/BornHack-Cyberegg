@@ -25,13 +25,14 @@ pub enum ScreenId {
     Watch = 6,
     Calendar = 7,
     Name = 8,
+    Qr = 9,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 9;
+    pub const COUNT: usize = 10;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -1108,6 +1109,12 @@ fn on_name_complete(name: &[u8]) {
     crate::NODE_NAME_CHANGED_SIGNAL.signal(());
 }
 
+/// Menu action: jump straight to the QR-share screen so a peer can scan
+/// the meshcore://contact/add URL.
+fn action_show_qr() {
+    crate::with_display_state_mut!(|s| s.set_active_screen(crate::SCREEN_QR));
+}
+
 fn action_set_name() {
     #[cfg(feature = "embassy-base")]
     let prefill = crate::NODE_NAME.lock(|cell| {
@@ -1559,7 +1566,7 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
+static MESHCORE_MENU_ITEMS: [MenuItem; 12] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1567,6 +1574,10 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
     MenuItem {
         label: || "Set Name",
         kind: MenuItemKind::Action(action_set_name),
+    },
+    MenuItem {
+        label: || "My QR",
+        kind: MenuItemKind::Action(action_show_qr),
     },
     MenuItem {
         label: label_client_repeat,
@@ -2020,6 +2031,21 @@ static NAME_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
+/// QR-share screen (mesh-only).  Single placeholder entry so the menu
+/// button on the QR screen pops a no-op modal; the QR fills the panel
+/// and arrow keys carousel away normally.
+#[cfg(feature = "mesh")]
+static QR_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "My QR",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
+#[cfg(not(feature = "mesh"))]
+static QR_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "QR",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
 // ── DISPLAY_STATE
 // ─────────────────────────────────────────────────────────────
 
@@ -2067,6 +2093,7 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         #[cfg(feature = "watch")]
         ScreenState::new(&CALENDAR_ITEMS),
         ScreenState::new(&NAME_ITEMS),
+        ScreenState::new(&QR_ITEMS),
     ],
     [
         GAME_ENABLED,
@@ -2079,6 +2106,9 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         WATCH_ENABLED,
         #[cfg(feature = "watch")]
         WATCH_ENABLED,
+        true,
+        // QR screen always enabled — when built without `mesh` the
+        // module still exists but draws a "(key not ready)" placeholder.
         true,
     ],
 )));

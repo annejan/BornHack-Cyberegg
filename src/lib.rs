@@ -83,6 +83,8 @@ pub mod fw;
 pub mod game;
 pub mod menu;
 pub mod name_screen;
+#[cfg(feature = "mesh")]
+pub mod qr_screen;
 #[cfg(feature = "signed-channel")]
 pub mod signed_channel;
 pub mod text_entry;
@@ -419,6 +421,19 @@ pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31
 pub static NODE_NAME: std::sync::Mutex<RefCell<heapless::String<31>>> =
     std::sync::Mutex::new(RefCell::new(heapless::String::new()));
 
+/// This badge's Ed25519 public key, populated once at boot by
+/// `bin/embassy.rs` after `device_identity::load_or_create()` completes.
+/// Read by the "My QR" screen to build the meshcore contact URL; all zeros
+/// before mesh init runs (the QR screen treats that as "key not ready yet"
+/// and shows a placeholder).
+#[cfg(all(feature = "embassy-base", feature = "mesh"))]
+pub static MY_PUB_KEY: Mutex<CriticalSectionRawMutex, RefCell<[u8; 32]>> =
+    Mutex::new(RefCell::new([0u8; 32]));
+
+#[cfg(all(feature = "simulator", feature = "mesh"))]
+pub static MY_PUB_KEY: std::sync::Mutex<RefCell<[u8; 32]>> =
+    std::sync::Mutex::new(RefCell::new([0u8; 32]));
+
 /// Lowercase hex of `bytes` (`n_bytes` of them) into a `String<32>`.
 /// Used to render pub_key prefixes (`pub_key[..8]` → 16-char hex) and
 /// to format short fingerprints for the Contacts/PM screens.  Caps
@@ -550,6 +565,7 @@ pub const SCREEN_TOKEN: u8 = ScreenId::Token as u8;
 pub const SCREEN_WATCH: u8 = ScreenId::Watch as u8;
 pub const SCREEN_CALENDAR: u8 = ScreenId::Calendar as u8;
 pub const SCREEN_NAME: u8 = ScreenId::Name as u8;
+pub const SCREEN_QR: u8 = ScreenId::Qr as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
@@ -610,6 +626,8 @@ where
         #[cfg(feature = "watch")]
         SCREEN_CALENDAR => watch::calendar::draw(display),
         SCREEN_NAME => name_screen::draw(display, bat_prc),
+        #[cfg(feature = "mesh")]
+        SCREEN_QR => qr_screen::draw(display),
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 

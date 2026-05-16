@@ -100,6 +100,7 @@ ed25519-compact = { version = "2", default-features = false, features = [
 ], optional = true }
 ekv = { git = "https://github.com/embassy-rs/ekv.git", rev = "a7d0ce35", optional = true }
 embassy-usb = { version = "0.6.0", default-features = false, optional = true }
+qrcodegen-no-heap = { version = "1.8", default-features = false, optional = true }
 
 [package.metadata.tools]
 # cargo install uf2conv
@@ -149,6 +150,7 @@ mesh = [
     "meshcore",
     "meshcore-companion",
     "ed25519-compact",
+    "qrcodegen-no-heap",
 ]
 usb-storage = ["embassy-usb"]
 simulator = ["embedded-graphics-simulator", "heapless", "game", "watch", "signed-channel"]
