@@ -905,7 +905,14 @@ async fn nus_peripheral_loop<C>(
                                         model: b"BornHack Cyber\xC3\x86gg",
                                         version: b"v1.15.0",
                                         client_repeat: false,
-                                        path_hash_mode: 0,
+                                        // Report the current `PATH_HASH_MODE` so the
+                                        // companion app reflects the value the user just
+                                        // pushed via `CMD_SET_PATH_HASH_MODE` — previously
+                                        // hardcoded to 0, which made the companion think
+                                        // the badge had reverted to 1-byte per-hop hashes
+                                        // even though the atomic + KV were updated.
+                                        path_hash_mode: crate::PATH_HASH_MODE
+                                            .load(Ordering::Relaxed),
                                     })
                                 }
 

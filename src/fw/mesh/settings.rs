@@ -319,7 +319,7 @@ pub async fn set_advert_config(cfg: AdvertConfig) -> Result<(), kv::KvError> {
 // Other parameters  (CMD_SET_OTHER_PARAMS 0x26)
 // ---------------------------------------------------------------------------
 
-/// Miscellaneous node behaviour settings.
+/// Miscellaneous node behavior settings.
 ///
 /// `telemetry_mode_loc` and `telemetry_mode_env` are not present here —
 /// this device has no GPS or environment sensors, so those wire-protocol
