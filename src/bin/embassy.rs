@@ -21,8 +21,8 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_NAME, SCREEN_TOKEN,
-    SCREEN_WATCH, board, draw_graphics, health_err, unix_now, with_health,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH,
+    board, draw_graphics, health_err, unix_now, with_health,
 };
 use defmt_rtt as _;
 use embassy_executor::Spawner;
@@ -169,6 +169,15 @@ async fn main(spawner: Spawner) {
     .unwrap();
     defmt::info!("EPD initialized");
     bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
+    bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
+
+    // Host-side partial-refresh state — lazily allocates ~46 KB
+    // .bss buffers (shadow + pending + sent_pending + dirty + 2
+    // plane scratches).  Initialised to all-White to match the
+    // post-boot panel-clear refresh below.
+    let dims = EpdConfig::to_dimensions();
+    let mut partial_state = bornhack_aegg::fw::epd::partial_state_take(dims.rows, dims.cols);
+    partial_state.clear_to(ssd1675::graphics::Color::White);
 
     // Boot breadcrumb #2 — switch from red to blue while the boot
     // tri-color refresh + remaining task spawns finish.  This is the
@@ -459,7 +468,7 @@ async fn main(spawner: Spawner) {
     // `Duty50Once` auto-resets to Off after one 500 ms pulse.
     led::set_led(&led::LED_BLUE, led::LedState::Off);
     led::set_led(&led::LED_GREEN, led::LedState::Duty50Once);
-    let main_loop = display_loop(&mut display, &mut button_rcvr);
+    let main_loop = display_loop(&mut display, &mut button_rcvr, &mut partial_state);
 
     // USB mass storage is a separately-spawned task (see above), so it's
     // not in these joins.
@@ -495,6 +504,7 @@ async fn display_loop(
         u8,
         2,
     >,
+    partial_state: &mut ssd1675::partial::PartialState,
 ) {
     use embassy_futures::select::{Either, select};
 
@@ -506,6 +516,13 @@ async fn display_loop(
     // left the counter.
     #[cfg(feature = "game")]
     let mut last_anim_id: u8 = 0xFF;
+
+    // Track the previously-rendered screen so we can promote the
+    // first refresh after a screen switch to a full panel-clearing
+    // drive — clears ghosting from the outgoing screen.  0xFF =
+    // sentinel for "no prior screen" (boot path already does its
+    // own clears).
+    let mut last_screen: u8 = 0xFF;
 
     loop {
         // Process any pending sponsor flag clear request from the menu.
@@ -542,28 +559,25 @@ async fn display_loop(
         }
 
         // Mini-games set `FULL_REFRESH_PENDING` on close so the next
-        // refresh clears any residual ghosting from their many fast
-        // updates.  We use `update_tc` for that path because plain
-        // `update_bw` only cycles the B/W waveform — any red pixels
-        // left in the panel (e.g. minigame cursor before it was
-        // changed to dithered B/W) would otherwise stick around.
+        // refresh clears residual ghosting from many fast updates.
         // Consume the flag with `swap` so the upgrade applies once.
-        //
-        // The Name screen's HELLO/my-name-is banner sits on the red
-        // plane, which the fast Mode1 LUT skips entirely.  Without
-        // forcing the full path here, the banner renders stale (or
-        // missing) on every redraw after the first boot-time
-        // tri-color paint.  Redraws on this screen are rare —
-        // button-driven only, no minute-tick — so the per-redraw
-        // cost is acceptable.
-        //
-        // BLE pairing PIN: intentionally NOT forced full.  Mode1 is
-        // visually quiet (no flicker) and the PIN box is large enough
-        // to read even if a few red pixels from the underlying screen
-        // (e.g. Calendar dots) bleed through behind it.
+        // SSD1675A path routes that through `force_full_refresh`
+        // (partial_state-aware, drives every pixel via OTP LUT);
+        // SSD1675B path uses `update_tc` (red banner needs tri-color
+        // drive — Mode1 BW LUT skips red).
+        // Screen switch → ghosting from the outgoing screen lingers
+        // if we run a partial.  Force a full refresh once per
+        // transition.  First iteration after boot (last_screen ==
+        // 0xFF) skips since boot already drove a clean frame.
+        // Within-screen redraws (menu scroll, watch tick, etc.)
+        // stay on the partial path even on the Name screen — the
+        // red banner only needs full drive on transitions in,
+        // which the screen_changed branch already handles.
+        let screen_changed = last_screen != 0xFF && last_screen != active_screen;
         let do_full = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
-            || active_screen == SCREEN_NAME;
+            || screen_changed;
+        last_screen = active_screen;
 
         // Feed the SSD1675's per-temperature LUT lookup from the nRF52840
         // die sensor (the chip itself has no on-die sensor — datasheet pg 6).
@@ -574,11 +588,38 @@ async fn display_loop(
             display.set_active_temperature(panel_c10);
         }
 
+        // SSD1675A: every screen routes through the partial / delta
+        // refresh path.  Bridge GraphicDisplay's drawing buffers into
+        // the PartialState before each refresh so set_pixel marks
+        // dirty wherever the new bitmap diverges from the shadow.
+        // do_full re-routes through force_full_refresh so shadow
+        // stays consistent with the panel state.
+        let use_partial_path = display.variant() == ssd1675::DisplayVariant::Ssd1675;
+        if use_partial_path {
+            let (black_buf, red_buf, _work) = display.all_buffers_mut();
+            let black_snapshot = &*black_buf;
+            let red_snapshot = &*red_buf;
+            ssd1675::partial::sync_from_planes(partial_state, black_snapshot, red_snapshot);
+        }
+
         let sprite_advance = match select(
             async {
                 let _ = display.reset().await;
                 let speed = bornhack_aegg::fw::epd::current_lut_speed();
-                if do_full {
+                if use_partial_path {
+                    if do_full {
+                        // Legacy tri-color path drives every pixel from the
+                        // GraphicDisplay buffers — reused here because the
+                        // partial-state full path triggered a crash on
+                        // screen transitions.  After it lands, sync the
+                        // partial-state shadow to pending so the next
+                        // delta refresh sees the correct baseline.
+                        let _ = display.update_tc(speed).await;
+                        partial_state.assume_panel_matches_pending();
+                    } else {
+                        let _ = display.update_partial(partial_state, speed).await;
+                    }
+                } else if do_full {
                     let _ = display.update_tc(speed).await;
                 } else {
                     let _ = display.update_bw(UpdateMode::Mode1, speed).await;

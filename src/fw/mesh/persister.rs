@@ -44,7 +44,10 @@ pub async fn run() -> ! {
             contact_reset_loop(),
             clear_bonds_loop(),
         ),
-        join(crate::fw::epd::epd_lut_speed_persist_loop(), core::future::pending::<()>()),
+        join(
+            crate::fw::epd::epd_lut_speed_persist_loop(),
+            crate::fw::epd::epd_temp_bias_persist_loop(),
+        ),
     )
     .await;
     // Unreachable — every inner loop is `loop {}`.  The signature

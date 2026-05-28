@@ -843,6 +843,46 @@ fn action_epd_lut_speed_dec() {
     }
 }
 
+// ── EPD temperature bias stepper ──────────────────────────────────────────
+//
+// User offset (°C × 10) added on top of the variant-aware self-heating
+// bias when looking up the LUT table.  Range ±5 °C in 0.5 °C steps.
+// Negative = treat panel as colder (picks a warmer / stronger WS),
+// positive = treat panel as warmer (picks a milder WS).
+
+fn fmt_epd_temp_bias(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed) as i16;
+    let whole = v / 10;
+    let frac = (v.abs() % 10) as u8;
+    let sign = if v >= 0 { '+' } else { '-' };
+    let _ = write!(buf, "EPD bias: {}{}.{} C", sign, whole.abs(), frac);
+}
+
+fn action_epd_temp_bias_inc() {
+    let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed);
+    let new = v
+        .saturating_add(crate::fw::epd::EPD_TEMP_BIAS_STEP)
+        .min(crate::fw::epd::EPD_TEMP_BIAS_MAX);
+    if new != v {
+        crate::fw::epd::EPD_TEMP_BIAS_C10.store(new, Ordering::Relaxed);
+        #[cfg(feature = "embassy-base")]
+        crate::fw::epd::EPD_TEMP_BIAS_DIRTY.signal(());
+    }
+}
+
+fn action_epd_temp_bias_dec() {
+    let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed);
+    let new = v
+        .saturating_sub(crate::fw::epd::EPD_TEMP_BIAS_STEP)
+        .max(crate::fw::epd::EPD_TEMP_BIAS_MIN);
+    if new != v {
+        crate::fw::epd::EPD_TEMP_BIAS_C10.store(new, Ordering::Relaxed);
+        #[cfg(feature = "embassy-base")]
+        crate::fw::epd::EPD_TEMP_BIAS_DIRTY.signal(());
+    }
+}
+
 // ── Advert scheduling ──────────────────────────────────────────────────────
 
 fn label_advert_enabled() -> &'static str {
@@ -1668,7 +1708,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    10 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    11 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1710,6 +1750,14 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             format: fmt_epd_lut_speed,
             inc: action_epd_lut_speed_inc,
             dec: action_epd_lut_speed_dec,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_epd_temp_bias,
+            inc: action_epd_temp_bias_inc,
+            dec: action_epd_temp_bias_dec,
         },
     },
     #[cfg(feature = "watch")]

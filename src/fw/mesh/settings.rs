@@ -595,3 +595,18 @@ pub async fn get_epd_lut_speed() -> Option<u8> {
 pub async fn set_epd_lut_speed(scale: u8) -> Result<(), kv::KvError> {
     ns().set("epd_lut", &[scale], true).await
 }
+
+/// Read the persisted EPD temperature-bias override (°C × 10, range
+/// ±50), or `None` if the user has never adjusted it.
+pub async fn get_epd_temp_bias_c10() -> Option<i8> {
+    let mut b = [0u8; 1];
+    match ns().get("epd_tb", &mut b).await {
+        Ok(1) => Some(b[0] as i8),
+        _ => None,
+    }
+}
+
+/// Persist the EPD temperature-bias override (°C × 10).
+pub async fn set_epd_temp_bias_c10(bias: i8) -> Result<(), kv::KvError> {
+    ns().set("epd_tb", &[bias as u8], true).await
+}

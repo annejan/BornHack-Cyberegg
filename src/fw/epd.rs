@@ -8,7 +8,7 @@
 //! Persisted in the `"settings"` KV namespace under `"epd_lut"`.
 
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI8, AtomicU8, Ordering};
 
 #[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -360,6 +360,33 @@ pub async fn init_epd<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// Partial-mode state (lazy-allocated, single instance)
+// ---------------------------------------------------------------------------
+
+use core::sync::atomic::AtomicBool;
+use ssd1675::partial::PartialState;
+
+/// Single-shot guard for [`partial_state_take`] — second call panics
+/// (`PartialState::take` itself panics on the second `take()` of the
+/// underlying `ConstStaticCell`s, but this gives a clearer message).
+static PARTIAL_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// Take ownership of the driver's host-side partial-refresh state.
+/// Call once at boot — typically right after `init_epd` succeeds.
+/// Sized for the panel's actual dimensions; buffers in `.bss`,
+/// allocated by the driver crate's `ConstStaticCell`s.
+///
+/// Returns the `PartialState`; caller stores it (typically alongside
+/// the `EpdGfx`) and passes by `&mut` to `display.update_partial(...)`.
+pub fn partial_state_take(rows: u16, cols: u8) -> PartialState {
+    let prev = PARTIAL_TAKEN.swap(true, Ordering::Relaxed);
+    if prev {
+        defmt::panic!("partial_state_take called twice");
+    }
+    PartialState::take(rows, cols as u16)
+}
+
+// ---------------------------------------------------------------------------
 // LUT cycle-duration scale: runtime atomic + persister glue
 // ---------------------------------------------------------------------------
 
@@ -410,15 +437,55 @@ fn self_heating_bias_c10(variant: ssd1675::DisplayVariant) -> i16 {
     }
 }
 
+/// User-tunable extra bias on top of [`self_heating_bias_c10`], in
+/// °C × 10.  Default 0, range `[EPD_TEMP_BIAS_MIN, EPD_TEMP_BIAS_MAX]`
+/// (= ±5 °C in 0.5 °C steps).  Lets the user nudge the LUT-table
+/// lookup warmer (positive) or cooler (negative) to compensate for
+/// per-panel waveform tuning differences.
+///
+/// Persisted in the `"settings"` KV namespace under `"epd_tb"`.
+pub const EPD_TEMP_BIAS_MIN: i8 = -50;
+pub const EPD_TEMP_BIAS_MAX: i8 = 50;
+pub const EPD_TEMP_BIAS_STEP: i8 = 5;
+
+pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
+
+#[cfg(feature = "embassy-base")]
+pub static EPD_TEMP_BIAS_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+#[cfg(feature = "embassy-base")]
+pub async fn load_persisted_temp_bias() {
+    let v = crate::fw::mesh::settings::get_epd_temp_bias_c10()
+        .await
+        .unwrap_or(0)
+        .clamp(EPD_TEMP_BIAS_MIN, EPD_TEMP_BIAS_MAX);
+    EPD_TEMP_BIAS_C10.store(v, Ordering::Relaxed);
+}
+
+#[cfg(feature = "embassy-base")]
+pub async fn epd_temp_bias_persist_loop() -> ! {
+    loop {
+        EPD_TEMP_BIAS_DIRTY.wait().await;
+        let v = EPD_TEMP_BIAS_C10
+            .load(Ordering::Relaxed)
+            .clamp(EPD_TEMP_BIAS_MIN, EPD_TEMP_BIAS_MAX);
+        match crate::fw::mesh::settings::set_epd_temp_bias_c10(v).await {
+            Ok(()) => defmt::debug!("settings: epd_temp_bias_c10={} persisted", v),
+            Err(e) => defmt::warn!("settings: epd_temp_bias_c10 persist failed: {:?}", e),
+        }
+    }
+}
+
 /// PCB temperature estimate (°C × 10) for SSD1675 LUT-table indexing.
-/// Returns `last_c10() - self_heating_bias_c10(variant)`, or `i16::MIN`
-/// if no MCU die reading has been taken yet.
+/// Returns `last_c10() - self_heating_bias_c10(variant) - user_bias`,
+/// or `i16::MIN` if no MCU die reading has been taken yet.
 pub fn panel_temp_c10(variant: ssd1675::DisplayVariant) -> i16 {
     let c10 = crate::fw::temperature::last_c10();
     if c10 == i16::MIN {
         i16::MIN
     } else {
-        c10 - self_heating_bias_c10(variant)
+        let user = EPD_TEMP_BIAS_C10.load(Ordering::Relaxed) as i16;
+        c10 - self_heating_bias_c10(variant) - user
     }
 }
 
