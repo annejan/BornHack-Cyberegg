@@ -5,5 +5,6 @@ src/main.rs.bak
 bootloader/target
 docs
 .claude
+CLAUDE.MD
 *.txt
 .rules
