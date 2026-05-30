@@ -2,15 +2,17 @@ ELF         = target/thumbv7em-none-eabihf/debug/embassy
 BIN         = target/thumbv7em-none-eabihf/debug/embassy.bin
 BIN_REL     = target/thumbv7em-none-eabihf/release/embassy.bin
 ELF_REL     = target/thumbv7em-none-eabihf/release/embassy
+ELF_REL_DBG = target/thumbv7em-none-eabihf/release-debug/embassy
 ELF_HWTEST  = target/thumbv7em-none-eabihf/release-hwtest/hwtest
 
 # App flash base matches the app slot in memory.x (ORIGIN in memory.x = 0xD000)
 FLASH_BASE = 0x0000D000
 
-.PHONY: fw fw-release fw-game fw-game-release fw-mesh fw-mesh-release \
+.PHONY: fw fw-release fw-release-debug fw-game fw-game-release fw-mesh fw-mesh-release \
         fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
-        sim flash flash-release flash-game flash-mesh \
-        monitor bl flash-bl dfu-flash dfu-flash-release \
+        sim flash flash-release flash-release-debug run-release-debug \
+        flash-game flash-mesh \
+        monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
         fw-watch flash-watch
 
 # ---------- Full build (game + mesh) ----------
@@ -30,6 +32,27 @@ flash:
 flash-release:
 	cargo fw-release
 	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# Release codegen (full LTO, opt-z) WITH defmt symbols + debug info —
+# use to diagnose release-only crashes via RTT.
+fw-release-debug:
+	cargo fw-release-debug
+	@arm-none-eabi-size $(ELF_REL_DBG) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+# Flash + attach RTT (decodes defmt, prints stack trace on panic /
+# hardfault).  Ctrl-C to detach.
+run-release-debug:
+	cargo fw-release-debug
+	probe-rs run --chip nRF52840_xxAA --always-print-stacktrace $(ELF_REL_DBG)
+
+# Flash only (no attach).
+flash-release-debug:
+	cargo fw-release-debug
+	probe-rs download --chip nRF52840_xxAA $(ELF_REL_DBG)
+
+# Attach to an already-flashed release-debug binary.
+monitor-release-debug:
+	probe-rs attach --chip nRF52840_xxAA --always-print-stacktrace $(ELF_REL_DBG)
 
 # ---------- Game only (no mesh) ----------
 

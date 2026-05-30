@@ -116,7 +116,7 @@ panic = "abort"
 [profile.release]
 debug = 0
 opt-level = "z"
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
@@ -128,6 +128,16 @@ strip = true
 [profile.release-hwtest]
 inherits = "release"
 strip = false
+debug = 2
+
+# Identical to `release` (full LTO, opt-z, abort) but keeps debug info
+# and skips strip so probe-rs can decode defmt + give stack traces on
+# panic / hardfault.  Use for diagnosing release-only crashes.
+[profile.release-debug]
+inherits = "release"
+strip = false
+panic = "unwind"
+lto = true
 debug = 2
 
 # Optimize all dependencies
@@ -153,7 +163,13 @@ mesh = [
     "qrcodegen-no-heap",
 ]
 usb-storage = ["embassy-usb"]
-simulator = ["embedded-graphics-simulator", "heapless", "game", "watch", "signed-channel"]
+simulator = [
+    "embedded-graphics-simulator",
+    "heapless",
+    "game",
+    "watch",
+    "signed-channel",
+]
 # Base nRF52840 embassy runtime (display, buttons, LEDs, buzzer — no radio/BLE).
 embassy-base = [
     "cortex-m",
@@ -176,7 +192,7 @@ embassy-base = [
     "signed-channel",
 ]
 # Full build: game + mesh + USB storage.
-embassy      = ["embassy-base", "game", "mesh", "usb-storage"]
+embassy = ["embassy-base", "game", "mesh", "usb-storage"]
 # Game + USB storage (no LoRa/BLE mesh stack).
 embassy-game = ["embassy-base", "game", "usb-storage"]
 # Mesh only (no game, no USB storage).

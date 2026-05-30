@@ -577,7 +577,6 @@ async fn display_loop(
         let do_full = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
             || screen_changed;
-        last_screen = active_screen;
 
         // Feed the SSD1675's per-temperature LUT lookup from the nRF52840
         // die sensor (the chip itself has no on-die sensor — datasheet pg 6).
@@ -594,7 +593,12 @@ async fn display_loop(
         // dirty wherever the new bitmap diverges from the shadow.
         // do_full re-routes through force_full_refresh so shadow
         // stays consistent with the panel state.
-        let use_partial_path = display.variant() == ssd1675::DisplayVariant::Ssd1675;
+        // Delta refresh now supports both SSD1675 family variants —
+        // partial.rs picks the right LUT layout (7-phase A vs 10-phase B).
+        let use_partial_path = matches!(
+            display.variant(),
+            ssd1675::DisplayVariant::Ssd1675 | ssd1675::DisplayVariant::Ssd1675B,
+        );
         if use_partial_path {
             let (black_buf, red_buf, _work) = display.all_buffers_mut();
             let black_snapshot = &*black_buf;
@@ -602,39 +606,76 @@ async fn display_loop(
             ssd1675::partial::sync_from_planes(partial_state, black_snapshot, red_snapshot);
         }
 
-        let sprite_advance = match select(
-            async {
-                let _ = display.reset().await;
-                let speed = bornhack_aegg::fw::epd::current_lut_speed();
-                if use_partial_path {
-                    if do_full {
-                        // Legacy tri-color path drives every pixel from the
-                        // GraphicDisplay buffers — reused here because the
-                        // partial-state full path triggered a crash on
-                        // screen transitions.  After it lands, sync the
-                        // partial-state shadow to pending so the next
-                        // delta refresh sees the correct baseline.
+        // NoOp skip: when the partial path would have nothing to drive
+        // (no dirty pixels) and no full-refresh is queued, bypass the
+        // entire SPI ceremony (reset + LUT + plane upload + deep_sleep)
+        // and just wait for the next event.  Without this, every
+        // wakeup that doesn't change pixels (animation tick that hit
+        // the same frame, mesh signal on the wrong screen, etc.) still
+        // pays ~500 ms of dead time on the bus and re-blinks the
+        // status LED — making the device look like it's continuously
+        // refreshing even when nothing is changing.
+        let partial_idle = use_partial_path
+            && !do_full
+            && partial_state.bbox_of_dirty().is_none();
+
+        let sprite_advance = if partial_idle {
+            last_screen = active_screen;
+            wait_display_event(button_rcvr, active_screen).await
+        } else {
+            match select(
+                async {
+                    let _ = display.reset().await;
+                    let speed = bornhack_aegg::fw::epd::current_lut_speed();
+                    if use_partial_path {
+                        if do_full {
+                            // Full unpatched OTP tri-color refresh on
+                            // screen transitions — known-good baseline.
+                            // After it lands, sync the partial-state
+                            // shadow to pending so the next delta
+                            // refresh sees the correct baseline.
+                            // DIAG (refresh-budget tune): log selected temp
+                            // band, raw + lut_speed-scaled waveform frame
+                            // count, and measured wall time.  scaled_frames
+                            // vs wall_ms gives the panel frame period and
+                            // reveals how much of the ~10s is waveform vs
+                            // SPI/overhead — drives the ≤2s trim target.
+                            let band = display.active_band_index();
+                            let raw_frames = display.full_lut_frames();
+                            let scaled_frames = raw_frames as u64 * speed as u64 / 100;
+                            let t0 = embassy_time::Instant::now();
+                            let _ = display.update_tc(speed).await;
+                            let wall_ms = t0.elapsed().as_millis();
+                            defmt::info!(
+                                "epd full: band={=usize} raw_frames={=u32} scaled_frames={=u64} speed={=u8} wall={=u64}ms",
+                                band, raw_frames, scaled_frames, speed, wall_ms
+                            );
+                            partial_state.assume_panel_matches_pending();
+                        } else {
+                            let _ = display.update_partial(partial_state, speed).await;
+                        }
+                    } else if do_full {
                         let _ = display.update_tc(speed).await;
-                        partial_state.assume_panel_matches_pending();
                     } else {
-                        let _ = display.update_partial(partial_state, speed).await;
+                        let _ = display.update_bw(UpdateMode::Mode1, speed).await;
                     }
-                } else if do_full {
-                    let _ = display.update_tc(speed).await;
-                } else {
-                    let _ = display.update_bw(UpdateMode::Mode1, speed).await;
+                    let _ = display.deep_sleep().await;
+                },
+                wait_display_event(button_rcvr, active_screen),
+            )
+            .await
+            {
+                Either::First(_) => {
+                    // Update finished — commit the screen-transition
+                    // tracker so next iteration's screen_changed compares
+                    // against what was actually driven.  If we'd done
+                    // this before the select, a cancellation would lose
+                    // the pending full-refresh request.
+                    last_screen = active_screen;
+                    wait_display_event(button_rcvr, active_screen).await
                 }
-                let _ = display.deep_sleep().await;
-            },
-            wait_display_event(button_rcvr, active_screen),
-        )
-        .await
-        {
-            Either::First(_) => {
-                // Update finished — wait for next event.
-                wait_display_event(button_rcvr, active_screen).await
+                Either::Second(sprite) => sprite, // interrupted by event — last_screen stays
             }
-            Either::Second(sprite) => sprite, // interrupted by event
         };
 
         led::set_led(&led::LED_RED, led::LedState::BlinkOnce);

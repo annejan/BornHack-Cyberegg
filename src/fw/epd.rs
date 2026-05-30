@@ -131,13 +131,67 @@ async fn probe_lut(
     let busy_in = Input::new(unsafe { AnyPin::steal(busy_nr) }, Pull::Down);
 
     let mut cfg = Config::default();
-    cfg.frequency = Frequency::M1;
+    // SSD1675 datasheet allows up to 20 MHz SCLK; 8 MHz gives ~8x
+    // faster SPI prep vs M1 (~46ms → ~6ms per plane upload) without
+    // signal-integrity risk on the badge's short SPI3 traces.
+    cfg.frequency = Frequency::M16;
 
     // Hardware reset — flat 100 ms settle (BUSY does not reliably pulse during
     // reset/OTP boot).
     Timer::after_millis(10).await;
     rst_out.set_high();
     Timer::after_millis(100).await;
+
+    // Phase 0: SoftReset + analog/digital block setup.  Matches the
+    // badge.team SSD168x init pattern (HW reset → 0x12 → 0x74 → 0x7E
+    // → ...).  Without these, OTP zone reload doesn't execute and
+    // every band-LUT readback comes out byte-identical.
+    cs_out.set_low();
+    {
+        let mut spi_tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs,
+            unsafe { AnyPin::steal(sck_nr) },
+            unsafe { AnyPin::steal(data_nr) },
+            cfg.clone(),
+        );
+        // 0x12 = SoftReset.  Puts chip in known state; BUSY pulses
+        // high then low while internal logic clears.
+        dc_out.set_low();
+        spi_tx.write(&[0x12]).await.ok();
+        dc_out.set_high();
+        core::mem::forget(spi_tx);
+    }
+    cs_out.set_high();
+    for _ in 0..100u8 {
+        if !busy_in.is_high() {
+            break;
+        }
+        Timer::after_millis(10).await;
+    }
+
+    cs_out.set_low();
+    {
+        let mut spi_tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs,
+            unsafe { AnyPin::steal(sck_nr) },
+            unsafe { AnyPin::steal(data_nr) },
+            cfg.clone(),
+        );
+        // 0x74 = AnalogBlockControl (value 0x54 per datasheet).
+        dc_out.set_low();
+        spi_tx.write(&[0x74]).await.ok();
+        dc_out.set_high();
+        spi_tx.write(&[0x54]).await.ok();
+        // 0x7E = DigitalBlockControl (value 0x3B per datasheet).
+        dc_out.set_low();
+        spi_tx.write(&[0x7E]).await.ok();
+        dc_out.set_high();
+        spi_tx.write(&[0x3B]).await.ok();
+        core::mem::forget(spi_tx);
+    }
+    cs_out.set_high();
 
     // Phase 1: write temperature and trigger OTP LUT zone load.
     cs_out.set_low();
@@ -149,10 +203,13 @@ async fn probe_lut(
             unsafe { AnyPin::steal(data_nr) },
             cfg.clone(),
         );
-        // 0x18 = 0x80: temperature sensor source select (B-variant
+        // 0x18 = 0x80: select the *internal* temperature sensor (B-variant
         // documented; A-variant accepts as no-op per the gap on pg 23).
-        // Tells the chip to use whatever's in the temperature register
-        // verbatim — no I²C external-sensor poll on the LoadTemp step.
+        // NOTE: this only matters if a LoadTemp step runs.  The probe
+        // deliberately does NOT LoadTemp (see 0x22/0x91 below) precisely so
+        // the chip keeps the value we write via 0x1A instead of re-sampling
+        // the sensor — sampling would overwrite our manual band value and
+        // make every band-LUT identical.
         dc_out.set_low();
         spi_tx.write(&[0x18]).await.ok();
         dc_out.set_high();
@@ -174,11 +231,16 @@ async fn probe_lut(
         spi_tx.write(&[0x1A]).await.ok();
         dc_out.set_high();
         spi_tx.write(&[byte1, byte2]).await.ok();
-        // 0x22 / 0xB1: EnableClock | LoadTemp | LoadLUT-OTP-Mode1 | DisableClock
+        // 0x22 / 0x91: EnableClock | LoadLUT-OTP-Mode1 | DisableClock.
+        // NO LoadTemp bit (that would be 0xB1) — LoadTemp re-samples the
+        // sensor selected by 0x18 and clobbers the manual 0x1A value, so the
+        // TR-search lands in the same band every iteration and all 16
+        // band-LUTs come back identical.  0x91 keeps our written temperature
+        // so the per-band TR-search loads a distinct WS each pass.
         dc_out.set_low();
         spi_tx.write(&[0x22]).await.ok();
         dc_out.set_high();
-        spi_tx.write(&[0xB1]).await.ok();
+        spi_tx.write(&[0x91]).await.ok();
         // 0x20: Master Activation — BUSY goes HIGH while the controller loads the OTP
         // zone.
         dc_out.set_low();
@@ -314,9 +376,24 @@ pub async fn init_epd<'a>(
         );
     }
 
+    // Sanity-check OTP probe: if every band-LUT is byte-identical to
+    // band 0, the probe stalled (temperature write didn't change the
+    // OTP zone, BUSY race, etc.) and the per-temperature lookup is
+    // effectively single-LUT.  Panel will still drive but contrast /
+    // ghosting won't track temperature.
+    let all_identical = (1..LUT_TABLE_SIZE).all(|i| lut_table[i] == lut_table[0]);
+    if all_identical {
+        defmt::panic!(
+            "EPD OTP probe failed: all {} bands identical. lut[0..10] = {=[u8]:#04x}",
+            LUT_TABLE_SIZE,
+            lut_table[0][..10],
+        );
+    }
+
     // Build the SPI bus.
     let mut cfg = Config::default();
-    cfg.frequency = Frequency::M1;
+    // 8 MHz SCLK — see note in the OTP-probe SPI config above.
+    cfg.frequency = Frequency::M16;
     let bus = Spim::new_txonly(spi, Irqs, sck_pin, mosi_pin, cfg);
 
     // Initialize GPIO pins.
@@ -355,6 +432,26 @@ pub async fn init_epd<'a>(
             ssd1675::display::DisplayVariant::Ssd1675 => "SSD1675 (7-byte row LUT)",
         }
     );
+
+    // DIAG (temperature-compensation analysis): dump every probed band's
+    // full 107-byte OTP LUT + its frame count.  Lets us see exactly how the
+    // OTP encodes temperature across bands — waveform bytes, TP timing
+    // region, and the voltage trailer (VSH1/VSH2/VSL/VCOM).  band i = (-10 +
+    // 4*i) °C.  One-shot at boot; capture with `probe-rs run` from reset.
+    for i in 0..LUT_TABLE_SIZE {
+        let frames = ssd1675::waveform_frames(&lut_table[i], variant);
+        defmt::info!(
+            "LUT band {=usize:02} ({=i32} C) {=u32} frames: {=[u8]:#04x}",
+            i,
+            -10 + 4 * i as i32,
+            frames,
+            lut_table[i][..],
+        );
+        // Throttle: each line is a ~107-byte defmt frame; bursting all 16 in
+        // ~2 ms overruns the RTT buffer and the host drops the head (bands
+        // 0..8). 80 ms/line lets RTT drain so every band is captured.
+        Timer::after_millis(80).await;
+    }
 
     Ok(gfx)
 }
