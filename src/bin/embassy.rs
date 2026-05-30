@@ -558,23 +558,17 @@ async fn display_loop(
             health_err!(epd, "Failed to draw graphics");
         }
 
-        // Mini-games set `FULL_REFRESH_PENDING` on close so the next
-        // refresh clears residual ghosting from many fast updates.
-        // Consume the flag with `swap` so the upgrade applies once.
-        // SSD1675A path routes that through `force_full_refresh`
-        // (partial_state-aware, drives every pixel via OTP LUT);
-        // SSD1675B path uses `update_tc` (red banner needs tri-color
-        // drive — Mode1 BW LUT skips red).
-        // Screen switch → ghosting from the outgoing screen lingers
-        // if we run a partial.  Force a full refresh once per
-        // transition.  First iteration after boot (last_screen ==
-        // 0xFF) skips since boot already drove a clean frame.
-        // Within-screen redraws (menu scroll, watch tick, etc.)
-        // stay on the partial path even on the Name screen — the
-        // red banner only needs full drive on transitions in,
-        // which the screen_changed branch already handles.
+        // Screen switches and game menu open/close redraw the WHOLE frame
+        // as a partial (mark every pixel dirty) rather than running a full
+        // OTP refresh.  Mini-games / menus set `FULL_REFRESH_PENDING` on
+        // open and close; we consume it with `swap` so the redraw applies
+        // once.  The expensive full refresh is now promoted automatically
+        // inside `update_partial` once the cumulative changed-pixel counter
+        // reaches `full_after_screens` (5 screens) — see `should_force_full`.
+        // First iteration after boot (last_screen == 0xFF) skips since boot
+        // already drove a clean frame.
         let screen_changed = last_screen != 0xFF && last_screen != active_screen;
-        let do_full = bornhack_aegg::FULL_REFRESH_PENDING
+        let mark_all = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
             || screen_changed;
 
@@ -604,6 +598,12 @@ async fn display_loop(
             let black_snapshot = &*black_buf;
             let red_snapshot = &*red_buf;
             ssd1675::partial::sync_from_planes(partial_state, black_snapshot, red_snapshot);
+            // Screen switch / menu open-close → redraw every pixel this
+            // refresh (full-frame partial).  Done after sync so pending
+            // already holds the new screen's content.
+            if mark_all {
+                partial_state.mark_all_dirty();
+            }
         }
 
         // NoOp skip: when the partial path would have nothing to drive
@@ -616,7 +616,6 @@ async fn display_loop(
         // status LED — making the device look like it's continuously
         // refreshing even when nothing is changing.
         let partial_idle = use_partial_path
-            && !do_full
             && partial_state.bbox_of_dirty().is_none();
 
         let sprite_advance = if partial_idle {
@@ -628,34 +627,12 @@ async fn display_loop(
                     let _ = display.reset().await;
                     let speed = bornhack_aegg::fw::epd::current_lut_speed();
                     if use_partial_path {
-                        if do_full {
-                            // Full unpatched OTP tri-color refresh on
-                            // screen transitions — known-good baseline.
-                            // After it lands, sync the partial-state
-                            // shadow to pending so the next delta
-                            // refresh sees the correct baseline.
-                            // DIAG (refresh-budget tune): log selected temp
-                            // band, raw + lut_speed-scaled waveform frame
-                            // count, and measured wall time.  scaled_frames
-                            // vs wall_ms gives the panel frame period and
-                            // reveals how much of the ~10s is waveform vs
-                            // SPI/overhead — drives the ≤2s trim target.
-                            let band = display.active_band_index();
-                            let raw_frames = display.full_lut_frames();
-                            let scaled_frames = raw_frames as u64 * speed as u64 / 100;
-                            let t0 = embassy_time::Instant::now();
-                            let _ = display.update_tc(speed).await;
-                            let wall_ms = t0.elapsed().as_millis();
-                            defmt::info!(
-                                "epd full: band={=usize} raw_frames={=u32} scaled_frames={=u64} speed={=u8} wall={=u64}ms",
-                                band, raw_frames, scaled_frames, speed, wall_ms
-                            );
-                            partial_state.assume_panel_matches_pending();
-                        } else {
-                            let _ = display.update_partial(partial_state, speed).await;
-                        }
-                    } else if do_full {
-                        let _ = display.update_tc(speed).await;
+                        // Single delta path.  `update_partial` drives only the
+                        // dirty pixels (the whole frame after a mark_all_dirty
+                        // screen switch / menu) and auto-promotes to a full OTP
+                        // refresh once the cumulative changed-pixel counter
+                        // reaches `full_after_screens` (5 screens).
+                        let _ = display.update_partial(partial_state, speed).await;
                     } else {
                         let _ = display.update_bw(UpdateMode::Mode1, speed).await;
                     }
@@ -765,7 +742,9 @@ async fn wait_display_event(
                         }
                         _ => 10,
                     };
-                    Timer::after_secs(interval_secs.max(3)).await;
+                    // Floor at 7 s so an animation frame can't fire mid-refresh
+                    // and interrupt a slow tri-color (red) sweep.
+                    Timer::after_secs(interval_secs.max(7)).await;
                 }
             } else {
                 core::future::pending::<()>().await;

@@ -371,12 +371,17 @@ static STATS_VIEW: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBo
 pub fn open(kind: ModalKind) {
     MODAL_POS.store(0, Ordering::Relaxed);
     MODAL_KIND.store(kind as u8, Ordering::Relaxed);
+    // Menu open → redraw the whole frame next refresh (grey-out overlay
+    // covers everything); avoids partial-delta artifacts at the overlay edge.
+    crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
 pub fn close() {
     STATS_VIEW.store(false, Ordering::Relaxed);
     MODAL_KIND.store(ModalKind::None as u8, Ordering::Relaxed);
     MODAL_POS.store(0, Ordering::Relaxed);
+    // Menu close → redraw the whole frame (remove the overlay cleanly).
+    crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
 pub fn is_open() -> bool {
