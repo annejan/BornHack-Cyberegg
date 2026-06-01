@@ -8,12 +8,15 @@ ELF_HWTEST  = target/thumbv7em-none-eabihf/release-hwtest/hwtest
 # App flash base matches the app slot in memory.x (ORIGIN in memory.x = 0xD000)
 FLASH_BASE = 0x0000D000
 
+# Firmware dir the auto-flasher (cyber-aegg-flasher) serves over WebUSB.
+FLASHER_FW_DIR = ../cyber-aegg-flasher/firmware
+
 .PHONY: fw fw-release fw-release-debug fw-game fw-game-release fw-mesh fw-mesh-release \
         fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
         sim flash flash-release flash-release-debug run-release-debug \
         flash-game flash-mesh \
         monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
-        fw-watch flash-watch
+        fw-watch flash-watch fw-bin-release
 
 # ---------- Full build (game + mesh) ----------
 
@@ -167,3 +170,13 @@ dfu-flash-release:
 	cargo fw-release
 	arm-none-eabi-objcopy -O binary $(ELF_REL) $(BIN_REL)
 	dfu-util -w -D $(BIN_REL)
+
+# Build the release .bin and drop it in the auto-flasher's firmware dir so
+# cyber-aegg-flasher serves it for WebUSB DFU. Does not flash anything.
+fw-bin-release:
+	cargo fw-release
+	arm-none-eabi-objcopy -O binary $(ELF_REL) $(BIN_REL)
+	mkdir -p $(FLASHER_FW_DIR)
+	cp $(BIN_REL) $(FLASHER_FW_DIR)/cyber-aegg.bin
+	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+	@echo "Wrote $(FLASHER_FW_DIR)/cyber-aegg.bin"

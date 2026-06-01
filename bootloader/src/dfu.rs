@@ -9,7 +9,7 @@
 //! Triggered by holding execute + cancel + fire at boot. Erases the entire
 //! QSPI flash chip (ZD25WQ16C) using blocking SPI commands, then resets.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use crate::nvmc;
 
@@ -30,6 +30,9 @@ embassy_nrf::bind_interrupts!(pub struct UsbIrqs {
 pub static DFU_STATE: AtomicU8 = AtomicU8::new(2 /* Idle */);
 /// Set by the handler when the manifest GETSTATUS is sent; signals reset.
 pub static DFU_RESET_PENDING: AtomicBool = AtomicBool::new(false);
+/// Incremented by the MSC backend on every FAT12 block write.  The LED
+/// monitor samples it to detect "files are being copied" (solid blue).
+pub static MSC_WRITE_TICK: AtomicU32 = AtomicU32::new(0);
 
 // ---------------------------------------------------------------------------
 // DFU state machine types (DFU 1.1 spec §A.1 / §A.2)
@@ -238,6 +241,14 @@ pub async fn dfu_task(
     led_red_pin:   embassy_nrf::Peri<'static, embassy_nrf::gpio::AnyPin>,
     led_blue_pin:  embassy_nrf::Peri<'static, embassy_nrf::gpio::AnyPin>,
     led_green_pin: embassy_nrf::Peri<'static, embassy_nrf::gpio::AnyPin>,
+    // QSPI flash for the concurrent USB MSC interface (FAT12 provisioning).
+    qspi: embassy_nrf::Peri<'static, embassy_nrf::peripherals::QSPI>,
+    sck:  embassy_nrf::Peri<'static, embassy_nrf::peripherals::P0_21>,
+    csn:  embassy_nrf::Peri<'static, embassy_nrf::peripherals::P0_25>,
+    io0:  embassy_nrf::Peri<'static, embassy_nrf::peripherals::P0_20>,
+    io1:  embassy_nrf::Peri<'static, embassy_nrf::peripherals::P0_24>,
+    io2:  embassy_nrf::Peri<'static, embassy_nrf::peripherals::P0_22>,
+    io3:  embassy_nrf::Peri<'static, embassy_nrf::peripherals::P0_23>,
 ) {
     use embassy_nrf::gpio::{Level, Output, OutputDrive};
     use embassy_nrf::usb::Driver;
@@ -251,18 +262,42 @@ pub async fn dfu_task(
     let mut led_blue  = Output::new(led_blue_pin,  Level::High, OutputDrive::Standard);
     let mut led_green = Output::new(led_green_pin, Level::High, OutputDrive::Standard);
 
+    // Bring up the QSPI flash and ensure the FAT12 partition exists, so the
+    // MSC interface exposes the same volume the app uses (CYBR + device-ID
+    // label).  On failure the MSC endpoints still enumerate but I/O errors —
+    // DFU is on separate endpoints and unaffected.
+    match crate::flash::init(qspi, sck, csn, io0, io1, io2, io3).await {
+        Ok(()) => {
+            if let Err(e) = crate::storage::format_if_needed().await {
+                defmt::warn!("FAT12 format_if_needed failed: {:?}", e);
+            }
+        }
+        Err(id) => defmt::warn!(
+            "QSPI init failed (JEDEC {=[u8]:02X}) — MSC volume unavailable",
+            id
+        ),
+    }
+
     let driver = Driver::new(usbd, UsbIrqs, HardwareVbusDetect::new(UsbIrqs));
 
     let mut usb_config = embassy_usb::Config::new(0x1915, 0x521f);
     usb_config.manufacturer = Some("Badge.Team");
     usb_config.product = Some("CyberAegg Bootloader");
     usb_config.max_packet_size_0 = 64;
+    // Composite device: DFU (interface 0) + MSC (interface 1).  Use the
+    // IAD/Misc device class so hosts bind both function drivers.
+    usb_config.device_class = 0xEF;
+    usb_config.device_sub_class = 0x02;
+    usb_config.device_protocol = 0x01;
+    usb_config.composite_with_iads = true;
 
     let mut config_descriptor = [0u8; 256];
     let mut bos_descriptor    = [0u8; 256];
     let mut control_buf       = [0u8; BLOCK_SIZE + 64];
 
     let mut handler = DfuHandler::new(app_start);
+    // Declared before `builder` so it outlives the MSC class it backs.
+    let mut msc_state = crate::msc::MscState::new();
 
     let mut builder = Builder::new(
         driver,
@@ -292,60 +327,82 @@ pub async fn dfu_task(
         );
     }
 
+    // Register the USB Mass Storage interface (BOT/SCSI) for FAT12 access
+    // concurrently with DFU.  Bulk endpoints — no clash with DFU's ep0.
+    let mut msc = crate::msc::MscClass::new(&mut builder, &mut msc_state, 64);
+    let block_dev = crate::storage::FatBlockDevice;
+
     builder.handler(&mut handler);
     let mut usb = builder.build();
 
-    embassy_futures::select::select(
-        usb.run(),
-        async {
-            loop {
-                if DFU_RESET_PENDING.load(Ordering::Acquire) {
-                    Timer::after_millis(100).await;
-                    break;
-                }
-                match DFU_STATE.load(Ordering::Acquire) {
-                    3 | 5 => {
-                        // DnloadSync | DnloadIdle — solid blue.
-                        led_red.set_high();
-                        led_blue.set_low();
-                    }
-                    6 | 8 => {
-                        // ManifestSync | ManifestWaitReset — solid green.
-                        led_blue.set_high();
-                        led_green.set_low();
-                    }
-                    10 => {
-                        // Error — rapid red blink.
-                        led_blue.set_high();
-                        led_green.set_high();
-                        led_red.toggle();
-                        Timer::after_millis(100).await;
-                    }
-                    _ => {
-                        // Idle/waiting — slow red blink.
-                        led_blue.set_high();
-                        led_red.toggle();
-                        Timer::after_millis(500).await;
-                    }
-                }
-                Timer::after_millis(10).await;
+    // LED monitor (LEDs are active-low: set_low() = on, set_high() = off):
+    //   - solid BLUE  while DFU is downloading firmware OR files are being
+    //                 copied to the FAT12 partition
+    //   - solid GREEN once DFU has finished and copying has gone idle
+    //                 (provisioning complete — power-cycle to boot the app)
+    //   - rapid RED   blink on DFU error
+    //   - slow  RED   blink while idle/waiting (nothing flashed or copied yet)
+    //
+    // We deliberately do NOT auto-reset on DFU completion: a reset would tear
+    // down the USB mass-storage volume mid-copy.  The badge holds solid green
+    // and is power-cycled by the operator once provisioning is done.
+    let monitor = async {
+        const LOOP_MS: u64 = 100;
+        // ~500 ms with no MSC writes counts as "copy idle".
+        const COPY_IDLE_TICKS: u32 = 5;
+
+        let mut last_tick = MSC_WRITE_TICK.load(Ordering::Acquire);
+        let mut copy_idle = COPY_IDLE_TICKS;
+        let mut dfu_done = false;
+
+        loop {
+            // FAT12 copy activity since the last sample?
+            let tick = MSC_WRITE_TICK.load(Ordering::Acquire);
+            if tick != last_tick {
+                last_tick = tick;
+                copy_idle = 0;
+            } else if copy_idle < COPY_IDLE_TICKS {
+                copy_idle += 1;
             }
-        },
-    )
-    .await;
+            let copying = copy_idle < COPY_IDLE_TICKS;
 
-    defmt::info!("DFU complete — resetting");
+            let dfu = DFU_STATE.load(Ordering::Acquire);
+            if DFU_RESET_PENDING.load(Ordering::Acquire) || dfu == 6 || dfu == 8 {
+                dfu_done = true;
+            }
+            let dfu_active = dfu == 3 || dfu == 5;
 
-    led_blue.set_high();
-    led_red.set_high();
-    for _ in 0..3 {
-        led_green.set_low();
-        Timer::after_millis(150).await;
-        led_green.set_high();
-        Timer::after_millis(150).await;
-    }
+            if dfu == 10 {
+                // Error — rapid red blink.
+                led_blue.set_high();
+                led_green.set_high();
+                led_red.toggle();
+                Timer::after_millis(100).await;
+            } else if dfu_active || copying {
+                // Flashing firmware or copying files — solid blue.
+                led_red.set_high();
+                led_green.set_high();
+                led_blue.set_low();
+                Timer::after_millis(LOOP_MS).await;
+            } else if dfu_done {
+                // Provisioning finished, nothing copying — solid green.
+                led_red.set_high();
+                led_blue.set_high();
+                led_green.set_low();
+                Timer::after_millis(LOOP_MS).await;
+            } else {
+                // Idle/waiting — slow red blink.
+                led_blue.set_high();
+                led_green.set_high();
+                led_red.toggle();
+                Timer::after_millis(500).await;
+            }
+        }
+    };
 
-    cortex_m::peripheral::SCB::sys_reset();
+    // Run the USB device stack, the MSC class, and the LED monitor forever.
+    // None of these futures completes, so the task never returns (no reset).
+    embassy_futures::join::join3(usb.run(), msc.run(&block_dev), monitor).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -372,11 +429,10 @@ pub fn factory_reset_and_reset(
 
     let mut led_red = Output::new(led_red_pin, Level::Low, OutputDrive::Standard);
 
-    // QspiIrqs — only blocking_custom_instruction is used, so the interrupt
-    // is never actually fired, but the type is still required by the constructor.
-    embassy_nrf::bind_interrupts!(struct QspiIrqs {
-        QSPI => embassy_nrf::qspi::InterruptHandler<embassy_nrf::peripherals::QSPI>;
-    });
+    // Reuse the single QSPI interrupt binding from the flash module — binding
+    // QSPI twice would emit a duplicate `QSPI` ISR symbol (link error).  Only
+    // blocking_custom_instruction is used here, so the ISR never fires.
+    use crate::flash::QspiIrqs;
 
     let mut cfg = qspi::Config::default();
     cfg.capacity = 2 * 1024 * 1024; // ZD25WQ16C = 2 MiB
