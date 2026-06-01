@@ -5,6 +5,12 @@ mod board;
 mod nvmc;
 #[cfg(feature = "dfu")]
 mod dfu;
+#[cfg(feature = "dfu")]
+mod flash;
+#[cfg(feature = "dfu")]
+mod msc;
+#[cfg(feature = "dfu")]
+mod storage;
 
 #[cfg(feature = "defmt")]
 use defmt_rtt as _;
@@ -22,6 +28,9 @@ unsafe extern "C" {
 // App validation
 // ---------------------------------------------------------------------------
 
+/// Number of leading app bytes probed to decide if the slot is blank.
+const PROBE_BYTES: u32 = 64;
+
 /// Returns true if the vector table at `app_addr` looks like a valid Cortex-M
 /// image: SP within RAM and reset vector is an odd (Thumb) address in flash.
 fn app_is_valid(app_addr: u32) -> bool {
@@ -31,6 +40,13 @@ fn app_is_valid(app_addr: u32) -> bool {
     let sp_ok = (0x2000_0000..=0x2004_0000).contains(&sp);
     let rv_ok = rv & 1 == 1 && (app_addr..0x0010_0000).contains(&(rv & !1));
     sp_ok && rv_ok
+}
+
+/// Returns true if the app slot looks erased: the first [`PROBE_BYTES`] of the
+/// boot vector are all `0xFF` (blank flash). A badge with no firmware should
+/// drop straight into DFU mode on power-up so it can be flashed.
+fn app_is_empty(app_addr: u32) -> bool {
+    (0..PROBE_BYTES).all(|i| unsafe { core::ptr::read_volatile((app_addr + i) as *const u8) } == 0xFF)
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +105,13 @@ fn main() -> ! {
         #[cfg(not(feature = "with-qspi-flash"))]
         let factory_reset = false;
 
-        let dfu_requested = btn_exe.is_low() && !factory_reset;
+        // Enter DFU if the execute button is held OR the app slot is blank
+        // (first 64 bytes all 0xFF → no firmware to boot). Checked on every
+        // power-up so a freshly-rolled-out badge auto-enters flash mode, while
+        // staying out of the way for any badge that already has firmware
+        // (including SWD/probe-rs flashes). Factory-reset combo wins.
+        let app_empty = app_is_empty(app_start);
+        let dfu_requested = (btn_exe.is_low() || app_empty) && !factory_reset;
         drop(btn_exe);
 
         #[cfg(feature = "with-qspi-flash")]
@@ -103,7 +125,11 @@ fn main() -> ! {
         }
 
         if dfu_requested {
-            defmt::info!("btn_exe held — entering USB DFU mode");
+            if app_empty {
+                defmt::info!("app slot empty (0xFF boot vector) — entering USB DFU mode");
+            } else {
+                defmt::info!("btn_exe held — entering USB DFU mode");
+            }
             use static_cell::StaticCell;
             static EXECUTOR: StaticCell<embassy_executor::Executor> = StaticCell::new();
             let executor = EXECUTOR.init(embassy_executor::Executor::new());
@@ -115,6 +141,8 @@ fn main() -> ! {
                         board!(p, led_red).into(),
                         board!(p, led_blue).into(),
                         board!(p, led_green).into(),
+                        p.QSPI,
+                        p.P0_21, p.P0_25, p.P0_20, p.P0_24, p.P0_22, p.P0_23,
                     ))
                     .unwrap();
             });
