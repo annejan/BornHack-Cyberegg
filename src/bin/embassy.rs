@@ -629,11 +629,11 @@ async fn display_loop(
                     let _ = display.reset().await;
                     let speed = bornhack_aegg::fw::epd::current_lut_speed();
                     if use_partial_path {
-                        // Single delta path.  `update_partial` drives only the
-                        // dirty pixels (the whole frame after a mark_all_dirty
-                        // screen switch / menu) and auto-promotes to a full OTP
-                        // refresh once the cumulative changed-pixel counter
-                        // reaches `full_after_screens` (5 screens).
+                        // Delta path for both A and B, driven by each panel's
+                        // OWN probed OTP.  Normal refreshes use the no-invert
+                        // patched LUT (select_no_invert) → non-flashing; the
+                        // path auto-promotes to a full (flashing) OTP refresh
+                        // once the changed-pixel counter trips, to de-ghost.
                         let _ = display.update_partial(partial_state, speed).await;
                     } else {
                         let _ = display.update_bw(UpdateMode::Mode1, speed).await;
