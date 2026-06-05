@@ -114,12 +114,13 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(200).await;
     spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
 
-    // Boot breadcrumb #1 — red 50% duty.  The initial GPIO blink above
-    // confirms the LEDs work; this then keeps a steady "alive, booting"
-    // pulse on while the rest of init runs (KV, watch, sprites, mesh,
-    // EPD).  Stays on until EPD init below; the ICS-import blue/green
-    // pulses overlay it harmlessly.
+    // Boot breadcrumb #1 — ORANGE 50% duty (red + green together).  Orange,
+    // not red, so the boot blink isn't confused with DFU mode's red blink.
+    // Keeps a steady "alive, booting" pulse while the rest of init runs (KV,
+    // watch, sprites, mesh, EPD).  Both colours share the same Duty50 phase so
+    // they're on/off in lockstep → orange.  Cleared at EPD init below.
     led::set_led(&led::LED_RED, led::LedState::Duty50);
+    led::set_led(&led::LED_GREEN, led::LedState::Duty50);
 
     // ── Signed-channel CSPRNG seed ───────────────────────────────────────
     // Draw 32 bytes from the on-chip TRNG via direct register access
@@ -179,11 +180,12 @@ async fn main(spawner: Spawner) {
     let mut partial_state = bornhack_aegg::fw::epd::partial_state_take(dims.rows, dims.cols);
     partial_state.clear_to(ssd1675::graphics::Color::White);
 
-    // Boot breadcrumb #2 — switch from red to blue while the boot
+    // Boot breadcrumb #2 — switch from orange to blue while the boot
     // tri-color refresh + remaining task spawns finish.  This is the
     // longest dark phase in the original boot, ~13s, so a colour change
     // here gives users a "no, it's not stuck" signal partway through.
     led::set_led(&led::LED_RED, led::LedState::Off);
+    led::set_led(&led::LED_GREEN, led::LedState::Off);
     led::set_led(&led::LED_BLUE, led::LedState::Duty50);
 
     // Boot-time full blank: clear both planes to white and push with the
@@ -620,7 +622,7 @@ async fn display_loop(
 
         let sprite_advance = if partial_idle {
             last_screen = active_screen;
-            wait_display_event(button_rcvr, active_screen).await
+            wait_display_event(button_rcvr, active_screen, true).await
         } else {
             match select(
                 async {
@@ -638,20 +640,27 @@ async fn display_loop(
                     }
                     let _ = display.deep_sleep().await;
                 },
-                wait_display_event(button_rcvr, active_screen),
+                // `allow_sprite = false`: the animation frame timer must NOT
+                // cancel an in-flight refresh — only buttons/signals do (so
+                // menus stay responsive).  A slow red/full sweep therefore
+                // plays to completion instead of being interrupted mid-wave,
+                // which is what caused the ghosting.
+                wait_display_event(button_rcvr, active_screen, false),
             )
             .await
             {
                 Either::First(_) => {
-                    // Update finished — commit the screen-transition
-                    // tracker so next iteration's screen_changed compares
-                    // against what was actually driven.  If we'd done
-                    // this before the select, a cancellation would lose
-                    // the pending full-refresh request.
+                    // Refresh finished uninterrupted.  Commit the screen-
+                    // transition tracker, then wait the frame timer
+                    // (`allow_sprite = true`).  The pet animation advances a
+                    // frame only here — after BOTH the refresh completed AND
+                    // the frame timer elapsed — so a frame never advances
+                    // mid-sweep.  A button during this wait redraws without
+                    // advancing.
                     last_screen = active_screen;
-                    wait_display_event(button_rcvr, active_screen).await
+                    wait_display_event(button_rcvr, active_screen, true).await
                 }
-                Either::Second(sprite) => sprite, // interrupted by event — last_screen stays
+                Either::Second(_) => false, // button/signal interrupted the refresh — redraw, no advance
             }
         };
 
@@ -696,13 +705,20 @@ async fn wait_display_event(
         2,
     >,
     active_screen: u8,
+    // When false the sprite frame timer is suppressed (treated as `pending`)
+    // so this waiter only returns on real interrupts (buttons/signals). Used
+    // while a refresh is in flight so the frame timer can't cancel it.
+    allow_sprite: bool,
 ) -> bool {
     use embassy_futures::select::{Either, Either3, select, select3};
 
     #[cfg(feature = "game")]
-    let sprite_active = active_screen == bornhack_aegg::SCREEN_GAME
+    let sprite_active = allow_sprite
+        && active_screen == bornhack_aegg::SCREEN_GAME
         && (bornhack_aegg::game::sprite_loader::frame_count() > 0
             || bornhack_aegg::game::lifecycle::is_started());
+    #[cfg(not(feature = "game"))]
+    let _ = allow_sprite;
 
     loop {
         #[cfg(feature = "game")]
@@ -740,11 +756,14 @@ async fn wait_display_event(
                             let total_secs = remaining_ticks * 10;
                             total_secs / frame_count
                         }
-                        _ => 10,
+                        _ => 3,
                     };
-                    // Floor at 7 s so an animation frame can't fire mid-refresh
-                    // and interrupt a slow tri-color (red) sweep.
-                    Timer::after_secs(interval_secs.max(7)).await;
+                    // Minimum pacing between frames. The refresh itself now
+                    // guarantees the full waveform played (the frame timer no
+                    // longer cancels an in-flight refresh — see the display
+                    // loop), so this only sets idle cadence, not anti-ghost
+                    // timing. Floor 2 s.
+                    Timer::after_secs(interval_secs.max(2)).await;
                 }
             } else {
                 core::future::pending::<()>().await;
