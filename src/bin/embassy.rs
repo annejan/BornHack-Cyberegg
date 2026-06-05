@@ -192,6 +192,16 @@ async fn main(spawner: Spawner) {
     // tri-color waveform so red ink particles get cycled too.  Wipes any
     // residual ghosting from the previous power-on session before the
     // first fast-LUT refresh paints over it.
+    // Temperature BEFORE the first refresh: the boot clear (and every refresh
+    // after) must pick the panel's real LUT band, not the 20 °C default — a
+    // cold default over-drives a warm panel.  Safe to read TEMP directly here:
+    // MPSL / SoftDevice isn't up yet, so it owns nothing.
+    let _ = bornhack_aegg::fw::temperature::read_and_cache().await;
+    let panel_c10 = bornhack_aegg::fw::epd::panel_temp_c10(display.variant());
+    if panel_c10 != i16::MIN {
+        display.set_active_temperature(panel_c10);
+    }
+
     display.clear(Color::White);
     let _ = display.reset().await;
     let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;

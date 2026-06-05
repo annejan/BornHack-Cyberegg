@@ -31,6 +31,9 @@ pub async fn read_and_cache() -> i16 {
     let mut sensor = Temp::new(unsafe { peripherals::TEMP::steal() }, Irqs);
     let t = sensor.read().await.to_num::<i16>();
     CACHED_TEMP_C10.store(t * 10, Ordering::Relaxed);
+    // Mark fresh so the mesh-build `refresh_if_stale` doesn't immediately
+    // re-read via MPSL (not necessarily up yet) on the first loop iteration.
+    LAST_REFRESH_S.store(Instant::now().as_secs() as u32, Ordering::Relaxed);
     t
 }
 
