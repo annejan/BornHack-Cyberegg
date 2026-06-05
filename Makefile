@@ -8,15 +8,20 @@ ELF_HWTEST  = target/thumbv7em-none-eabihf/release-hwtest/hwtest
 # App flash base matches the app slot in memory.x (ORIGIN in memory.x = 0xD000)
 FLASH_BASE = 0x0000D000
 
-# Firmware dir the auto-flasher (cyber-aegg-flasher) serves over WebUSB.
-FLASHER_FW_DIR = ../cyber-aegg-flasher/firmware
+# Output dir (in this firmware project) for built flasher artifacts. The
+# flashers are pointed here explicitly via their own path arguments — no
+# cross-project directory coupling.
+FW_OUT = firmware
+
+# Bootloader release ELF the SWD mass-programmer (mass-flash-bl) flashes.
+BL_ELF = bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 
 .PHONY: fw fw-release fw-release-debug fw-game fw-game-release fw-mesh fw-mesh-release \
         fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
         sim flash flash-release flash-release-debug run-release-debug \
         flash-game flash-mesh \
         monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
-        fw-watch flash-watch fw-bin-release
+        fw-watch flash-watch fw-bin-release bl-bin
 
 # ---------- Full build (game + mesh) ----------
 
@@ -152,6 +157,19 @@ bl-monitor:
 bl:
 	cd bootloader && cargo bl
 
+# Build the bootloader release artifact for the SWD mass-programmer
+# (../mass-flash-bl). probe-rs flashes the ELF directly (it
+# carries its own load addresses), so the ELF is what mass-flash-bl consumes;
+# a raw .bin is also emitted for convenience.
+bl-bin:
+	cd bootloader && cargo bl
+	@mkdir -p $(FW_OUT)
+	cp $(BL_ELF) $(FW_OUT)/nrf-aegg-bootloader.elf
+	arm-none-eabi-objcopy -O binary $(BL_ELF) $(FW_OUT)/nrf-aegg-bootloader.bin
+	@arm-none-eabi-size $(BL_ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+	@echo "bootloader ELF (pass to mass-flash-bl -f): $(abspath $(FW_OUT)/nrf-aegg-bootloader.elf)"
+	@echo "raw bin (optional):                        $(abspath $(FW_OUT)/nrf-aegg-bootloader.bin)"
+
 flash-bl:
 	probe-rs erase --chip nRF52840_xxAA
 	cd bootloader && cargo bl
@@ -175,8 +193,7 @@ dfu-flash-release:
 # cyber-aegg-flasher serves it for WebUSB DFU. Does not flash anything.
 fw-bin-release:
 	cargo fw-release
-	arm-none-eabi-objcopy -O binary $(ELF_REL) $(BIN_REL)
-	mkdir -p $(FLASHER_FW_DIR)
-	cp $(BIN_REL) $(FLASHER_FW_DIR)/cyber-aegg.bin
+	@mkdir -p $(FW_OUT)
+	arm-none-eabi-objcopy -O binary $(ELF_REL) $(FW_OUT)/cyber-aegg.bin
 	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
-	@echo "Wrote $(FLASHER_FW_DIR)/cyber-aegg.bin"
+	@echo "app bin (pass to the DFU flasher): $(abspath $(FW_OUT)/cyber-aegg.bin)"

@@ -8,3 +8,8 @@ docs
 CLAUDE.MD
 *.txt
 .rules
+
+# Built flasher artifacts (see firmware/README.md); keep the dir, not the binaries.
+firmware/*
+!firmware/.gitkeep
+!firmware/README.md
