@@ -2,6 +2,22 @@
 
 Embassy-based async firmware for the BornHack CyberÆgg badge (nRF52840).
 
+## First use (badge holders)
+
+If you just got a badge, start here:
+
+| Document | Description |
+| -------- | ----------- |
+| **[QUICKSTART.md](QUICKSTART.md)** | Power on, pair, set the time, charge, recover, USB drag-drop |
+| **[POCKET_CARD.md](POCKET_CARD.md)** | One-page printable reference — buttons, LEDs, combos |
+| **[USER_WATCH.md](USER_WATCH.md)** | Watch face, alarms, calendar, time sync |
+| **[USER_GAMES.md](USER_GAMES.md)** | BornPets virtual pet + seven mini-games |
+| **[USER_MESH.md](USER_MESH.md)** | LoRa mesh: adverts, PMs, channels, identity QR |
+| **[USER_CONTACTS.md](USER_CONTACTS.md)** | Contacts list, filters, saving, blocking |
+| **[USER_NFC.md](USER_NFC.md)** | NFC station taps via the BadgeCtl app |
+
+The rest of this README is developer-facing.
+
 ## Hardware
 
 | Component  | Part              | Interface      |
