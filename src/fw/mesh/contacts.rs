@@ -1167,8 +1167,48 @@ impl ContactStore {
             },
         };
         let capacity = (meta.capacity as usize).clamp(1, MAX_CONTACTS);
-        let target = meta.head as usize % capacity;
         let contact_hash = contact.pub_key[0];
+
+        // Select the destination slot per the documented policy in a single
+        // pass: prefer a free/deleted slot; otherwise evict the oldest
+        // non-favourite by `lastmod`; only when every live slot is a favourite
+        // do we evict the oldest favourite. (Previously this blindly took
+        // `head % capacity`, which could silently overwrite a favourite or a
+        // live contact while deleted holes sat unused.)
+        let mut free_slot: Option<usize> = None;
+        let mut oldest_nonfav: Option<(usize, u32)> = None;
+        let mut oldest_fav: Option<(usize, u32)> = None;
+        for slot in 0..capacity {
+            let mut sb = [0u8; CONTACT_SIZE];
+            let live = match self.kv.get(slot_key(slot).as_str(), &mut sb).await {
+                Ok(n) if n == CONTACT_SIZE => {
+                    Contact::from_bytes(sb[..CONTACT_SIZE].try_into().unwrap())
+                        .filter(|c| !c.is_deleted())
+                }
+                _ => None,
+            };
+            match live {
+                None => {
+                    if free_slot.is_none() {
+                        free_slot = Some(slot);
+                    }
+                }
+                Some(c) if c.is_favorite() => {
+                    if oldest_fav.is_none_or(|(_, lm)| c.lastmod < lm) {
+                        oldest_fav = Some((slot, c.lastmod));
+                    }
+                }
+                Some(c) => {
+                    if oldest_nonfav.is_none_or(|(_, lm)| c.lastmod < lm) {
+                        oldest_nonfav = Some((slot, c.lastmod));
+                    }
+                }
+            }
+        }
+        let target = free_slot
+            .or(oldest_nonfav.map(|(s, _)| s))
+            .or(oldest_fav.map(|(s, _)| s))
+            .unwrap_or(0);
 
         // Read the incumbent (if any) so we can unlink its index entries
         // before overwriting the slot.
