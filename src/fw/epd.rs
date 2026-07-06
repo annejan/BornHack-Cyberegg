@@ -382,8 +382,12 @@ pub async fn init_epd<'a>(
     // ghosting won't track temperature.
     let all_identical = (1..LUT_TABLE_SIZE).all(|i| lut_table[i] == lut_table[0]);
     if all_identical {
-        defmt::panic!(
-            "EPD OTP probe failed: all {} bands identical. lut[0..10] = {=[u8]:#04x}",
+        // A transient probe stall (BUSY race, OTP-load, temperature write not
+        // landing) must not brick the badge — the panel still drives off the
+        // single probed band, it just won't track temperature.  Warn and boot
+        // with the degraded (single-LUT) table instead of panicking.
+        defmt::warn!(
+            "EPD OTP probe: all {} bands identical — booting with single-LUT (no temp tracking). lut[0..10] = {=[u8]:#04x}",
             LUT_TABLE_SIZE,
             lut_table[0][..10],
         );

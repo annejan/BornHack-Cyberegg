@@ -141,6 +141,8 @@ pub fn init_ble(
     let mpsl =
         MPSL.init(nrf_mpsl::MultiprotocolServiceLayer::new(mpsl_p, BleIrqs, lfclk_cfg).unwrap());
     spawner.must_spawn(mpsl_task(mpsl));
+    // MPSL is up — the temperature module may now read via mpsl_temperature_get().
+    crate::fw::temperature::mark_mpsl_ready();
 
     let sdc_p = sdc::Peripherals::new(
         ppi_ch17, ppi_ch18, ppi_ch20, ppi_ch21, ppi_ch22, ppi_ch23, ppi_ch24, ppi_ch25, ppi_ch26,

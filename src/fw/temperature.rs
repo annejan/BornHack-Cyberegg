@@ -7,7 +7,7 @@
 //! only safe window to take a reading is at boot before MPSL initialises.
 //! Call [`read_and_cache`] once at startup; thereafter use [`last_c10`].
 
-use core::sync::atomic::{AtomicI16, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI16, AtomicU32, Ordering};
 
 use embassy_nrf::temp::Temp;
 use embassy_nrf::{bind_interrupts, peripherals};
@@ -41,6 +41,20 @@ pub async fn read_and_cache() -> i16 {
 /// or `i16::MIN` if [`read_and_cache`] has not been called yet.
 pub fn last_c10() -> i16 {
     CACHED_TEMP_C10.load(Ordering::Relaxed)
+}
+
+/// Set true once MPSL/SDC has been initialised (see [`mark_mpsl_ready`]).
+/// Until then `mpsl_temperature_get()` must NOT be called — on a
+/// HFXO-degraded boot `init_ble` is skipped entirely, so MPSL stays uninit
+/// and the FFI call would be UB.  `read_and_cache` still primes the cache at
+/// boot, so a badge that never brings up MPSL just keeps that value.
+#[cfg(feature = "mesh")]
+static MPSL_READY: AtomicBool = AtomicBool::new(false);
+
+/// Mark MPSL as initialised.  Call once from `init_ble`, after MPSL is up.
+#[cfg(feature = "mesh")]
+pub fn mark_mpsl_ready() {
+    MPSL_READY.store(true, Ordering::Relaxed);
 }
 
 /// Read the current temperature via MPSL (safe after MPSL init).
@@ -83,6 +97,13 @@ const STALE_AFTER_S: u32 = 5 * 60;
 pub fn refresh_if_stale() {
     #[cfg(feature = "mesh")]
     {
+        // Never touch MPSL before it's up.  On a HFXO-degraded boot init_ble
+        // is skipped, MPSL is never initialised, and mpsl_temperature_get()
+        // would be UB (MPSL assert -> panic -> WDT reset loop, or garbage LUT
+        // temperature).  Stay on the boot-cached value instead.
+        if !MPSL_READY.load(Ordering::Relaxed) {
+            return;
+        }
         let now = Instant::now().as_secs() as u32;
         let last = LAST_REFRESH_S.load(Ordering::Relaxed);
         if last == 0 || now.saturating_sub(last) >= STALE_AFTER_S {
