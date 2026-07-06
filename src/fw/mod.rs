@@ -14,6 +14,7 @@ pub mod iso14443;
 pub mod kv;
 pub mod led;
 pub mod nfct;
+pub mod pets_cfg;
 pub mod sponsors;
 pub mod storage;
 pub mod temperature;

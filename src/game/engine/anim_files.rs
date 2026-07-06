@@ -62,7 +62,7 @@ const HEX: &[u8; 16] = b"0123456789ABCDEF";
 ///
 /// Returns an 11-byte array: `"PPAAFF  PCX"`.
 pub fn build_filename(kind: PetKind, anim: DisplayAnim, frame: u8) -> [u8; 11] {
-    let pp = kind as u8;
+    let pp = kind.0;
     let aa = anim_id(anim);
     let ff = frame;
     [
@@ -152,7 +152,7 @@ pub fn anim_id_for(anim: DisplayAnim) -> u8 {
 /// `assets/to-badge/` on the simulator).  No frame `00` → returns 0
 /// → callers treat as "no animation available".
 pub fn frame_count(kind: PetKind, anim: DisplayAnim) -> u8 {
-    let pp = kind as u8;
+    let pp = kind.0;
     let aa = anim_id(anim);
     let prefix = [
         HEX[(pp >> 4) as usize],

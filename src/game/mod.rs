@@ -24,6 +24,7 @@ pub mod maze;
 pub mod modal;
 pub mod nav;
 pub mod nim;
+pub mod pet_registry;
 pub mod pet_select;
 pub mod realm_view;
 pub mod settings;

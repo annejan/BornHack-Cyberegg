@@ -28,36 +28,46 @@ pub use to_display::DisplayAnim;
 /// them up automatically.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
-#[repr(u8)]
-pub enum PetKind {
-    /// Pet kind 0 — formerly named `Snail`, renamed to Bartholomeus
-    /// when the snail artwork was reworked.  Persisted byte value
-    /// remains 0 so existing saves still load.
-    Bartholomeus = 0,
-    Cat = 1,
-    Slug = 2,
-}
+///
+/// Represented as a single byte — the sprite-prefix (`PP` in `PPAAFF.PCX`).
+/// The three built-ins are consts; extra pets can be installed at runtime
+/// from a `PETS.CFG` manifest on the USB partition (see
+/// [`crate::game::pet_registry`]) with no firmware reflash.  Persisted as
+/// this byte, so both existing and custom-pet saves round-trip.
+#[repr(transparent)]
+pub struct PetKind(pub u8);
 
+#[allow(non_upper_case_globals)]
 impl PetKind {
+    /// Pet kind 0 — formerly named `Snail`, renamed to Bartholomeus when the
+    /// snail artwork was reworked.  Persisted byte value remains 0 so existing
+    /// saves still load.
+    pub const Bartholomeus: PetKind = PetKind(0);
+    pub const Cat: PetKind = PetKind(1);
+    pub const Slug: PetKind = PetKind(2);
+
+    /// Reconstruct from the persisted / sprite-prefix byte.  Any byte is a
+    /// valid id; whether it resolves to a real pet is decided by the registry.
     pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Cat,
-            2 => Self::Slug,
-            _ => Self::Bartholomeus,
-        }
+        PetKind(v)
+    }
+
+    /// The sprite-prefix / persisted byte.
+    pub fn id(self) -> u8 {
+        self.0
     }
 
     /// Human-readable name for the selection screen and Unicorn Realm.
+    /// Resolves through the runtime registry (built-ins + `PETS.CFG` pets).
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Bartholomeus => "Bartholomeus",
-            Self::Cat => "Cat",
-            Self::Slug => "Slug",
-        }
+        crate::game::pet_registry::name_of(self.0)
     }
 
-    /// All available pet kinds, in order.
-    pub const ALL: &'static [PetKind] = &[PetKind::Bartholomeus, PetKind::Cat, PetKind::Slug];
+    /// All selectable pet kinds, in order — built-ins plus any installed via
+    /// `PETS.CFG`.  Falls back to the three built-ins before install.
+    pub fn roster() -> &'static [PetKind] {
+        crate::game::pet_registry::roster()
+    }
 }
 
 /// Lifecycle phase of the pet.
@@ -1326,7 +1336,7 @@ impl GameState {
         // Save tick (4 bytes).
         w32!(self.last_save_tick);
         // Pet kind (1 byte).
-        w8!(self.pet_kind as u8);
+        w8!(self.pet_kind.0);
         // Total: 66 bytes.
         b
     }
@@ -1506,7 +1516,7 @@ impl PetRecord {
         buf[6..8].copy_from_slice(&self.vitality.to_le_bytes());
         buf[8..10].copy_from_slice(&self.curiosity.to_le_bytes());
         buf[10..12].copy_from_slice(&self.resilience.to_le_bytes());
-        buf[12] = self.pet_kind as u8;
+        buf[12] = self.pet_kind.0;
         buf[13..25].copy_from_slice(&self.name);
         buf[25] = self.name_len;
     }

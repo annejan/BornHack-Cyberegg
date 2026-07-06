@@ -258,6 +258,9 @@ async fn main(spawner: Spawner) {
     {
         let mode = bornhack_aegg::game::settings::load_mode_from_kv().await;
         let _ = bornhack_aegg::fw::bornpets_cfg::load_and_install(mode).await;
+        // Register custom pets from PETS.CFG (if any) before the game reads
+        // the roster.  No file → built-in roster only.
+        bornhack_aegg::fw::pets_cfg::load_and_install().await;
         spawner.must_spawn(bornhack_aegg::game::settings::persister_task());
     }
 

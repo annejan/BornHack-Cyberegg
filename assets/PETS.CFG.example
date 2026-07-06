@@ -1,0 +1,24 @@
+# PETS.CFG — the full pet roster, editable without reflashing firmware.
+#
+# One "PREFIX=NAME" per line.  PREFIX is the pet's sprite-prefix byte (decimal):
+#   0,1,2 = the built-in pets (listing them just renames them)
+#   3,4   = reserved (sponsors, menu icons) — ignored
+#   5..7  = new custom pets
+# NAME is up to 16 ASCII chars, shown in "Choose your Pet".
+#
+# A pet's sprites are the matching PPAAFF.PCX files on the badge; each
+# animation part can have any number of frames — the firmware counts the
+# PCX files present (050100..050104 = 5 idle frames, etc.), so no header or
+# fixed frame count is needed.  Export sprites with asset-gen at the pet's
+# prefix, drop them next to this file.
+#
+# '#' starts a comment.  Reserved / malformed rows are ignored.
+
+# --- current pets (rename if you like) ---
+0=Bartholomeus
+1=Cat
+2=Slug
+
+# --- add your own (needs 05xxxx.PCX / 06xxxx.PCX sprites) ---
+5=Dragon
+6=Ghost

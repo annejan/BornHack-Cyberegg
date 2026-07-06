@@ -40,24 +40,29 @@ const PCX_HEADER_SIZE: usize = 128;
 // than caching every filename — at 4 × 21 × 4 = 336 bytes it accepts
 // any number of sprite files without a hardcoded cap.
 
-/// Pet/category-prefix range covered by the catalogue.  PP=0 snail,
-/// 1 cat, 2 sponsors, 3 menu icons.  Animations queried via
-/// [`count_anim_frames`] today only use 0..=1, but the bitmap is sized
-/// for all four prefixes so the same scan can answer for any future
-/// caller.
+/// Pet/category-prefix range covered by the catalogue.  `PP=0` Bartholomeus,
+/// `1` Cat, `2` Slug, `3` sponsors, `4` menu icons, `5..7` custom pets from
+/// `PETS.CFG`.  Sized to cover every valid pet prefix so custom pets get
+/// per-animation frame counts from the same scan — keep in sync with
+/// [`crate::game::pet_registry::MAX_PET_PREFIX`].  Kept small (paired with a
+/// u16 presence cell below) because the debug build is RAM-tight — growing
+/// this table overflows the stack and corrupts adjacent statics.
 #[cfg(feature = "embassy-base")]
-const PP_MAX: usize = 4;
+const PP_MAX: usize = 8;
 /// Anim-id range covered.  Anim ids go 0x00..=0x14 (start screen +
 /// 20 lifecycle anims) — 21 entries.
 #[cfg(feature = "embassy-base")]
 const AA_MAX: usize = 21;
-/// Maximum frame index per animation (bit position in the u32).
+/// Maximum frame index per animation (bit position in the u16 presence cell).
+/// No animation exceeds a handful of frames; 16 is ample.
 #[cfg(feature = "embassy-base")]
-const FF_MAX: u8 = 32;
+const FF_MAX: u8 = 16;
 
+// AtomicU16 (not U32): 8×21×2 B holds the table at its original footprint so
+// the RAM-tight debug build doesn't overflow the stack into adjacent statics.
 #[cfg(feature = "embassy-base")]
-static ANIM_PRESENCE: [[core::sync::atomic::AtomicU32; AA_MAX]; PP_MAX] =
-    [const { [const { core::sync::atomic::AtomicU32::new(0) }; AA_MAX] }; PP_MAX];
+static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
+    [const { [const { core::sync::atomic::AtomicU16::new(0) }; AA_MAX] }; PP_MAX];
 
 #[cfg(not(feature = "simulator"))]
 static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
@@ -110,7 +115,7 @@ pub async fn init() {
             continue;
         };
         if (pp as usize) < PP_MAX && (aa as usize) < AA_MAX && ff < FF_MAX {
-            let mask = 1u32 << ff;
+            let mask = 1u16 << ff;
             ANIM_PRESENCE[pp as usize][aa as usize]
                 .fetch_or(mask, core::sync::atomic::Ordering::Relaxed);
         }

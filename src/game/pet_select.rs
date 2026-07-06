@@ -59,7 +59,7 @@ pub fn cursor_up() {
 
 pub fn cursor_down() {
     let s = SELECTION.load(Ordering::Relaxed);
-    let max = PetKind::ALL.len() as u8;
+    let max = PetKind::roster().len() as u8;
     if s + 1 < max {
         SELECTION.store(s + 1, Ordering::Relaxed);
     }
@@ -68,7 +68,7 @@ pub fn cursor_down() {
 /// Confirm selection — starts the game with the chosen pet kind.
 pub fn confirm() {
     let idx = SELECTION.load(Ordering::Relaxed) as usize;
-    let kind = PetKind::ALL
+    let kind = PetKind::roster()
         .get(idx)
         .copied()
         .unwrap_or(PetKind::Bartholomeus);
@@ -108,7 +108,7 @@ where
     let start_y = 40;
     let row_h = 24i32;
 
-    for (i, kind) in PetKind::ALL.iter().enumerate() {
+    for (i, kind) in PetKind::roster().iter().enumerate() {
         let y = start_y + i as i32 * row_h;
         let is_selected = i == selection;
 
