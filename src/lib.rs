@@ -595,6 +595,11 @@ where
         };
     }
 
+    // Qwiic Scan: full-screen I2C bus-scanner overlay.
+    if fw::qwiic::is_active() {
+        return fw::qwiic::draw(display);
+    }
+
     // Unicorn Realm: full-screen past-pets view.
     #[cfg(feature = "game")]
     if game::realm_view::is_active() {

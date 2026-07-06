@@ -12,6 +12,7 @@ pub mod flash;
 pub mod health;
 pub mod iso14443;
 pub mod kv;
+pub mod qwiic;
 pub mod led;
 pub mod nfct;
 pub mod pets_cfg;

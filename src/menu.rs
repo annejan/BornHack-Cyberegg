@@ -500,6 +500,13 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
 
+        // Qwiic Scan intercepts all input when active — any button closes it.
+        if crate::fw::qwiic::is_active() {
+            crate::fw::qwiic::close();
+            crate::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+
         // Unicorn Realm intercepts all input when active.
         #[cfg(feature = "game")]
         if crate::game::realm_view::is_active() {
@@ -1716,7 +1723,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    11 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1726,6 +1733,12 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: label_boot_chime,
         kind: MenuItemKind::Action(action_boot_chime_toggle),
+    },
+    MenuItem {
+        label: || "Qwiic Scan",
+        kind: MenuItemKind::Action(|| {
+            crate::fw::qwiic::open();
+        }),
     },
     MenuItem {
         label: || "Bluetooth",

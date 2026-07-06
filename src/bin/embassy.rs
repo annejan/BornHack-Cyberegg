@@ -497,7 +497,23 @@ async fn main(spawner: Spawner) {
     // `Duty50Once` auto-resets to Off after one 500 ms pulse.
     led::set_led(&led::LED_BLUE, led::LedState::Off);
     led::set_led(&led::LED_GREEN, led::LedState::Duty50Once);
-    let main_loop = display_loop(&mut display, &mut button_rcvr, &mut partial_state);
+    // Qwiic I2C bus (external connector) — idle until the "Qwiic Scan" screen
+    // requests a scan. Owned by the display loop so scans run in its async
+    // context. TWISPI0 + P1_10/P1_11 are otherwise unused.
+    let mut qwiic_tx = [0u8; bornhack_aegg::fw::qwiic::TX_BUF_LEN];
+    let mut qwiic_bus = bornhack_aegg::fw::qwiic::new_bus(
+        p.TWISPI0,
+        board!(p, qwiic_sda).into(),
+        board!(p, qwiic_scl).into(),
+        &mut qwiic_tx,
+    );
+
+    let main_loop = display_loop(
+        &mut display,
+        &mut button_rcvr,
+        &mut partial_state,
+        &mut qwiic_bus,
+    );
 
     // USB mass storage is a separately-spawned task (see above), so it's
     // not in these joins.
@@ -534,6 +550,7 @@ async fn display_loop(
         2,
     >,
     partial_state: &mut ssd1675::partial::PartialState,
+    qwiic_bus: &mut bornhack_aegg::fw::qwiic::QwiicBus<'_>,
 ) {
     use embassy_futures::select::{Either, select};
 
@@ -556,6 +573,14 @@ async fn display_loop(
     loop {
         // Process any pending sponsor flag clear request from the menu.
         bornhack_aegg::fw::sponsors::process_clear_request().await;
+
+        // Qwiic Scan screen: run the I2C bus scan here (async, owns the bus)
+        // before drawing, so the results are ready for this frame's draw.
+        if bornhack_aegg::fw::qwiic::is_active()
+            && bornhack_aegg::fw::qwiic::take_scan_pending()
+        {
+            bornhack_aegg::fw::qwiic::run_scan(qwiic_bus).await;
+        }
 
         display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
