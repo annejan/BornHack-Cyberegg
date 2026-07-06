@@ -1543,7 +1543,10 @@ impl PetRecord {
 
     /// Pet name as a str.
     pub fn name_str(&self) -> &str {
-        core::str::from_utf8(&self.name[..self.name_len as usize]).unwrap_or("")
+        // name_len comes from flash and could be corrupt/> the array; clamp so
+        // the slice can't go out of bounds (would panic when the realm opens).
+        let n = (self.name_len as usize).min(PET_NAME_MAX);
+        core::str::from_utf8(&self.name[..n]).unwrap_or("")
     }
 
     /// Format age as "Xd Xh".

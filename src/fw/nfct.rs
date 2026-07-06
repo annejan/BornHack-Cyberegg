@@ -198,6 +198,10 @@ fn dispatch_plain(
                 Selected::Cc => cc,
                 Selected::Ndef => &ndef_buf[..],
             };
+            // `offs` is attacker-controlled (up to 0x7FFF) and can exceed the
+            // file length; clamp so `file.len() - offs` can't underflow and
+            // `file[offs..]` can't slice out of bounds.
+            let offs = offs.min(file.len());
             let n = len.min(file.len() - offs).min(out.capacity() - 2);
             let _ = out.extend_from_slice(&file[offs..][..n]);
             let _ = out.extend_from_slice(ok);

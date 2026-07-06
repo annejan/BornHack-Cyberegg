@@ -169,9 +169,13 @@ pub mod iso14443_4 {
                 return Err(Error::Deselected);
             }
 
+            // The 1-byte ISO-DEP prologue leaves room for resp.len()-1 payload
+            // bytes; bound the copy so a max-size response (e.g. a full 256-byte
+            // NDEF read) can't slice past the buffer and panic.
+            let n = buf.len().min(self.resp.len() - 1);
             self.resp[0] = 0x02 | self.block_num;
-            self.resp[1..][..buf.len()].copy_from_slice(buf);
-            self.resp_len = 1 + buf.len();
+            self.resp[1..1 + n].copy_from_slice(&buf[..n]);
+            self.resp_len = 1 + n;
 
             let resp: &[u8] = &self.resp[..self.resp_len];
             self.nfc.transmit(resp).await.map_err(Error::Lower)?;

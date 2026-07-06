@@ -47,11 +47,20 @@ impl BlockDevice for FatBlockDevice {
     }
 
     async fn read_block(&self, lba: u32, buf: &mut [u8]) -> Result<(), ()> {
+        // Reject a host-supplied LBA outside the partition: without this the
+        // address wraps modulo the 2 MiB chip and can read/overwrite the ekv
+        // KV store (save data) that lives after the FAT region.
+        if lba >= Self::BLOCK_COUNT {
+            return Err(());
+        }
         let addr = flash::FAT_OFFSET + lba * 512;
         flash::read(addr, buf).await.map_err(|_| ())
     }
 
     async fn write_block(&self, lba: u32, buf: &[u8]) -> Result<(), ()> {
+        if lba >= Self::BLOCK_COUNT {
+            return Err(());
+        }
         // Blink the blue LED on every block write so the operator can see at
         // a glance which badge is still receiving data during mass-flashing.
         // `BlinkOnce` auto-resets after ~50 ms, so a stream of writes shows

@@ -353,6 +353,14 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
     // Stack buffer for one decoded scanline (max 38 bytes for 152px @ 2bpp).
     let mut line_buf = [0u8; 256];
 
+    // `bytes_per_line` is attacker-controlled (PCX header, untrusted USB file).
+    // A value of 0 makes no progress; > the scanline buffer would slice
+    // out-of-bounds and panic in the boot sprite/sponsor path. Reject early.
+    if bpl == 0 || bpl > line_buf.len() {
+        defmt::warn!("sprite: bad PCX bytes_per_line {}", bpl);
+        return;
+    }
+
     // We only need black/red framebuffers now — the work buffer is no
     // longer used for sprite decoding.
     let (black, red, _work) = display.all_buffers_mut();
