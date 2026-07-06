@@ -1735,7 +1735,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
         kind: MenuItemKind::Action(action_boot_chime_toggle),
     },
     MenuItem {
-        label: || "Qwiic Scan",
+        label: || "I2C Scan",
         kind: MenuItemKind::Action(|| {
             crate::fw::qwiic::open();
         }),

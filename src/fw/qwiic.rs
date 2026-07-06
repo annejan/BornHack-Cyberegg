@@ -2,7 +2,7 @@
 //!
 //! SDA = `P1_10`, SCL = `P1_11`, driven by `TWISPI0` (TWIM0). Qwiic breakout
 //! boards carry their own bus pull-ups. Nothing on the badge itself speaks I2C,
-//! so the bus stays idle until the user opens the "Qwiic Scan" screen, which
+//! so the bus stays idle until the user opens the "I2C Scan" screen, which
 //! walks the 7-bit address space and lists whatever ACKs.
 //!
 //! The scan runs in the async display loop (which owns the bus handle); the
@@ -132,7 +132,7 @@ where
     Rectangle::new(Point::zero(), Size::new(152, 152))
         .into_styled(PrimitiveStyle::with_fill(WHITE))
         .draw(display)?;
-    ui::draw_title_bar(display, "Qwiic Scan", Point::zero(), 152)?;
+    ui::draw_title_bar(display, "I2C Scan", Point::zero(), 152)?;
 
     let state = STATE.lock(|s| *s.borrow());
 
