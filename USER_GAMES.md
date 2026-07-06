@@ -88,7 +88,7 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `HATCHING_TICKS` | how long hatching takes (6 = 1 minute) | 1 – 200 |
 | `MAX_SLEEP_TICKS` | max ticks the engine sleeps between updates | 30 – 600 |
 
-Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Anything you set is clamped to the value type's range — no way to brick the engine. Unknown keys are logged and skipped.
+Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges (interval keys are floored to 1 so the engine can't divide by zero). Unknown keys are logged and skipped.
 
 To go back to a preset, delete `BORNPETS.CFG` from the drive and reboot.
 

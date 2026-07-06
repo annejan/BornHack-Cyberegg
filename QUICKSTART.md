@@ -86,7 +86,7 @@ When the badge is plugged in via USB-C it appears on your computer as a small dr
 | File                          | Effect                                                 |
 | ----------------------------- | ------------------------------------------------------ |
 | `ALARMS.ICS`                  | iCalendar file: imports alarms and calendar events     |
-| `020000.PCX` … `020009.PCX`   | Sponsor slides shown on the splash carousel            |
+| `030000.PCX` … `030009.PCX`   | Sponsor slides shown on the splash carousel            |
 | `<6 hex>.PCX`                 | Game sprites (palette + size enforced by asset tool)   |
 | `BORNPETS.CFG`                | Override BornPets balance — see [USER_GAMES.md](USER_GAMES.md) |
 

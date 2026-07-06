@@ -290,6 +290,7 @@ fn mul_dt(rate: u16, dt: u32) -> u16 {
 /// that has already accumulated `counter` ticks since the last fire.
 /// Returns (fire_count, new_counter).
 fn interval_fires(delta: u32, counter: u32, interval: u32) -> (u32, u32) {
+    let interval = interval.max(1); // never divide by zero, whatever the source
     let total = counter + delta;
     let fires = total / interval;
     let new_counter = total % interval;

@@ -394,9 +394,11 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("SLEEP_HUNGER_COST", |t, v| {
         t.SLEEP_HUNGER_COST = clamp_u16(v)
     }),
-    ("DRAINED_INTERVAL", |t, v| t.DRAINED_INTERVAL = v),
+    // Interval keys divide the tick counter (see interval_fires); floor to 1
+    // so a BORNPETS.CFG value of 0 can't cause a divide-by-zero.
+    ("DRAINED_INTERVAL", |t, v| t.DRAINED_INTERVAL = v.max(1)),
     ("DRAINED_INTERVAL_MISERABLE", |t, v| {
-        t.DRAINED_INTERVAL_MISERABLE = v
+        t.DRAINED_INTERVAL_MISERABLE = v.max(1)
     }),
     ("SICK_RATE", |t, v| t.SICK_RATE = clamp_u16(v)),
     ("SICK_CONDITION_RATE", |t, v| {
@@ -406,10 +408,10 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
         t.SICK_CONDITION_MISERABLE_RATE = clamp_u16(v)
     }),
     ("MISERABLE_INTERVAL_BASE", |t, v| {
-        t.MISERABLE_INTERVAL_BASE = v
+        t.MISERABLE_INTERVAL_BASE = v.max(1)
     }),
     ("MISERABLE_INTERVAL_MIN", |t, v| {
-        t.MISERABLE_INTERVAL_MIN = v
+        t.MISERABLE_INTERVAL_MIN = v.max(1)
     }),
     ("FEED_HUNGER_RELIEF", |t, v| {
         t.FEED_HUNGER_RELIEF = clamp_u16(v)
