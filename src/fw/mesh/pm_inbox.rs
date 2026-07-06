@@ -647,7 +647,10 @@ where
         .alignment(Alignment::Right)
         .build();
     let total = summary.len() as u8;
-    let visible = VISIBLE_ROWS.min(total - scroll);
+    // The peer list can shrink (eviction) after `scroll` was set; re-clamp so
+    // `total - scroll` can't underflow and the index below stays in range.
+    let scroll = scroll.min(total.saturating_sub(1));
+    let visible = VISIBLE_ROWS.min(total.saturating_sub(scroll));
     for i in 0..visible {
         let idx = scroll + i;
         let s = &summary[idx as usize];

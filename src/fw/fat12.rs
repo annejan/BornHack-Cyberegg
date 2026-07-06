@@ -155,7 +155,10 @@ impl FatParams {
     /// Absolute flash address of the given cluster's data.
     /// Clusters are numbered starting at 2 (0 and 1 are reserved in FAT).
     fn cluster_addr(&self, cluster: u16) -> u32 {
-        self.data_region_offset() + (cluster as u32 - 2) * self.cluster_bytes()
+        // Clusters 0/1 are reserved; a corrupt chain could hand us one.
+        // saturating_sub avoids the `- 2` underflow (panic in debug, huge
+        // wrapped address → OOB flash read in release).
+        self.data_region_offset() + (cluster as u32).saturating_sub(2) * self.cluster_bytes()
     }
 }
 

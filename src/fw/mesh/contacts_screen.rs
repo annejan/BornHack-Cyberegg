@@ -1220,11 +1220,13 @@ where
     // keeps `GPS: 55.612N 12.999E` to 20 chars × 7 px = 140 px on a
     // 152-px display.
     if entry.gps_lat != 0 || entry.gps_lon != 0 {
-        let lat_deg = (entry.gps_lat / 1_000_000).abs();
-        let lat_frac = ((entry.gps_lat.abs() % 1_000_000) / 1000) as u32;
+        // unsigned_abs: gps_lat/lon come from untrusted adverts; i32::MIN.abs()
+        // would overflow-panic.
+        let lat_deg = entry.gps_lat.unsigned_abs() / 1_000_000;
+        let lat_frac = (entry.gps_lat.unsigned_abs() % 1_000_000) / 1000;
         let lat_hem = if entry.gps_lat >= 0 { 'N' } else { 'S' };
-        let lon_deg = (entry.gps_lon / 1_000_000).abs();
-        let lon_frac = ((entry.gps_lon.abs() % 1_000_000) / 1000) as u32;
+        let lon_deg = entry.gps_lon.unsigned_abs() / 1_000_000;
+        let lon_frac = (entry.gps_lon.unsigned_abs() % 1_000_000) / 1000;
         let lon_hem = if entry.gps_lon >= 0 { 'E' } else { 'W' };
         let gps = format!(24;
             "GPS: {}.{:03}{} {}.{:03}{}",
