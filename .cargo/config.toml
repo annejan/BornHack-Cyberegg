@@ -13,11 +13,11 @@ linker = "flip-link"
 
 [env]
 DEFMT_LOG = "info,bornhack_aegg::fw::kv=warn,bornhack_aegg::fw::bonds=warn,bornhack_aegg::fw::battery=off,bornhack_aegg::fw::mesh::meshcore=warn,trouble_host=info,nrf_mpsl=warn,nrf_sdc=info"
-# BLE packet pool. Was bumped to 64 (× 251 B ≈ 15.7 KiB) as an OOM diagnostic;
-# that inflation left only ~36 KiB for the stack, and the SDC handshake peak
-# overflowed it (silent RAM corruption, caught via flip-link). 32 buffers
-# (≈ 7.8 KiB) frees ~8 KiB of stack headroom — watch for OOM/pool-exhaustion.
-TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "32"
+# BLE packet pool. 64 buffers (× 251 B ≈ 15.7 KiB) — needed for BLE ACL
+# throughput (32 OOMs under load, confirmed on-bench). The stack headroom this
+# would otherwise cost was reclaimed instead by serialising the settings
+# persister (~11 KiB, see fw/mesh/persister.rs), so 64 fits under flip-link.
+TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "64"
 
 [alias]
 sim = "run --bin simulator --features simulator"
