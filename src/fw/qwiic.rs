@@ -71,6 +71,13 @@ pub fn new_bus<'d>(
 ) -> QwiicBus<'d> {
     let mut config = twim::Config::default();
     config.frequency = twim::Frequency::K100;
+    // Enable the nRF internal pull-ups: the bus pull-ups live on the Qwiic
+    // *device*, so with nothing plugged in SDA/SCL float and every read returns
+    // garbage (phantom devices). Internal pull-ups (~13 kΩ) idle the bus high so
+    // absent addresses cleanly NACK; a plugged-in board's stronger pull-ups just
+    // parallel these.
+    config.sda_pullup = true;
+    config.scl_pullup = true;
     Twim::new(twispi0, Irqs, sda, scl, config, tx)
 }
 
@@ -108,9 +115,11 @@ pub async fn run_scan(bus: &mut QwiicBus<'_>) {
     };
     let mut buf = [0u8; 1];
     for addr in 0x08u8..=0x77 {
-        // Only `AddressNack` means "nobody home"; any other outcome (`Ok`, or a
-        // post-address bus error) still proves a chip ACKed its address.
-        let present = !matches!(bus.read(addr, &mut buf).await, Err(twim::Error::AddressNack));
+        // Count a device present ONLY on a successful 1-byte read (address
+        // ACKed + data clocked). Treating "anything but AddressNack" as present
+        // reports phantoms, because a floating/empty bus returns Receive/
+        // Transmit errors rather than clean NACKs.
+        let present = bus.read(addr, &mut buf).await.is_ok();
         if present {
             if result.count < MAX_FOUND {
                 result.addrs[result.count] = addr;
