@@ -24,6 +24,9 @@ steps:
       # toolchain.  The build steps still use stable.
       - rustup toolchain install nightly --profile minimal --component rustfmt
       - rustup target add thumbv7em-none-eabihf
+      # flip-link is the linker for the firmware (.cargo/config.toml) — it
+      # relocates the stack so an overflow faults instead of corrupting RAM.
+      - cargo install flip-link
       # Format check on the main package only — vendored crates under
       # vendor/* are third-party copies we don't own.
       - cargo +nightly fmt -p bornhack-aegg --check
