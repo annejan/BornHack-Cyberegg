@@ -157,8 +157,59 @@ impl FatParams {
     fn cluster_addr(&self, cluster: u16) -> u32 {
         // Clusters 0/1 are reserved; a corrupt chain could hand us one.
         // saturating_sub avoids the `- 2` underflow (panic in debug, huge
-        // wrapped address → OOB flash read in release).
-        self.data_region_offset() + (cluster as u32).saturating_sub(2) * self.cluster_bytes()
+        // wrapped address → OOB flash read in release). saturating_mul/add
+        // likewise keep a bogus cluster number from overflowing u32 — geometry
+        // is validated in read_params, and read_file rejects first_cluster < 2,
+        // but stay defensive here since the input is attacker-controlled.
+        let idx = (cluster as u32).saturating_sub(2);
+        self.data_region_offset()
+            .saturating_add(idx.saturating_mul(self.cluster_bytes()))
+    }
+
+    /// Reject boot-sector geometry that is out of range or whose derived
+    /// offsets overflow / fall outside the FAT partition. Every field here is
+    /// attacker-controlled (the partition is host-writable via USB MSC), so a
+    /// crafted BPB — e.g. reserved_sectors=0xFFFF, bytes_per_sector=0xFFFF —
+    /// could otherwise overflow the u32 address math (panic in debug, wrapped
+    /// OOB flash read in release) or make DirReader scan far past the real
+    /// directory. All derived addresses are computed with checked arithmetic.
+    fn validate(&self) -> Result<(), FatError> {
+        // bytes_per_sector: standard FAT sector sizes only. Also bounds every
+        // product below.
+        if !matches!(self.bytes_per_sector, 512 | 1024 | 2048 | 4096) {
+            return Err(FatError::NoFilesystem);
+        }
+        // sectors_per_cluster: power of two, ≥ 1 (cluster_bytes ≤ 4096 × 128).
+        if !self.sectors_per_cluster.is_power_of_two() {
+            return Err(FatError::NoFilesystem);
+        }
+        // num_fats: 1 or 2 on real filesystems; reserved_sectors: ≥ the boot
+        // sector.
+        if !matches!(self.num_fats, 1 | 2) || self.reserved_sectors == 0 {
+            return Err(FatError::NoFilesystem);
+        }
+
+        // Compute the end of the data region with checked arithmetic; reject on
+        // overflow or if it (plus at least one cluster) spills past the
+        // partition. Mirrors data_region_offset() but overflow-safe.
+        let bps = self.bytes_per_sector as u32;
+        let region_end = (|| {
+            let fat_size = (self.num_fats as u32).checked_mul(self.sectors_per_fat as u32)?;
+            let root_sectors = (self.root_entry_count as u32)
+                .checked_mul(32)?
+                .div_ceil(bps);
+            let total_sectors = (self.reserved_sectors as u32)
+                .checked_add(fat_size)?
+                .checked_add(root_sectors)?;
+            let data_start = flash::FAT_OFFSET.checked_add(total_sectors.checked_mul(bps)?)?;
+            data_start.checked_add(self.cluster_bytes())
+        })()
+        .ok_or(FatError::NoFilesystem)?;
+
+        if region_end > flash::FAT_OFFSET + flash::FAT_BYTES as u32 {
+            return Err(FatError::NoFilesystem);
+        }
+        Ok(())
     }
 }
 
@@ -184,14 +235,16 @@ async fn read_params() -> Result<FatParams, FatError> {
         return Err(FatError::NoFilesystem);
     }
 
-    Ok(FatParams {
+    let params = FatParams {
         bytes_per_sector: bps,        // BPB offset 11: usually 512
         sectors_per_cluster: buf[13], // BPB offset 13: e.g. 8 for 4K clusters
         reserved_sectors: u16::from_le_bytes([buf[14], buf[15]]), // BPB offset 14
         num_fats: buf[16],            // BPB offset 16: usually 2
         root_entry_count: u16::from_le_bytes([buf[17], buf[18]]), // BPB offset 17
         sectors_per_fat: u16::from_le_bytes([buf[22], buf[23]]), // BPB offset 22
-    })
+    };
+    params.validate()?;
+    Ok(params)
 }
 
 /// Follow the FAT12 chain: given a cluster number, return the next cluster.
@@ -417,6 +470,13 @@ pub async fn read_file(file: &FileRef, offset: u32, buf: &mut [u8]) -> Result<us
     let to_read = buf.len().min(remaining);
     if to_read == 0 {
         return Ok(0);
+    }
+
+    // Clusters 0 and 1 are reserved; a directory entry claiming size > 0 with
+    // first_cluster < 2 is corrupt (host-writable, so untrusted). Reject rather
+    // than reading from the data-region start.
+    if file.first_cluster < 2 {
+        return Err(FatError::Corrupt);
     }
 
     // Walk the cluster chain to skip past `offset` bytes.
