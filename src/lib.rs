@@ -126,6 +126,7 @@ pub mod fw {
 pub mod game;
 pub mod menu;
 pub mod name_screen;
+pub mod nfc_ndef;
 #[cfg(feature = "mesh")]
 pub mod qr_screen;
 #[cfg(feature = "signed-channel")]

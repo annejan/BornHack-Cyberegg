@@ -119,8 +119,11 @@ For the full protocol spec, wire format, status words, and a step-by-step
 guide for implementing your own reader (Kotlin / Python / Rust examples),
 see **[NFC_README.md](NFC_README.md)**.
 
-The NFC tag also serves a plaintext NDEF URL (`https://badge.team`) for
-unauthenticated phone-side tag readers.
+The NFC tag also serves a plaintext, user-settable NDEF broadcast profile
+for phone-side tag readers — a vanity URL, vCard, Wi-Fi record, or any
+NDEF message you write to it, defaulting to `https://badge.team`. Writing
+a `token:` record instead collects a token on the Tokens screen. See
+[NFC_README.md](NFC_README.md) §5.
 
 ## MeshCore Companion Protocol
 

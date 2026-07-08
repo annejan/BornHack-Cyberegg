@@ -555,6 +555,12 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
+        // Token screen consumes Up/Down to scroll the collected-token
+        // list. Left/Right (screen nav) and Cancel fall through.
+        if self.active_screen == crate::SCREEN_TOKEN && crate::token::dispatch(btn) {
+            return;
+        }
+
         // Clock screen consumes Up/Down to toggle digital/analog face.
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]

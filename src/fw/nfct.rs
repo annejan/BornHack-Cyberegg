@@ -7,6 +7,8 @@ use embassy_nrf::{Peri, bind_interrupts, nfct};
 use heapless::Vec as HVec;
 use panic_probe as _;
 
+use embassy_time::{Duration, Instant};
+
 use super::iso14443::iso14443_3;
 use super::iso14443::iso14443_4::{Card, IsoDep};
 #[cfg(feature = "signed-channel")]
@@ -22,6 +24,32 @@ const NDEF_URL_PREFIX: u8 = 0x04; // https://
 /// Default URL NDEF: NLEN(2) + record header(1) + type len(1) + payload len(1)
 /// + type 'U'(1) + URI prefix(1) + URL.
 const NDEF_URL_LEN: usize = 7 + NDEF_URL.len();
+
+/// KV namespace + key for the user's persisted broadcast NDEF (the
+/// vCard / vanity URL served by default). Stored as the full
+/// `[NLEN(2) || message]` region, ready to copy straight into the file
+/// buffer. Absent ⇒ fall back to the built-in `badge.team` URL.
+const KV_NS: &str = "nfc";
+const KV_PROFILE_KEY: &str = "profile";
+
+/// After a transient NFC write (a pushed `token:`, a station command, or
+/// junk) the badge keeps broadcasting the written bytes for this long,
+/// then reverts to the user's persisted profile.
+const REVERT_SECS: u64 = 10;
+
+/// What a completed UPDATE BINARY write turned out to be. Drives whether
+/// the broadcast reverts (transient) or sticks and is persisted (profile).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteOutcome {
+    /// Not a completed NDEF write (SELECT/READ, or an incomplete message).
+    None,
+    /// A `token:` push, station command, or unrecognised write — reverts
+    /// to the persisted profile after [`REVERT_SECS`].
+    Transient,
+    /// A `set:<url>` text record or a vCard record — becomes the new
+    /// persisted default broadcast.
+    SetProfile,
+}
 
 /// RAM buffer for the NDEF file.  Sized for headroom; the CC TLV
 /// advertises a max NDEF size of 127 bytes so readers won't write
@@ -46,6 +74,43 @@ fn init_ndef_url(buf: &mut [u8; NDEF_BUF_LEN]) -> usize {
     buf[6] = NDEF_URL_PREFIX;
     buf[7..7 + NDEF_URL.len()].copy_from_slice(NDEF_URL);
     NDEF_URL_LEN
+}
+
+/// Re-arm `buf` to the broadcast NDEF: the user's persisted `profile`
+/// (stored as `[NLEN || message]`) if present, else the built-in URL.
+fn arm_broadcast(buf: &mut [u8; NDEF_BUF_LEN], profile: &[u8]) -> usize {
+    if profile.len() >= 2 && profile.len() <= NDEF_BUF_LEN {
+        for b in buf.iter_mut() {
+            *b = 0;
+        }
+        buf[..profile.len()].copy_from_slice(profile);
+        profile.len()
+    } else {
+        init_ndef_url(buf)
+    }
+}
+
+/// Load the persisted broadcast profile from KV. Returns an empty vec
+/// when unset or unreadable (caller falls back to the built-in URL).
+async fn load_profile() -> HVec<u8, NDEF_BUF_LEN> {
+    let mut out: HVec<u8, NDEF_BUF_LEN> = HVec::new();
+    let mut buf = [0u8; NDEF_BUF_LEN];
+    if let Ok(n) = crate::fw::kv::namespace(KV_NS).get(KV_PROFILE_KEY, &mut buf).await
+        && (2..=NDEF_BUF_LEN).contains(&n)
+    {
+        let _ = out.extend_from_slice(&buf[..n]);
+    }
+    out
+}
+
+/// Persist the broadcast profile to KV. Best-effort; logs on failure.
+async fn save_profile(profile: &[u8]) {
+    if let Err(e) = crate::fw::kv::namespace(KV_NS)
+        .set(KV_PROFILE_KEY, profile, true)
+        .await
+    {
+        error!("nfc: failed to persist profile: {}", e);
+    }
 }
 
 /// Which file the reader has currently selected.
@@ -80,8 +145,16 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
         0x04, 0x06, 0xe1, 0x04, 0x00, 0x7f, 0x00, 0x00,
     ];
 
+    // User's persisted broadcast NDEF (vCard / vanity URL), stored as
+    // `[NLEN || message]`. Empty ⇒ fall back to the built-in URL.
+    let mut profile = load_profile().await;
     let mut ndef_buf = [0u8; NDEF_BUF_LEN];
-    init_ndef_url(&mut ndef_buf);
+    arm_broadcast(&mut ndef_buf, &profile);
+
+    // When a transient write (token/station/junk) has dirtied the
+    // broadcast buffer, this holds the instant at which it should revert
+    // to `profile`. The revert is applied lazily on the next APDU.
+    let mut revert_at: Option<Instant> = None;
 
     let mut selected = Selected::Cc;
     #[cfg(feature = "signed-channel")]
@@ -125,22 +198,66 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
 
             info!("apdu: {:?}", apdu);
 
+            // Revert the broadcast to the persisted profile once the
+            // post-write grace window has elapsed, so this APDU (e.g. a
+            // READ BINARY) already sees the reverted content.
+            if let Some(t) = revert_at
+                && Instant::now() >= t
+            {
+                arm_broadcast(&mut ndef_buf, &profile);
+                revert_at = None;
+            }
+
             let mut resp_vec: HVec<u8, 256> = HVec::new();
+            let outcome;
             #[cfg(feature = "signed-channel")]
             {
-                match (apdu.cla, apdu.ins) {
-                    (0x80, 0x01) => handle_signed(&mut session, apdu.data, &mut resp_vec),
-                    (0x80, 0x02) => handle_get_challenge(&mut session, &mut resp_vec),
+                outcome = match (apdu.cla, apdu.ins) {
+                    (0x80, 0x01) => {
+                        handle_signed(&mut session, apdu.data, &mut resp_vec);
+                        WriteOutcome::None
+                    }
+                    (0x80, 0x02) => {
+                        handle_get_challenge(&mut session, &mut resp_vec);
+                        WriteOutcome::None
+                    }
                     _ => dispatch_plain(&apdu, cc, &mut ndef_buf, &mut selected, &mut resp_vec),
-                }
+                };
             }
             #[cfg(not(feature = "signed-channel"))]
-            dispatch_plain(&apdu, cc, &mut ndef_buf, &mut selected, &mut resp_vec);
+            {
+                outcome = dispatch_plain(&apdu, cc, &mut ndef_buf, &mut selected, &mut resp_vec);
+            }
+
+            // A profile-set persists and stays; a transient write arms the
+            // revert timer. Persisting is deferred until after we respond
+            // so the phone isn't kept waiting on a flash write.
+            let mut persist_pending = false;
+            match outcome {
+                WriteOutcome::SetProfile => {
+                    let nlen = u16::from_be_bytes([ndef_buf[0], ndef_buf[1]]) as usize;
+                    let total = (2 + nlen).min(NDEF_BUF_LEN);
+                    profile.clear();
+                    let _ = profile.extend_from_slice(&ndef_buf[..total]);
+                    revert_at = None;
+                    persist_pending = true;
+                }
+                WriteOutcome::Transient => {
+                    revert_at = Some(Instant::now() + Duration::from_secs(REVERT_SECS));
+                }
+                WriteOutcome::None => {}
+            }
 
             let resp: &[u8] = &resp_vec;
             info!("iso-dep tx {:02x}", resp);
 
-            match nfc.transmit(resp).await {
+            let tx_result = nfc.transmit(resp).await;
+
+            if persist_pending {
+                save_profile(&profile).await;
+            }
+
+            match tx_result {
                 Ok(()) => {
                     update_health!(|h| h.nfc.set_ok("NFC transmit okay!"));
                 }
@@ -164,9 +281,10 @@ fn dispatch_plain(
     ndef_buf: &mut [u8; NDEF_BUF_LEN],
     selected: &mut Selected,
     out: &mut HVec<u8, 256>,
-) {
+) -> WriteOutcome {
     out.clear();
     let ok: &[u8] = &[0x90, 0x00];
+    let mut outcome = WriteOutcome::None;
     match (apdu.cla, apdu.ins, apdu.p1, apdu.p2) {
         (0, 0xa4, 4, 0) => {
             info!("select app");
@@ -213,7 +331,7 @@ fn dispatch_plain(
                 let end = offs + apdu.data.len();
                 if end <= ndef_buf.len() {
                     ndef_buf[offs..end].copy_from_slice(apdu.data);
-                    try_apply_station(ndef_buf);
+                    outcome = handle_ndef_write(ndef_buf);
                 }
             }
             let _ = out.extend_from_slice(ok);
@@ -223,6 +341,7 @@ fn dispatch_plain(
             let _ = out.extend_from_slice(&[0xFF, 0xFF]);
         }
     }
+    outcome
 }
 
 /// GET CHALLENGE: draw a fresh 16-byte challenge from the CSPRNG, arm
@@ -308,35 +427,59 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
     }
 }
 
-/// After every NDEF write, see whether the buffer now holds a
-/// complete NDEF text record.  Two effects can apply on the same
-/// payload:
-///   * If `text` starts with `"token:"`, forward the value to the token screen
-///     (always, regardless of features).
-///   * If both the `game` and `nfc-plaintext-station` features are enabled and
-///     the text matches a station phrase, apply the effect, show the toast, and
-///     re-arm the buffer back to the default URL so the next phone-read shows
-///     the `badge.team` URL again.
+/// Classify a completed NDEF write and apply its side effects.
 ///
-/// Plaintext station dispatch is OFF by default: an UNSIGNED NDEF write is
-/// enough to drive it, so it only benefits self-buffs on the tapped badge but
-/// bypasses the signed channel. Stations are signed-channel only unless a build
-/// opts in via `nfc-plaintext-station` (physical event-station tags).
-fn try_apply_station(ndef_buf: &mut [u8; NDEF_BUF_LEN]) {
+/// The rule is: **only `token:` (and, when opted in, station phrases) are
+/// transient — everything else you write becomes your persisted broadcast
+/// profile.** So a URL tag, a vCard business card, a Wi-Fi record, or any
+/// other NDEF message sticks (stored verbatim and re-broadcast until
+/// changed), while a pushed token just lands on the token screen and the
+/// broadcast reverts after [`REVERT_SECS`].
+///
+/// Special case: a Well-Known text record `set:<url>` is rewritten into a
+/// clean URI record before persisting, so you can set a vanity URL from a
+/// plain text writer too.
+///
+/// Returns [`WriteOutcome::None`] for an incomplete / cleared buffer.
+fn handle_ndef_write(ndef_buf: &mut [u8; NDEF_BUF_LEN]) -> WriteOutcome {
     let nlen = u16::from_be_bytes([ndef_buf[0], ndef_buf[1]]) as usize;
     if nlen == 0 || 2 + nlen > ndef_buf.len() {
-        return;
+        return WriteOutcome::None;
     }
-    let msg = &ndef_buf[2..2 + nlen];
-    let Some(text) = ndef::find_text_record(msg) else {
-        return;
-    };
-    try_apply_token(text);
-    #[cfg(all(feature = "game", feature = "nfc-plaintext-station"))]
-    if let Some(toast) = crate::game::station::apply(text) {
-        crate::game::show_toast(toast);
-        init_ndef_url(ndef_buf);
+
+    // `set:<url>` text record — copy the URL out (ending the borrow on
+    // ndef_buf) before rewriting the buffer as a clean generated URI
+    // record, then persist that.
+    let set_url: Option<HVec<u8, NDEF_BUF_LEN>> =
+        crate::nfc_ndef::find_text_record(&ndef_buf[2..2 + nlen])
+            .and_then(|t| t.strip_prefix(b"set:".as_slice()))
+            .map(|url| {
+                let mut v: HVec<u8, NDEF_BUF_LEN> = HVec::new();
+                let _ = v.extend_from_slice(url);
+                v
+            });
+    if let Some(url) = set_url {
+        crate::nfc_ndef::build_uri_record(ndef_buf, &url);
+        return WriteOutcome::SetProfile;
     }
+
+    // Transient writes: a `token:` push, or (opt-in, unsigned) a station
+    // phrase. These do NOT persist — the broadcast reverts to the profile.
+    if let Some(text) = crate::nfc_ndef::find_text_record(&ndef_buf[2..2 + nlen]) {
+        if text.strip_prefix(b"token:".as_slice()).is_some() {
+            try_apply_token(text);
+            return WriteOutcome::Transient;
+        }
+        #[cfg(all(feature = "game", feature = "nfc-plaintext-station"))]
+        if let Some(toast) = crate::game::station::apply(text) {
+            crate::game::show_toast(toast);
+            return WriteOutcome::Transient;
+        }
+    }
+
+    // Everything else — a URL tag, vCard, Wi-Fi config, any other record —
+    // becomes the persisted broadcast profile, stored verbatim.
+    WriteOutcome::SetProfile
 }
 
 /// If `text` starts with `"token:"`, forward the suffix to the token
@@ -347,110 +490,6 @@ fn try_apply_token(text: &[u8]) {
         && let Ok(value) = core::str::from_utf8(value_bytes)
     {
         crate::token::set_token(value);
-    }
-}
-
-mod ndef {
-    //! Minimal NDEF reader — just enough to pull a UTF-8 text payload
-    //! out of the first text record in a message.
-
-    /// Find the first NDEF Well-Known text record in `msg` and return
-    /// its UTF-8 text bytes (with the language code stripped off), or
-    /// `None` if no usable text record is present.  Tolerates
-    /// well-formed messages with non-text records preceding the text
-    /// one; bails on chunked records (CF=1) and anything malformed.
-    pub fn find_text_record(msg: &[u8]) -> Option<&[u8]> {
-        let mut i = 0;
-        loop {
-            if i >= msg.len() {
-                return None;
-            }
-            let header = msg[i];
-            i += 1;
-            let me = header & 0x40 != 0;
-            let cf = header & 0x20 != 0;
-            let sr = header & 0x10 != 0;
-            let il = header & 0x08 != 0;
-            let tnf = header & 0x07;
-            if cf {
-                return None;
-            }
-
-            if i >= msg.len() {
-                return None;
-            }
-            let type_len = msg[i] as usize;
-            i += 1;
-
-            let payload_len = if sr {
-                if i >= msg.len() {
-                    return None;
-                }
-                let pl = msg[i] as usize;
-                i += 1;
-                pl
-            } else {
-                if i + 4 > msg.len() {
-                    return None;
-                }
-                let pl = u32::from_be_bytes([msg[i], msg[i + 1], msg[i + 2], msg[i + 3]]) as usize;
-                i += 4;
-                pl
-            };
-
-            let id_len = if il {
-                if i >= msg.len() {
-                    return None;
-                }
-                let il_byte = msg[i] as usize;
-                i += 1;
-                il_byte
-            } else {
-                0
-            };
-
-            if i + type_len > msg.len() {
-                return None;
-            }
-            let type_bytes = &msg[i..i + type_len];
-            i += type_len + id_len;
-
-            if i + payload_len > msg.len() {
-                return None;
-            }
-            let payload = &msg[i..i + payload_len];
-            i += payload_len;
-
-            if tnf == 0x01 && type_bytes == b"T" {
-                // Text payload: [status][lang_code][utf8 text]
-                if payload.is_empty() {
-                    if me {
-                        return None;
-                    }
-                    continue;
-                }
-                let status = payload[0];
-                if status & 0x80 != 0 {
-                    // UTF-16 — we don't decode it; skip.
-                    if me {
-                        return None;
-                    }
-                    continue;
-                }
-                let lang_len = (status & 0x3F) as usize;
-                if 1 + lang_len > payload.len() {
-                    if me {
-                        return None;
-                    }
-                    continue;
-                }
-                return Some(&payload[1 + lang_len..]);
-            }
-
-            if me {
-                return None;
-            }
-        }
     }
 }
 

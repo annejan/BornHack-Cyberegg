@@ -43,7 +43,7 @@ The badge is a carousel. Left/Right cycles through ten screens:
 | **PMs**       | Private mesh messages inbox                           |
 | **Channel**   | Group / room mesh chat                                |
 | **Adverts**   | Recently heard mesh adverts                           |
-| **Tokens**    | Collected NFC tokens                                  |
+| **Tokens**    | Tokens collected via NFC / mesh, kept until reboot    |
 | **Clock**     | Digital / analog watch face + alarm                   |
 | **Calendar**  | Month grid + per-day timeline                         |
 | **Name**      | Big conference-badge name view                        |

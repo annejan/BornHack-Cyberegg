@@ -118,4 +118,4 @@ Each win reduces the "drained" stat without raising "hunger" — they're free en
 
 ## Tokens
 
-The **Tokens** carousel screen shows tokens you've collected via NFC taps from event stations or other badges. See [USER_NFC.md](USER_NFC.md) for how to earn them.
+The **Tokens** screen collects tokens you receive via NFC taps or over the mesh (channel or direct message). Every distinct token is kept in a scrollable list — up to 16 — that stays until you reboot the badge; duplicates are ignored. Long tokens wrap onto several lines (continuation lines are indented) so the whole value is readable. Use **Up/Down** to scroll; **Left/Right** switch screens as usual. See [USER_NFC.md](USER_NFC.md) for how to earn them.
