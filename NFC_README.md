@@ -267,28 +267,30 @@ The dispatcher (`src/fw/nfct.rs`) selects between paths purely on
 ### 5.1 Settable broadcast profile + write revert
 
 Every completed NDEF write (UPDATE BINARY) is classified in
-`nfct::handle_ndef_write`:
+`nfct::handle_ndef_write`. The rule is simple: **only `token:` (and, when
+opted in, station phrases) are transient — everything else you write
+becomes your persisted broadcast profile.**
 
 | Written record | Effect | Persistence |
 |---|---|---|
-| Text `set:<url>` | Rebuilt as a URI record and broadcast | **Persisted** to KV (`nfc/profile`); becomes the new default |
-| vCard MIME record (`text/vcard` / `text/x-vcard`) | Stored & broadcast verbatim | **Persisted** to KV; becomes the new default |
 | Text `token:<v>` | Collected into the token screen | Transient |
-| Station phrase (opt-in) | Applies the buff | Transient |
-| Anything else | — | Transient |
+| Station phrase (opt-in `nfc-plaintext-station`) | Applies the buff | Transient |
+| Text `set:<url>` | Rebuilt into a clean URI record, then broadcast | **Persisted** to KV (`nfc/profile`) |
+| A URL / URI record | Broadcast verbatim | **Persisted** |
+| A vCard business card | Broadcast verbatim | **Persisted** |
+| A Wi-Fi record, or any other NDEF message | Broadcast verbatim | **Persisted** |
 
 A **transient** write leaves its bytes in the broadcast buffer only
 briefly: after `REVERT_SECS` (10 s) the badge reverts to the persisted
 profile. The revert is applied lazily on the next APDU, so a reader that
 taps within the window still sees the written record. This keeps a
-pushed `token:` (or junk) from permanently clobbering your vCard / URL.
+pushed `token:` from clobbering your profile.
 
-A **profile-set** write sticks and survives reboot (loaded from KV at
-boot). To set your own data, write with any phone NFC-writer app:
-
-- a **text record** `set:https://me.example` → the badge serves that URL
-  (recognised schemes are abbreviated per the NFC Forum URI RTD);
-- a **vCard record** → the badge serves the vCard verbatim.
+A **profile** write sticks and survives reboot (loaded from KV at boot).
+To set your own data, write with any phone NFC-writer app — a plain URL
+record, a vCard, a Wi-Fi record, whatever you want the badge to hand out.
+The `set:https://…` text form is also accepted (schemes abbreviated per
+the NFC Forum URI RTD) for writers that only emit text records.
 
 Records are capped at the CC-advertised 127-byte NDEF ceiling
 (`MAX_URL_LEN = 118` for generated URI records). This path is

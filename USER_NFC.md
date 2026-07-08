@@ -36,23 +36,25 @@ Third-party / random NFC reader apps cannot issue these commands — they don't 
 
 ## Set your own broadcast data
 
-You can replace the default `badge.team` URL with your own **vanity URL**
-or a **vCard** contact card. Use any NFC-writer app on your phone (e.g.
-"NFC Tools") and write to the badge:
+You can replace the default `badge.team` URL with **anything you want the
+badge to hand out** — a vanity URL, a vCard business card, a Wi-Fi record,
+whatever. Use any NFC-writer app on your phone (e.g. "NFC Tools") and
+write to the badge. The rule is simple: **anything you write sticks,
+except a `token:` (those just land on your Tokens screen).**
 
-- **Vanity URL** — write a **Text** record `set:https://your.link`. The
-  badge starts serving that URL. (`http://`, `https://`, and the `www.`
-  variants are recognised and stored compactly.)
-- **vCard** — write a **Contact / vCard** record. The badge serves it
-  verbatim, so other phones tapping you get your contact card.
+- **Vanity URL** — write a **URL / URI** record (e.g. `annejan.com`). The
+  badge starts serving it. A **Text** record `set:https://your.link` also
+  works for writers that only emit text.
+- **vCard** — write a **Contact / vCard** record. Other phones tapping you
+  get your contact card.
+- **Wi-Fi**, or any other record — served verbatim, same deal.
 
 Your choice is saved and survives a reboot. Keep it short — the badge
 caps records at ~127 bytes (fine for a URL or a compact vCard).
 
-When someone taps a **token** onto your badge (or writes anything else),
-that write shows for about **10 seconds** and then your badge goes back
-to broadcasting your own data — a pushed token can't permanently
-overwrite your URL / vCard.
+When someone taps a **token** onto your badge, that write shows for about
+**10 seconds** and then your badge goes back to broadcasting your own data
+— a pushed token can't overwrite your profile.
 
 Note: setting this is **unauthenticated** — anyone who can physically
 tap your badge with a writer app can change it. It's your badge in your

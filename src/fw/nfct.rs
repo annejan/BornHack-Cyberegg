@@ -429,17 +429,16 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
 
 /// Classify a completed NDEF write and apply its side effects.
 ///
-/// Profile-set writes take priority and become the new persisted default
-/// broadcast (no revert):
-///   * a Well-Known text record `set:<url>` → generate a URI record;
-///   * a vCard MIME record → keep the raw message verbatim.
+/// The rule is: **only `token:` (and, when opted in, station phrases) are
+/// transient — everything else you write becomes your persisted broadcast
+/// profile.** So a URL tag, a vCard business card, a Wi-Fi record, or any
+/// other NDEF message sticks (stored verbatim and re-broadcast until
+/// changed), while a pushed token just lands on the token screen and the
+/// broadcast reverts after [`REVERT_SECS`].
 ///
-/// Otherwise it's a transient write — the broadcast reverts to the
-/// persisted profile after [`REVERT_SECS`]:
-///   * text `token:<v>` → collect into the token screen (always on);
-///   * a station phrase → apply the buff (only with `game` +
-///     `nfc-plaintext-station`; that path is unsigned so it's opt-in —
-///     see PR #98).
+/// Special case: a Well-Known text record `set:<url>` is rewritten into a
+/// clean URI record before persisting, so you can set a vanity URL from a
+/// plain text writer too.
 ///
 /// Returns [`WriteOutcome::None`] for an incomplete / cleared buffer.
 fn handle_ndef_write(ndef_buf: &mut [u8; NDEF_BUF_LEN]) -> WriteOutcome {
@@ -448,8 +447,9 @@ fn handle_ndef_write(ndef_buf: &mut [u8; NDEF_BUF_LEN]) -> WriteOutcome {
         return WriteOutcome::None;
     }
 
-    // `set:<url>` — copy the URL out (ending the borrow on ndef_buf)
-    // before rewriting the buffer as a generated URI record.
+    // `set:<url>` text record — copy the URL out (ending the borrow on
+    // ndef_buf) before rewriting the buffer as a clean generated URI
+    // record, then persist that.
     let set_url: Option<HVec<u8, NDEF_BUF_LEN>> =
         crate::nfc_ndef::find_text_record(&ndef_buf[2..2 + nlen])
             .and_then(|t| t.strip_prefix(b"set:".as_slice()))
@@ -463,19 +463,23 @@ fn handle_ndef_write(ndef_buf: &mut [u8; NDEF_BUF_LEN]) -> WriteOutcome {
         return WriteOutcome::SetProfile;
     }
 
-    if crate::nfc_ndef::is_vcard_message(&ndef_buf[2..2 + nlen]) {
-        return WriteOutcome::SetProfile;
-    }
-
-    // Transient: token push + optional station command.
+    // Transient writes: a `token:` push, or (opt-in, unsigned) a station
+    // phrase. These do NOT persist — the broadcast reverts to the profile.
     if let Some(text) = crate::nfc_ndef::find_text_record(&ndef_buf[2..2 + nlen]) {
-        try_apply_token(text);
+        if text.strip_prefix(b"token:".as_slice()).is_some() {
+            try_apply_token(text);
+            return WriteOutcome::Transient;
+        }
         #[cfg(all(feature = "game", feature = "nfc-plaintext-station"))]
         if let Some(toast) = crate::game::station::apply(text) {
             crate::game::show_toast(toast);
+            return WriteOutcome::Transient;
         }
     }
-    WriteOutcome::Transient
+
+    // Everything else — a URL tag, vCard, Wi-Fi config, any other record —
+    // becomes the persisted broadcast profile, stored verbatim.
+    WriteOutcome::SetProfile
 }
 
 /// If `text` starts with `"token:"`, forward the suffix to the token

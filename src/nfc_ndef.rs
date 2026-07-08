@@ -72,6 +72,17 @@ pub fn is_vcard_message(msg: &[u8]) -> bool {
     }
 }
 
+/// True if `msg`'s first record is a Well-Known URI record (TNF=1,
+/// type `U`) — i.e. a plain URL tag, the natural way to write a vanity
+/// URL. Such a message is already a valid NDEF URI record, so callers
+/// broadcast it verbatim.
+pub fn is_uri_message(msg: &[u8]) -> bool {
+    match parse_record(msg, 0) {
+        Some((hdr, type_bytes, _payload, _next)) => hdr.tnf == 0x01 && type_bytes == b"U",
+        None => false,
+    }
+}
+
 /// Build a single URI NDEF record for `url` into `buf`, using the NFC
 /// Forum URI abbreviation for a recognised scheme. Returns the number of
 /// valid bytes written (`NLEN + message`). `url` is clamped to
@@ -222,6 +233,21 @@ mod tests {
         msg.extend_from_slice(ty);
         msg.extend_from_slice(body);
         assert!(is_vcard_message(&msg));
+    }
+
+    #[test]
+    fn uri_record_detected_as_profile() {
+        // A plain URL tag: d1 01 0c 55 04 "annejan.com" (what a phone writes).
+        let msg = b"\xd1\x01\x0c\x55\x04annejan.com";
+        assert!(is_uri_message(msg));
+        // A text record is not a URI record.
+        assert!(!is_uri_message(&text_record(b"token:x")));
+        // A generated URI record round-trips as a URI record too.
+        let mut buf = [0u8; 256];
+        let n = build_uri_record(&mut buf, b"https://me.example");
+        let nlen = u16::from_be_bytes([buf[0], buf[1]]) as usize;
+        assert_eq!(n, 2 + nlen);
+        assert!(is_uri_message(&buf[2..2 + nlen]));
     }
 
     #[test]
