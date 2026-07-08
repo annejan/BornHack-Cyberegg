@@ -322,6 +322,45 @@ async fn probe_lut(
     lut
 }
 
+/// Read and validate a custom `LUT.CFG` from the USB-MSC FAT partition.
+///
+/// Returns the 107-byte LUT unit only when the file exists, parses, and
+/// its declared variant matches the live `panel` — a mismatched-variant
+/// LUT uses the wrong row layout / drive voltages and can stress or blank
+/// the display, so it is rejected. Any failure returns `None` and the
+/// caller keeps the OTP-probed waveform.
+async fn load_custom_lut(panel: ssd1675::DisplayVariant) -> Option<[u8; 107]> {
+    use crate::lut_file::LutVariant;
+
+    let name = crate::fw::fat12::to_8_3("LUT.CFG")?;
+    let file = crate::fw::fat12::find_file(&name).await.ok()?;
+    // 107-byte LUT is 214 hex chars; plus keys/comments — 1 KiB is plenty.
+    let mut buf = [0u8; 1024];
+    let n = crate::fw::fat12::read_file(&file, 0, &mut buf).await.ok()?;
+
+    let parsed = match crate::lut_file::parse_lut_cfg(&buf[..n]) {
+        Ok(p) => p,
+        Err(_) => {
+            defmt::warn!("LUT.CFG present but rejected (bad format / length)");
+            return None;
+        }
+    };
+
+    let file_is_b = parsed.variant == LutVariant::B;
+    let panel_is_b = matches!(panel, ssd1675::DisplayVariant::Ssd1675B);
+    if file_is_b != panel_is_b {
+        defmt::warn!(
+            "LUT.CFG variant mismatch (file B={=bool}, panel B={=bool}) — ignoring to protect the panel",
+            file_is_b,
+            panel_is_b
+        );
+        return None;
+    }
+
+    defmt::info!("LUT.CFG accepted (variant matches panel)");
+    Some(parsed.lut)
+}
+
 /// Initialize the EPD display (SSD1675/SSD1675B, SPIM3 interface).
 ///
 /// Boot-probes the chip's OTP at 16 temperatures (−10..+54 °C in 4 °C steps,
@@ -348,6 +387,10 @@ pub async fn init_epd<'a>(
     black_buffer: &'a mut [u8],
     red_buffer: &'a mut [u8],
     work_buffer: &'a mut [u8],
+    // When `true`, skip any custom `LUT.CFG` and use the OTP-probed
+    // waveform — the boot-time escape hatch (user held Fire) for a bad
+    // custom LUT that would otherwise blank the panel.
+    force_otp_lut: bool,
 ) -> Result<EpdGfx<'a>, Infallible> {
     // Allocate the table in static storage first, then fill in-place — keeps
     // the 1.7 KB array off the stack.
@@ -422,6 +465,22 @@ pub async fn init_epd<'a>(
     // because `patch_no_invert` is variant-aware.
     let variant = detect_variant_from_otp(&lut_table[LUT_TABLE_SIZE / 2]);
     gfx.set_variant(variant);
+
+    // Optionally replace the OTP-probed waveform with a user-supplied
+    // custom LUT (LUT.CFG on the USB-MSC FAT partition), applied to every
+    // temperature band. Variant is validated against the just-detected
+    // panel inside `load_custom_lut`. Skipped when the user holds Fire at
+    // boot — the escape hatch for a LUT that renders badly.
+    if !force_otp_lut {
+        if let Some(custom) = load_custom_lut(variant).await {
+            for band in lut_table.iter_mut() {
+                *band = custom;
+            }
+            defmt::info!("EPD: custom LUT.CFG applied to all bands");
+        }
+    } else {
+        defmt::info!("EPD: Fire held at boot — forcing OTP LUT, ignoring LUT.CFG");
+    }
 
     // Derive the no-invert table from the full one + register both.
     let lut_table_no_invert: &'static mut [[u8; 107]; LUT_TABLE_SIZE] =

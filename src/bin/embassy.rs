@@ -153,6 +153,18 @@ async fn main(spawner: Spawner) {
     static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
     static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
     static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    // Boot-time escape hatch for a bad custom LUT: sample Fire (joy_fire =
+    // P1_02, see board.rs) before init_epd. Held → force the safe OTP
+    // waveform and ignore LUT.CFG. `steal` is sound here: this is a
+    // one-shot read that completes before the button task claims the pin
+    // (board!(p, joy_fire) at spawn time below).
+    let force_otp_lut = {
+        use embassy_nrf::gpio::{Input, Pull};
+        let fire = Input::new(unsafe { embassy_nrf::peripherals::P1_02::steal() }, Pull::Up);
+        let held = fire.is_low();
+        drop(fire);
+        held
+    };
     let mut display: EpdGfx<'_> = init_epd(
         board!(p, epd_spi),
         board!(p, epd_sck).into(),
@@ -165,6 +177,7 @@ async fn main(spawner: Spawner) {
         BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
         RED_BUF.init([0; EpdConfig::BUF_SIZE]),
         WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
+        force_otp_lut,
     )
     .await
     .unwrap();

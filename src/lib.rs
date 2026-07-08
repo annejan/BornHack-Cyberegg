@@ -125,6 +125,7 @@ pub mod fw {
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
+pub mod lut_file;
 pub mod name_screen;
 pub mod nfc_ndef;
 #[cfg(feature = "mesh")]
