@@ -4,9 +4,9 @@ The back of the badge has an NFC antenna. Tap a phone or a station reader to the
 
 ## Two things happen on a tap
 
-### 1. Phone reads the URL
+### 1. Phone reads your broadcast data
 
-Any standard NFC reader (Android default, iOS) sees a `https://badge.team` URL with your badge ID. Tapping with the OS reader just opens that page in a browser. Harmless.
+Any standard NFC reader (Android default, iOS) sees whatever you've set as your broadcast profile — by default a `https://badge.team` URL, but you can replace it with your own vanity URL or a vCard (see [Set your own broadcast data](#set-your-own-broadcast-data)). Tapping with the OS reader just reads it. Harmless.
 
 ### 2. BadgeCtl runs a station command
 
@@ -33,6 +33,30 @@ The reader side needs:
 - The matching Ed25519 private key bundled in (BornHack staff have it for stations)
 
 Third-party / random NFC reader apps cannot issue these commands — they don't have the key. They just see the public URL.
+
+## Set your own broadcast data
+
+You can replace the default `badge.team` URL with your own **vanity URL**
+or a **vCard** contact card. Use any NFC-writer app on your phone (e.g.
+"NFC Tools") and write to the badge:
+
+- **Vanity URL** — write a **Text** record `set:https://your.link`. The
+  badge starts serving that URL. (`http://`, `https://`, and the `www.`
+  variants are recognised and stored compactly.)
+- **vCard** — write a **Contact / vCard** record. The badge serves it
+  verbatim, so other phones tapping you get your contact card.
+
+Your choice is saved and survives a reboot. Keep it short — the badge
+caps records at ~127 bytes (fine for a URL or a compact vCard).
+
+When someone taps a **token** onto your badge (or writes anything else),
+that write shows for about **10 seconds** and then your badge goes back
+to broadcasting your own data — a pushed token can't permanently
+overwrite your URL / vCard.
+
+Note: setting this is **unauthenticated** — anyone who can physically
+tap your badge with a writer app can change it. It's your badge in your
+pocket; treat physical access accordingly.
 
 ## If you want to run your own station
 

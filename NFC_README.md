@@ -240,9 +240,10 @@ to `src/game/station.rs::apply` and rebuild.
 ## 5. Plaintext / NDEF coexistence
 
 The badge also serves an NFC Forum Type 4 NDEF tag at `CLA=0x00` for
-phone-side tag readers (the URL `https://badge.team`). This path is
-**unauthenticated** and uses the standard SELECT / READ BINARY /
-UPDATE BINARY APDUs.
+phone-side tag readers. This path is **unauthenticated** and uses the
+standard SELECT / READ BINARY / UPDATE BINARY APDUs. What it broadcasts
+by default is the user's **profile** (see §5.1), falling back to the
+built-in `https://badge.team` URL when none is set.
 
 By default the plaintext path does **not** drive station commands —
 stations are signed-channel only. A build may opt in with the
@@ -262,6 +263,37 @@ The dispatcher (`src/fw/nfct.rs`) selects between paths purely on
 - `(0x80, 0x01)` → SIGNED CMD
 - `(0x80, 0x02)` → GET CHALLENGE
 - anything else → plaintext NDEF dispatcher
+
+### 5.1 Settable broadcast profile + write revert
+
+Every completed NDEF write (UPDATE BINARY) is classified in
+`nfct::handle_ndef_write`:
+
+| Written record | Effect | Persistence |
+|---|---|---|
+| Text `set:<url>` | Rebuilt as a URI record and broadcast | **Persisted** to KV (`nfc/profile`); becomes the new default |
+| vCard MIME record (`text/vcard` / `text/x-vcard`) | Stored & broadcast verbatim | **Persisted** to KV; becomes the new default |
+| Text `token:<v>` | Collected into the token screen | Transient |
+| Station phrase (opt-in) | Applies the buff | Transient |
+| Anything else | — | Transient |
+
+A **transient** write leaves its bytes in the broadcast buffer only
+briefly: after `REVERT_SECS` (10 s) the badge reverts to the persisted
+profile. The revert is applied lazily on the next APDU, so a reader that
+taps within the window still sees the written record. This keeps a
+pushed `token:` (or junk) from permanently clobbering your vCard / URL.
+
+A **profile-set** write sticks and survives reboot (loaded from KV at
+boot). To set your own data, write with any phone NFC-writer app:
+
+- a **text record** `set:https://me.example` → the badge serves that URL
+  (recognised schemes are abbreviated per the NFC Forum URI RTD);
+- a **vCard record** → the badge serves the vCard verbatim.
+
+Records are capped at the CC-advertised 127-byte NDEF ceiling
+(`MAX_URL_LEN = 118` for generated URI records). This path is
+**unauthenticated by design** — anyone with physical NFC access to your
+badge can change your broadcast profile.
 
 ---
 
