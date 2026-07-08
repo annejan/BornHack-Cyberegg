@@ -25,8 +25,9 @@ ignored, so you can trim a calibration-tool export down by hand.
 
 ```
 # CyberAegg EPD custom LUT
-variant=A                 # A = SSD1675 / SSD1675A, B = SSD1675B
+variant=A                 # A = SSD1675 / SSD1675A, B = SSD1675B (required)
 band_lut=08992144...      # 214 hex chars = one 107-byte LUT unit
+speed=100                 # optional: LUT cycle-duration scale (0..255, 100 = OEM)
 ```
 
 - **`variant`** — `A` or `B`. **Must match your panel.** The badge
@@ -36,13 +37,20 @@ band_lut=08992144...      # 214 hex chars = one 107-byte LUT unit
 - **`band_lut`** — the 107-byte register-0x33 LUT unit as hex (exactly
   214 hex chars). This is the `band_lut` field from the calibration
   tool's JSON export; the trailer timing/voltage bytes are already baked
-  into it. The same waveform is applied to all temperature bands, so a
-  custom LUT does not track temperature the way the OTP tables do.
+  into it. Applied to **all** temperature bands as a base.
+- **`band_lut_00` … `band_lut_15`** *(optional)* — override a single
+  temperature band (0 = coldest … 15 = warmest). Supply a full set for a
+  **temperature-compensated** custom LUT, or just a few to tweak specific
+  bands. Any band you don't set (via `band_lut` or `band_lut_NN`) keeps
+  the panel's OTP-probed waveform for that temperature.
+- **`speed`** *(optional)* — scales every non-zero LUT timing byte before
+  each refresh (`100` = OEM duration, lower = faster/lighter, higher =
+  slower/darker). Same knob as the on-device menu, but bundled with the
+  waveform; a value here wins over the menu/persisted value at boot.
 
 The multi-stage `stage_luts` and the staged-drive `controls` from the
 calibration tool's full export are **not** used by this path — the badge
-firmware runs the single-LUT refresh engine. Only `variant` + `band_lut`
-matter here.
+firmware runs the single-LUT refresh engine.
 
 ## Recovery — if a LUT renders badly
 

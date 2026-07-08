@@ -189,6 +189,9 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
         bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
     }
+    // A `speed=` in LUT.CFG (a calibration bundle) takes precedence over
+    // the persisted value — apply it last.
+    bornhack_aegg::fw::epd::apply_lut_file_speed();
 
     // Host-side partial-refresh state — lazily allocates ~46 KB
     // .bss buffers (shadow + pending + sent_pending + dirty + 2

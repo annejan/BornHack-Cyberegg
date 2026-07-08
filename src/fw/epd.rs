@@ -8,7 +8,7 @@
 //! Persisted in the `"settings"` KV namespace under `"epd_lut"`.
 
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicI8, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI8, AtomicI16, AtomicU8, Ordering};
 
 #[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -322,31 +322,55 @@ async fn probe_lut(
     lut
 }
 
-/// Read and validate a custom `LUT.CFG` from the USB-MSC FAT partition.
+/// A `LUT.CFG`-set `speed=` override, or `-1` when unset. Read once at
+/// boot by [`apply_lut_file_speed`] so a calibration bundle's speed wins
+/// over the persisted-KV value.
+pub static LUT_FILE_SPEED: AtomicI16 = AtomicI16::new(-1);
+
+/// Read and apply a custom `LUT.CFG` from the USB-MSC FAT partition into
+/// `lut_table`, in place.
 ///
-/// Returns the 107-byte LUT unit only when the file exists, parses, and
-/// its declared variant matches the live `panel` — a mismatched-variant
-/// LUT uses the wrong row layout / drive voltages and can stress or blank
-/// the display, so it is rejected. Any failure returns `None` and the
-/// caller keeps the OTP-probed waveform.
-async fn load_custom_lut(panel: ssd1675::DisplayVariant) -> Option<[u8; 107]> {
+/// `scratch` is a caller-owned byte buffer used to read the file — the EPD
+/// `work_buffer` is reused for this so we add **no** new `.bss` (mesh
+/// RAM/stack is marginal; extra statics overflow the boot stack and
+/// HardFault). It also bounds the max file size to `scratch.len()`.
+///
+/// Fills only the bands the file specifies (a `band_lut` base and/or
+/// `band_lut_NN` overrides); bands the file leaves out keep their
+/// OTP-probed waveform, so a partial set still tracks temperature. A
+/// `speed=` value is stashed in [`LUT_FILE_SPEED`] for later application.
+///
+/// The file's `variant` is validated against the live `panel`, and the
+/// whole waveform is validated (`validate_bands`), *before* `lut_table` is
+/// written — so a mismatched-variant or malformed file never half-applies.
+/// Any failure is a no-op (OTP kept).
+async fn load_custom_lut(
+    lut_table: &mut [[u8; 107]; LUT_TABLE_SIZE],
+    panel: ssd1675::DisplayVariant,
+    scratch: &mut [u8],
+) {
     use crate::lut_file::LutVariant;
 
-    let name = crate::fw::fat12::to_8_3("LUT.CFG")?;
-    let file = crate::fw::fat12::find_file(&name).await.ok()?;
-    // 107-byte LUT is 214 hex chars; plus keys/comments — 1 KiB is plenty.
-    let mut buf = [0u8; 1024];
-    let n = crate::fw::fat12::read_file(&file, 0, &mut buf).await.ok()?;
+    let Some(name) = crate::fw::fat12::to_8_3("LUT.CFG") else {
+        return;
+    };
+    let Ok(file) = crate::fw::fat12::find_file(&name).await else {
+        return; // no LUT.CFG — normal, keep OTP
+    };
+    let Ok(n) = crate::fw::fat12::read_file(&file, 0, scratch).await else {
+        return;
+    };
+    let data = &scratch[..n];
 
-    let parsed = match crate::lut_file::parse_lut_cfg(&buf[..n]) {
-        Ok(p) => p,
+    // Variant + speed, validated against the panel before anything else.
+    let meta = match crate::lut_file::parse_meta(data) {
+        Ok(m) => m,
         Err(_) => {
-            defmt::warn!("LUT.CFG present but rejected (bad format / length)");
-            return None;
+            defmt::warn!("LUT.CFG present but rejected (bad meta)");
+            return;
         }
     };
-
-    let file_is_b = parsed.variant == LutVariant::B;
+    let file_is_b = meta.variant == LutVariant::B;
     let panel_is_b = matches!(panel, ssd1675::DisplayVariant::Ssd1675B);
     if file_is_b != panel_is_b {
         defmt::warn!(
@@ -354,11 +378,42 @@ async fn load_custom_lut(panel: ssd1675::DisplayVariant) -> Option<[u8; 107]> {
             file_is_b,
             panel_is_b
         );
-        return None;
+        return;
     }
 
-    defmt::info!("LUT.CFG accepted (variant matches panel)");
-    Some(parsed.lut)
+    // Dry-run validate every waveform value BEFORE writing, so a malformed
+    // file can't leave `lut_table` half-overwritten (no scratch table).
+    if crate::lut_file::validate_bands(data).is_err() {
+        defmt::warn!("LUT.CFG waveform rejected (bad hex / length / band) — keeping OTP");
+        return;
+    }
+
+    let mut band_set = [false; LUT_TABLE_SIZE];
+    match crate::lut_file::parse_bands(data, lut_table, &mut band_set) {
+        Ok(true) => {
+            let count = band_set.iter().filter(|&&s| s).count() as u8;
+            defmt::info!("LUT.CFG accepted: {=u8} band(s) applied", count);
+        }
+        Ok(false) => defmt::info!("LUT.CFG accepted: no waveform (settings only)"),
+        // Unreachable after validate_bands, but keep OTP if it ever fires.
+        Err(_) => return,
+    }
+
+    if let Some(speed) = meta.speed {
+        LUT_FILE_SPEED.store(speed as i16, Ordering::Relaxed);
+    }
+}
+
+/// Apply a `LUT.CFG`-supplied `speed=` (if any) over the persisted value.
+/// Call at boot *after* [`load_persisted_lut_speed`] so the file wins.
+/// Clamps to `[EPD_LUT_SPEED_MIN, 255]`.
+pub fn apply_lut_file_speed() {
+    let s = LUT_FILE_SPEED.load(Ordering::Relaxed);
+    if s >= 0 {
+        let v = (s as u16).clamp(EPD_LUT_SPEED_MIN as u16, 255) as u8;
+        EPD_LUT_SPEED.store(v, Ordering::Relaxed);
+        defmt::info!("LUT.CFG speed override applied: {=u8}", v);
+    }
 }
 
 /// Initialize the EPD display (SSD1675/SSD1675B, SPIM3 interface).
@@ -436,6 +491,24 @@ pub async fn init_epd<'a>(
         );
     }
 
+    // Detect the panel variant from a probed entry — needed both for the
+    // custom-LUT validation below and for `patch_no_invert` later.
+    let variant = detect_variant_from_otp(&lut_table[LUT_TABLE_SIZE / 2]);
+
+    // Optionally replace OTP-probed bands with a user-supplied custom LUT
+    // (LUT.CFG on the USB-MSC FAT partition), applied here BEFORE the
+    // framebuffers are handed to the driver so `work_buffer` can double as
+    // the file-read scratch — adding no new `.bss` (mesh RAM/stack is
+    // marginal; extra statics HardFault at boot). Variant is validated
+    // against the panel inside `load_custom_lut`; it fills only the bands
+    // the file specifies. Skipped when the user holds Fire at boot — the
+    // escape hatch for a LUT that renders badly.
+    if !force_otp_lut {
+        load_custom_lut(lut_table, variant, work_buffer).await;
+    } else {
+        defmt::info!("EPD: Fire held at boot — forcing OTP LUT, ignoring LUT.CFG");
+    }
+
     // Build the SPI bus.
     let mut cfg = Config::default();
     // Same as the OTP-load path above: M16 for runtime EPD writes.
@@ -461,26 +534,9 @@ pub async fn init_epd<'a>(
         .unwrap();
     let display = Display::new(controller, config);
     let mut gfx = GraphicDisplay::new(display, black_buffer, red_buffer, work_buffer);
-    // Detect variant from a probed entry — needed before `register_lut_tables`
-    // because `patch_no_invert` is variant-aware.
-    let variant = detect_variant_from_otp(&lut_table[LUT_TABLE_SIZE / 2]);
+    // `variant` was detected (and any custom LUT applied) above, before the
+    // framebuffers were moved into `gfx`.
     gfx.set_variant(variant);
-
-    // Optionally replace the OTP-probed waveform with a user-supplied
-    // custom LUT (LUT.CFG on the USB-MSC FAT partition), applied to every
-    // temperature band. Variant is validated against the just-detected
-    // panel inside `load_custom_lut`. Skipped when the user holds Fire at
-    // boot — the escape hatch for a LUT that renders badly.
-    if !force_otp_lut {
-        if let Some(custom) = load_custom_lut(variant).await {
-            for band in lut_table.iter_mut() {
-                *band = custom;
-            }
-            defmt::info!("EPD: custom LUT.CFG applied to all bands");
-        }
-    } else {
-        defmt::info!("EPD: Fire held at boot — forcing OTP LUT, ignoring LUT.CFG");
-    }
 
     // Derive the no-invert table from the full one + register both.
     let lut_table_no_invert: &'static mut [[u8; 107]; LUT_TABLE_SIZE] =
