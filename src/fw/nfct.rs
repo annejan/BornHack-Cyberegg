@@ -313,9 +313,15 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
 /// payload:
 ///   * If `text` starts with `"token:"`, forward the value to the token screen
 ///     (always, regardless of features).
-///   * If the `game` feature is enabled and the text matches a station phrase,
-///     apply the effect, show the toast, and re-arm the buffer back to the
-///     default URL so the next phone-read shows the `badge.team` URL again.
+///   * If both the `game` and `nfc-plaintext-station` features are enabled and
+///     the text matches a station phrase, apply the effect, show the toast, and
+///     re-arm the buffer back to the default URL so the next phone-read shows
+///     the `badge.team` URL again.
+///
+/// Plaintext station dispatch is OFF by default: an UNSIGNED NDEF write is
+/// enough to drive it, so it only benefits self-buffs on the tapped badge but
+/// bypasses the signed channel. Stations are signed-channel only unless a build
+/// opts in via `nfc-plaintext-station` (physical event-station tags).
 fn try_apply_station(ndef_buf: &mut [u8; NDEF_BUF_LEN]) {
     let nlen = u16::from_be_bytes([ndef_buf[0], ndef_buf[1]]) as usize;
     if nlen == 0 || 2 + nlen > ndef_buf.len() {
@@ -326,7 +332,7 @@ fn try_apply_station(ndef_buf: &mut [u8; NDEF_BUF_LEN]) {
         return;
     };
     try_apply_token(text);
-    #[cfg(feature = "game")]
+    #[cfg(all(feature = "game", feature = "nfc-plaintext-station"))]
     if let Some(toast) = crate::game::station::apply(text) {
         crate::game::show_toast(toast);
         init_ndef_url(ndef_buf);

@@ -242,11 +242,19 @@ to `src/game/station.rs::apply` and rebuild.
 The badge also serves an NFC Forum Type 4 NDEF tag at `CLA=0x00` for
 phone-side tag readers (the URL `https://badge.team`). This path is
 **unauthenticated** and uses the standard SELECT / READ BINARY /
-UPDATE BINARY APDUs. Writing certain text records via UPDATE BINARY
-also triggers `station::apply`, so the same effects can be achieved
-without signing — at the cost of allowing anyone with NFC to drive
-the badge. The signed channel is the secured path for trusted
-readers.
+UPDATE BINARY APDUs.
+
+By default the plaintext path does **not** drive station commands —
+stations are signed-channel only. A build may opt in with the
+`nfc-plaintext-station` Cargo feature, after which writing certain text
+records via UPDATE BINARY also triggers `station::apply`, so the same
+effects can be achieved without signing — at the cost of allowing
+anyone with NFC to drive the badge. Enable it only for events that hand
+out buffs via plain NFC-writable tags rather than the authenticated
+reader. The signed channel is the secured path for trusted readers.
+
+The `token:` UPDATE BINARY path is unaffected by this feature and stays
+on regardless.
 
 The dispatcher (`src/fw/nfct.rs`) selects between paths purely on
 `(CLA, INS)`:

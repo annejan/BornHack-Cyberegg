@@ -1,9 +1,13 @@
 //! Station NFC text-record dispatcher.
 //!
 //! Event-side stations (food / medic / inspiration / rest) hand out
-//! buffs to a player's badge by NFC-writing a fixed text record onto
-//! the tag.  When the firmware receives a write, the NDEF text payload
-//! is handed here; if it matches one of the four phrases the
+//! buffs to a player's badge.  Two callers reach this dispatcher:
+//!   * the signed NFC channel (`nfct::handle_signed`) — authenticated,
+//!     always on; the phrase is the verified plaintext of a signed APDU.
+//!   * an unsigned plaintext NDEF write (`nfct::try_apply_station`) —
+//!     off by default, gated behind the `nfc-plaintext-station` feature
+//!     for physical event-station tags.
+//! Either way, if the phrase matches one of the four below the
 //! corresponding stat is restored to full and a station toast is
 //! shown.  Anything else is silently ignored.
 //!

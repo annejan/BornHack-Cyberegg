@@ -149,6 +149,11 @@ opt-level = "z"
 # default = ["simulator"]
 # default = ["embassy"]
 game = []
+# Opt-in: also accept UNSIGNED plaintext NDEF text records as station
+# commands (physical event-station tags). OFF by default — stations are
+# signed-channel only. Enable for events that hand out buffs via plain
+# NFC-writable tags instead of the authenticated Android reader.
+nfc-plaintext-station = []
 signed-channel = ["heapless", "ed25519-dalek", "sha2"]
 watch = ["heapless", "fasttime"]
 mesh = [
