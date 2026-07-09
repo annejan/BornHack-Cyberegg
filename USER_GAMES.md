@@ -92,6 +92,87 @@ Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (s
 
 To go back to a preset, delete `BORNPETS.CFG` from the drive and reboot.
 
+A few gotchas:
+
+- **Edits apply at boot only.** Eject the drive properly (so the write is
+  flushed to the badge), then power-cycle. No `*` after the pet name =
+  no override was applied.
+- **The parser is silent.** Unknown keys are skipped, and a value that
+  isn't a plain whole number (no units, decimals or minus sign) drops
+  the whole line without any error on screen.
+- **The "Reasonable range" column is advice, not a limit.** Values are
+  only clamped to the raw integer type — `HUNGER_RATE=1000` really does
+  make hunger fill ~300× faster and your pet will be starving before
+  you've unplugged the cable. If a wild value wrecked your pet, delete
+  the file and reboot to fall back to the preset.
+
+## Custom pets: `PETS.CFG`
+
+You can add your own pets (or rename the built-in ones) without
+reflashing — a manifest file plus sprite files on the badge's USB drive.
+A pet is a pure cosmetic skin: stats, decay, traits and animations all
+behave identically; a new pet only needs art.
+
+### The manifest
+
+Create `PETS.CFG` in the root of the `CYBR<4 hex>` drive, one
+`PREFIX=NAME` per line (`#` starts a comment):
+
+```
+# rename a built-in, add two new pets
+0=Bartho
+5=Dragon
+6=Ghost
+```
+
+The prefix (decimal) picks the sprite slot:
+
+| Prefix  | Meaning                                              |
+| ------- | ---------------------------------------------------- |
+| `0` `1` `2` | The built-ins (Bartholomeus, Cat, Slug) — listing one just **renames** it |
+| `3` `4` | Reserved (sponsor slides, menu icons) — ignored      |
+| `5` `6` `7` | **New pets** — appear in the hatchery roster     |
+| `8`+    | Out of range — ignored                               |
+
+Names are ASCII only, max 16 characters (longer is truncated, a
+non-ASCII character truncates at that point). Malformed lines are
+skipped silently. Applied at boot — eject the drive properly and
+power-cycle, like every other config file.
+
+### The sprites
+
+Each animation frame is one PCX file named `PPAAFF.PCX`, all three
+fields two-digit **hex**:
+
+- `PP` — the pet prefix (`05`, `06`, `07` for new pets)
+- `AA` — the animation ID (table below)
+- `FF` — the frame number, starting at `00` and contiguous (`00`, `01`,
+  `02`, …). Frame counts are auto-discovered; a missing frame `00`
+  means "no such animation" and the badge falls back or shows nothing —
+  so at minimum ship Idle (`PP0100.PCX`).
+
+| `AA` | Animation        | `AA` | Animation          |
+| ---- | ---------------- | ---- | ------------------ |
+| `01` | Idle             | `0B` | Warning: miserable |
+| `02` | Happy            | `0C` | Feeding            |
+| `03` | Critical: sick   | `0D` | Healing            |
+| `04` | Critical: tired  | `0E` | Relaxing           |
+| `05` | Critical: hungry | `0F` | Playing            |
+| `06` | Critical: drained| `10` | Sleeping           |
+| `07` | Warning: sick    | `11` | Leaving            |
+| `08` | Warning: tired   | `12` | Gone               |
+| `09` | Warning: hungry  | `13` | Hibernating        |
+| `0A` | Warning: drained | `14` | Hatching (egg)     |
+
+Example: `050100.PCX` = pet 5, Idle, frame 0. `051400.PCX` = pet 5's
+egg. Any animation you don't supply simply never plays for that pet.
+
+The files use the same strict PCX flavour as all badge art (2 bpp,
+single plane, RLE, fixed palette 0 = black / 1 = red / 2 = white /
+3 = transparent) — generate them with the `aegg-asset-assistant` tool.
+With three free prefixes (`5`–`7`) the roster tops out at the three
+built-ins plus three custom pets.
+
 ## The seven mini-games
 
 Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has its own cooldown (limit on how often you can play it for stat reduction). **CAN** always exits any mini-game.

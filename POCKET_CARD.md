@@ -60,6 +60,8 @@ Plug USB-C. Badge appears as **`CYBR<4 hex>`** drive.
 | `030000.PCX` … `030009.PCX`         | sponsor slides                  |
 | `<6 hex>.PCX`                       | game sprite asset               |
 | `BORNPETS.CFG`                      | custom pet balance (KEY=VALUE)  |
+| `PETS.CFG`                          | add / rename pets (PREFIX=NAME) |
+| `LUT.CFG`                           | custom e-paper waveform         |
 
 Reboot the badge after dropping files.
 

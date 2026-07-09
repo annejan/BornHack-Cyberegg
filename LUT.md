@@ -52,6 +52,37 @@ The multi-stage `stage_luts` and the staged-drive `controls` from the
 calibration tool's full export are **not** used by this path — the badge
 firmware runs the single-LUT refresh engine.
 
+### Size limit: keep the file under ~2.8 KB
+
+`LUT.CFG` is read into a fixed 2888-byte scratch buffer (the display's
+work buffer, borrowed during boot). A larger file is truncated mid-line,
+fails validation, and the **whole file is silently ignored** (OTP
+waveform used instead). A full 16-band export with comments easily
+exceeds this — trim it: rely on one base `band_lut=` line (it already
+fills all 16 bands) plus only the `band_lut_NN` overrides you actually
+need, and strip comments. A base + a handful of overrides fits fine; a
+base plus all 16 overrides does not.
+
+### `speed` floor
+
+`speed` is clamped to **30..255** everywhere it can be set (file, menu,
+persisted value). Values below 30 behave as 30 — that is the fastest /
+lightest refresh allowed.
+
+### If the badge boots fine but ignores your LUT
+
+Rejection is silent (log-only). Checklist:
+
+1. **Wrong `variant`** — the panel is auto-detected; a mismatched file
+   is skipped. Try the other letter.
+2. **Wrong key** — the calibration tool's full JSON export calls things
+   `stage_luts` / `controls`; the badge wants the flat `band_lut` hex
+   field. Copy that one.
+3. **File too big** — see the size limit above.
+4. **Bad hex / wrong length** — each LUT value must be exactly 214 hex
+   chars; any parse error anywhere rejects the whole file.
+5. **Fire held at boot** — forces OTP for that boot (see recovery).
+
 ## Recovery — if a LUT renders badly
 
 Hold **Fire** (the joystick centre press) while the badge boots. This

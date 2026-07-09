@@ -88,3 +88,35 @@ The badge imports iCalendar events at boot from a file called **`ALARMS.ICS`** i
 You can use the official BornHack programme `.ics` straight from `https://bornhack.dk/`.
 
 > Cap: 31 events stored. Multi-day events get clamped to start day 23:59 (e-paper doesn't draw events spanning days). All events are RAM-only and re-imported on every boot from `ALARMS.ICS`.
+
+### Import limits & quirks
+
+The parser is deliberately minimal. If events are missing or look odd,
+one of these is usually why:
+
+- **File size: 16 KiB max.** The file is read in one go into a fixed
+  buffer; anything past 16 KiB is silently cut off mid-event. A full
+  conference programme easily exceeds this — trim it first with
+  `scripts/strip_ics.py` (drops DESCRIPTION/UID/etc. and supports
+  `--from` / `--to` / `--max` to select a range).
+- **31 events max.** Import stops quietly at the cap; later events in
+  the file never appear.
+- **No recurrence.** `RRULE` is ignored — a repeating event imports as
+  its first occurrence only. Export "expanded" / per-occurrence ICS
+  instead (the BornHack programme already is).
+- **No all-day events.** A DATE-only `DTSTART` (`;VALUE=DATE:YYYYMMDD`)
+  is dropped without warning. Give the event a real start time.
+- **ASCII only.** Non-ASCII characters in titles are stripped, not
+  transliterated (`Æ`, accents, emoji simply vanish). Edit the SUMMARY
+  to plain ASCII if the spelling matters.
+- **Timezones.** Only `Z`-suffixed (UTC) timestamps are shifted to
+  local time — and always by the built-in default of **UTC+2** (right
+  for BornHack), because the import runs before your persisted timezone
+  setting is applied. Floating times and `TZID=`-zoned times are taken
+  as-is, zone discarded. When in doubt, export in UTC.
+- **Fired events disappear from the Calendar until reboot.** Imported
+  events are one-shot alarms: once one has fired, its slot is disabled
+  and it no longer shows on the grid or day view. Rebooting re-imports
+  everything.
+- **Edits apply at boot only.** Replace `ALARMS.ICS`, eject the drive
+  properly (so the write is flushed), then power-cycle the badge.
