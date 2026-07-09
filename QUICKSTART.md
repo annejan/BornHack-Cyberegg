@@ -126,6 +126,36 @@ The factory test runs again on the next boot.
 - **Alarm never fires.** Clock hasn't been set yet this boot. See "Set the time" above.
 - **No mesh peers showing up.** Walk around — LoRa range varies. Or set a wrong LoRa preset; see **Main → Settings → LoRa Radio**, must match the rest of the local mesh.
 
+### E-paper / display
+
+- **Red only shows sometimes (e.g. after switching screens).** Working as
+  designed. Staying on a screen uses fast black/white refreshes that don't
+  repaint the red plane; red repaints on a **full refresh** (a screen
+  switch, or periodically). It isn't disabled — it just refreshes less
+  often than black/white.
+- **No red at all / washed-out screen after adding a custom LUT.** Your
+  `LUT.CFG` is a fast waveform that skips red (the calibration tool's
+  `skip_red`). Delete `LUT.CFG` from the badge's USB drive, or **hold Fire
+  while booting** to force the built-in (tri-color) waveform for that boot.
+  See [LUT.md](LUT.md).
+- **Blinking white LED / won't finish booting after dropping a LUT.CFG.**
+  A bad or wrong-variant `LUT.CFG` is rejected automatically, but if the
+  screen is unreadable, **hold Fire while plugging in / booting** to force
+  the safe built-in waveform, then delete or fix the file.
+
+### NFC
+
+- **My vanity URL / vCard doesn't stick.** Write it with an NFC-writer app
+  as a normal **URL/URI**, **vCard**, or **Wi-Fi** record — anything you
+  write (except a `token:` record) becomes your broadcast profile and
+  persists across reboot. A `token:` write is collected on the Tokens
+  screen instead and is transient (reverts after ~10 s). See
+  [USER_NFC.md](USER_NFC.md).
+- **A token I received disappeared / a URL I tapped reverted.** A `token:`
+  write is intentionally transient — it lands on the **Tokens** screen
+  (kept until reboot) and the broadcast reverts to your profile after
+  ~10 s.
+
 ## Where to file bugs
 
 `https://codeberg.org/Ranzbak/bornhack-firmware-2026/issues`
