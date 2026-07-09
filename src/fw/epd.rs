@@ -23,8 +23,8 @@ use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use panic_probe as _;
 use ssd1675::{
-    Builder, Dimensions, Display, GraphicDisplay, Interface, LUT_TABLE_MIN_C, LUT_TABLE_SIZE,
-    LUT_TABLE_STEP_C10, Rotation, detect_variant_from_otp, patch_no_invert,
+    Builder, Dimensions, Display, DisplayVariant, GraphicDisplay, Interface, LUT_TABLE_MIN_C,
+    LUT_TABLE_SIZE, LUT_TABLE_STEP_C10, Rotation, detect_variant_from_otp, patch_no_invert,
 };
 use static_cell::StaticCell;
 
@@ -69,6 +69,31 @@ static LUT_TABLE_CELL: StaticCell<[[u8; 107]; LUT_TABLE_SIZE]> = StaticCell::new
 /// Same as `LUT_TABLE_CELL` but with inversion phases zeroed per
 /// `patch_no_invert`.  Used by `update_bw` for flicker-free fast refreshes.
 static LUT_TABLE_NO_INVERT_CELL: StaticCell<[[u8; 107]; LUT_TABLE_SIZE]> = StaticCell::new();
+
+/// SSD1675**A** full-refresh waveform — the hand-tuned v5 calibration LUT
+/// (`ssd1675-calibration/full-lut-1975A-v5`, band 10 ≈ 30 °C, skip-red).
+///
+/// 107-byte cmd-`0x32` register image in the SSD1675A layout: waveform bytes
+/// `0..35` (5 rows × 7 phases), TP timing `35..70`, voltage trailer `70..=75`
+/// (VGH `0x0F`, VSH1 `0x32`, VSH2 `0xAD`, VSL `0x26`, Dummy `0x10`, Gate
+/// `0x02`).
+///
+/// Replaces the probed OTP **full** LUT across every temperature band on
+/// SSD1675A (this waveform is not temperature-compensated — a single
+/// calibrated band is used for all temperatures). SSD1675B keeps its OTP
+/// full LUT. Only the full-refresh path (`lut_table`) is swapped; the
+/// no-invert / partial table stays OTP-derived.
+const FULL_LUT_1675A_V5: [u8; 107] = [
+    0x14, 0x99, 0x21, 0x44, 0x50, 0x53, 0x00, 0x14, 0x99, 0x21, 0xa0, 0xb8,
+    0xb8, 0x00, 0x14, 0x99, 0x21, 0x44, 0x2b, 0x2b, 0x2f, 0x68, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x68, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1d,
+    0x06, 0x24, 0x00, 0x00, 0x01, 0x01, 0x03, 0x03, 0x08, 0x01, 0x0c, 0x01,
+    0x0c, 0x04, 0x02, 0x0c, 0x0c, 0x00, 0x01, 0x06, 0x02, 0x04, 0x1a, 0x02,
+    0x04, 0x01, 0x06, 0x20, 0x05, 0x08, 0x06, 0x06, 0x2a, 0x01, 0x0f, 0x32,
+    0xad, 0x26, 0x10, 0x02, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21,
+    0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21,
+    0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21,
+];
 
 fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
     let port = match p.port() {
@@ -599,6 +624,19 @@ pub async fn init_epd<'a>(
         lut_table_no_invert[i] = lut_table[i];
         patch_no_invert(&mut lut_table_no_invert[i], variant);
     }
+
+    // SSD1675A full-refresh override: replace the probed OTP full LUT with the
+    // hand-tuned v5 calibration waveform ([`FULL_LUT_1675A_V5`]) across all
+    // temperature bands.  Done *after* deriving `lut_table_no_invert` so the
+    // partial/delta path keeps the OTP waveform — only the full-refresh path
+    // (`lut_table`, used by `update_tc`) is swapped.  SSD1675B keeps its OTP
+    // full LUT, which drives the panel well as-is.
+    if variant == DisplayVariant::Ssd1675 {
+        for band in lut_table.iter_mut() {
+            *band = FULL_LUT_1675A_V5;
+        }
+    }
+
     gfx.register_lut_tables(lut_table, lut_table_no_invert);
     defmt::info!(
         "Display controller: {}",
