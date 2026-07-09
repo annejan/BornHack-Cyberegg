@@ -79,6 +79,8 @@ Set the timezone once in **Main → Settings → Timezone**. That setting persis
 
 Plug any USB-C cable into the badge. Charge LED shows on the on-screen battery icon (the badge does not have a dedicated charge LED). USB-connected = BLE off; unplug when you want pairing back.
 
+Two things that look like faults but aren't: the charge bolt disappearing while USB is still plugged means charging is **complete** (it returns by itself if the cell drains), and the battery icon can lag up to a minute behind reality — it's only re-sampled every 60 s.
+
 ## USB drag-drop
 
 When the badge is plugged in via USB-C it appears on your computer as a small drive labelled **`CYBR<4 hex>`**. You can drop these files in the root:
@@ -121,10 +123,13 @@ The factory test runs again on the next boot.
 ## Troubleshooting
 
 - **Badge won't wake / display stays blank.** Plug in USB. If the LED never blinks, hold EXE while plugging in and re-flash via `dfu-util`.
-- **Clock keeps resetting.** Expected. The RTC has no battery; pair via MeshCore once per boot or wait for a mesh time advert.
-- **BLE not visible.** USB is plugged in. BLE is disabled whenever USB is connected. Unplug.
-- **Alarm never fires.** Clock hasn't been set yet this boot. See "Set the time" above.
+- **Fresh flash (or factory reset) shows the factory test, then a "ready to ship" screen — and hangs there.** By design. After an all-pass self-test the badge stamps its pass flag, draws the ship screen and halts (green LED pulsing). Power-cycle once more; the second boot skips the test and starts the app.
+- **"Battery voltage critical" screen at boot, badge goes no further.** The cell measured below 3.0 V at power-on, so the firmware halts to protect it. Charging is hardware-controlled and continues anyway — leave USB plugged in for a while, then power-cycle manually (the badge does not reboot itself off this screen).
+- **Clock keeps resetting.** Expected. The RTC has no battery; pair via MeshCore once per boot or wait for a mesh time advert. Note that on-air time is only accepted from a trusted source — a signature-verified repeater/companion advert or a channel you hold the key for. A crowd of other badges won't set your clock; a phone pairing always will.
+- **BLE not visible.** Two things to check: USB is plugged in (BLE is disabled whenever USB is connected — unplug), or Bluetooth was switched off in **Main → Settings → Bluetooth** (the toggle persists across reboots; set it back to `BLE: ON`).
+- **Alarm never fires.** Clock hasn't been set yet this boot. See "Set the time" above. If the clock *is* set, check the alarm's **Days** field — `None` never fires, and a Weekdays/Weekends/Custom mask only fires on matching days (the header bell shows for any enabled alarm regardless of its day mask).
 - **No mesh peers showing up.** Walk around — LoRa range varies. Or set a wrong LoRa preset; see **Main → Settings → LoRa Radio**, must match the rest of the local mesh.
+- **I reformatted the badge's USB drive and everything is gone.** Don't reformat. The badge only understands its own FAT12 layout; if boot finds anything else (exFAT, NTFS, odd sector sizes) it silently re-formats the whole partition — wiping every file. To clear files, delete them normally instead. If it already happened: copy your `.PCX` / `.ICS` / `.CFG` files back on and reboot.
 
 ### E-paper / display
 
@@ -143,6 +148,24 @@ The factory test runs again on the next boot.
   screen is unreadable, **hold Fire while plugging in / booting** to force
   the safe built-in waveform, then delete or fix the file.
 
+### Mesh / BLE
+
+- **The MeshCore app says "connected" but nothing works — can't set the
+  clock, no contacts, messages won't send.** Stale pairing. The phone
+  forgot the bond (you removed it in Bluetooth settings, or switched
+  phones) but the badge still has it, so every command is rejected as
+  unauthenticated. Fix: **Main → Settings → Bluetooth → Clear pairings**
+  (wipes all bonds and reboots the badge), then pair fresh. The badge
+  keeps at most **4** bonds — pairing a 5th phone silently doesn't stick.
+- **Channel screen shows "BLE client connected" and the buttons are
+  dead.** By design: while the phone app is connected the on-badge
+  channel browser locks (only Left/Right/CAN work). Close or disconnect
+  the app and the screen unlocks immediately.
+- **My PMs and the peers I'd heard are gone after a reboot.** The PM
+  inbox and the recently-heard list live in RAM only. **Saved contacts
+  persist** — when you meet someone you want to message later, open
+  their entry and save them before powering off.
+
 ### NFC
 
 - **My vanity URL / vCard doesn't stick.** Write it with an NFC-writer app
@@ -155,6 +178,32 @@ The factory test runs again on the next boot.
   write is intentionally transient — it lands on the **Tokens** screen
   (kept until reboot) and the broadcast reverts to your profile after
   ~10 s.
+- **A station tap did nothing — no toast, pet unaffected.** Station
+  commands only apply while you have an active game: pick a pet first
+  (the egg countdown already counts), or start a new egg if your pet has
+  left. Also: station commands come through the **signed** BadgeCtl
+  reader — writing the phrase (e.g. `more food`) as a plain text record
+  with a generic NFC app doesn't feed your pet; it just becomes your
+  broadcast profile, and your badge now proudly hands out "more food" to
+  every phone that taps it. Write a new URL/vCard to fix that.
+
+### Game / BornPets
+
+- **Pet area shows "No sprites on flash".** The boot scan found zero
+  `.PCX` files — typical after a factory reset, a drive reformat, or a
+  fresh flash without the asset set. Copy the sprite `.PCX` files back
+  onto the `CYBR<hex>` drive and reboot.
+- **A sprite I made shows wrong colours / doesn't show at all.** The
+  badge needs a very specific PCX flavour: 2 bits-per-pixel, single
+  plane, RLE, with the fixed palette order **0 = black, 1 = red,
+  2 = white, 3 = transparent** (the file's own palette is ignored). A
+  normal 256-colour or 24-bit export is silently skipped. Use the
+  `aegg-asset-assistant` tool to convert art — it gets all of this
+  right.
+- **`BORNPETS.CFG` / mode change seems to have no effect.** Both apply
+  at **boot only** — eject the drive properly (so the file is flushed)
+  and power-cycle. See [USER_GAMES.md](USER_GAMES.md) for the `*`
+  indicators and config rules.
 
 ## Where to file bugs
 

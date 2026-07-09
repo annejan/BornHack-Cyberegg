@@ -23,6 +23,10 @@ Available signed commands:
 
 A short toast appears on the badge confirming what happened. Each command has a 5-minute cooldown — tapping twice in quick succession does nothing the second time.
 
+Station commands need an **active game**: pick a pet first (the egg
+countdown already counts). If your pet has left, start a new egg — a tap
+with no active pet is silently ignored.
+
 ## What you need to do
 
 Nothing on the badge. The badge is always ready. Just hold the back of the badge close to the reader for a moment.
@@ -50,7 +54,15 @@ except a `token:` (those just land on your Tokens screen).**
 - **Wi-Fi**, or any other record — served verbatim, same deal.
 
 Your choice is saved and survives a reboot. Keep it short — the badge
-caps records at ~127 bytes (fine for a URL or a compact vCard).
+caps records at ~127 bytes (fine for a URL or a compact vCard). Long
+URLs sent via the `set:` text form are additionally clamped to ~118
+characters after the scheme — for anything longer, write a plain URI
+record instead, or use a link shortener.
+
+There is no NFC "erase" back to the factory default: an empty write (or
+a writer app's "format tag") doesn't restore the `badge.team` URL — it
+just leaves your current profile in place (or stores the empty record).
+To change what you broadcast, simply write the new record over it.
 
 When someone taps a **token** onto your badge, that write shows for about
 **10 seconds** and then your badge goes back to broadcasting your own data

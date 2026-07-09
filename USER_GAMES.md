@@ -92,6 +92,20 @@ Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (s
 
 To go back to a preset, delete `BORNPETS.CFG` from the drive and reboot.
 
+A few gotchas:
+
+- **Edits apply at boot only.** Eject the drive properly (so the write is
+  flushed to the badge), then power-cycle. No `*` after the pet name =
+  no override was applied.
+- **The parser is silent.** Unknown keys are skipped, and a value that
+  isn't a plain whole number (no units, decimals or minus sign) drops
+  the whole line without any error on screen.
+- **The "Reasonable range" column is advice, not a limit.** Values are
+  only clamped to the raw integer type — `HUNGER_RATE=1000` really does
+  make hunger fill ~300× faster and your pet will be starving before
+  you've unplugged the cable. If a wild value wrecked your pet, delete
+  the file and reboot to fall back to the preset.
+
 ## The seven mini-games
 
 Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has its own cooldown (limit on how often you can play it for stat reduction). **CAN** always exits any mini-game.
