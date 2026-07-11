@@ -720,7 +720,16 @@ async fn display_loop(
                         let start_screen = !bornhack_aegg::game::lifecycle::is_started();
                         #[cfg(not(feature = "game"))]
                         let start_screen = false;
-                        if start_screen {
+                        // The "Hello my name is" badge is also a heavy
+                        // full-frame graphic (big solid name band + red
+                        // accents) that under-drives and ghosts on the
+                        // non-inverting delta LUT.  Force a genuine inverting
+                        // full refresh while it's shown so it de-ghosts and
+                        // lays down cleanly.  `partial_idle` above already
+                        // skips redundant redraws, so this only flashes on an
+                        // actual content change (arriving / name edited).
+                        let name_screen = active_screen == bornhack_aegg::SCREEN_NAME;
+                        if start_screen || name_screen {
                             let _ = display.force_full_refresh(partial_state, speed).await;
                         } else {
                             let _ = display.update_partial(partial_state, speed).await;
