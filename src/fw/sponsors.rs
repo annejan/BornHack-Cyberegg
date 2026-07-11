@@ -162,6 +162,14 @@ pub async fn run(
         wait_or_button(button_rcvr, SLIDE_DURATION_SECS).await;
     }
 
+    // ── Final white clear ────────────────────────────────────────────
+    // Wipe the last sponsor logo so it doesn't linger — or ghost — into
+    // the first carousel screen when the main loop takes over the panel.
+    display.clear(Color::White);
+    let _ = display.reset().await;
+    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
+    let _ = display.deep_sleep().await;
+
     // ── Mark as shown ────────────────────────────────────────────────
     mark_shown().await;
 
