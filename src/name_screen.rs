@@ -28,7 +28,6 @@
 //! When `NODE_NAME` is empty the renderer shows `(no name set)`
 //! pointing at the Settings → Set Name flow.
 
-use embedded_graphics::mono_font::ascii::{FONT_7X13_BOLD, FONT_8X13_BOLD, FONT_10X20};
 use embedded_graphics::mono_font::{MonoFont, MonoTextStyle, iso_8859_1};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
@@ -45,16 +44,18 @@ const RED_BAND_BOTTOM: i32 = 56;
 
 /// Pick the largest single-line MonoFont whose total width fits within
 /// `max_w` for a name of `name_len` chars.  Walks biggest → smallest
-/// across profont + stock embedded-graphics ascii.  The huge u8g2
-/// `fub42_tf` is handled separately by the caller (different API).
+/// across profont + embedded-graphics `iso_8859_1`.  All candidates carry
+/// full Latin-1 glyphs so accented names (issue #111) render at every size.
+/// The huge u8g2 `fub42_tf` is handled separately by the caller (different
+/// API) and is also Latin-1 capable.
 fn pick_name_font(name_len: usize, max_w: u32) -> &'static MonoFont<'static> {
     // (font, per-char width).  Order matters — first match wins.
     let candidates: [(&MonoFont, u32); 5] = [
         (&PROFONT_24_POINT, 16),
         (&PROFONT_18_POINT, 12),
-        (&FONT_10X20, 10),
-        (&FONT_8X13_BOLD, 8),
-        (&FONT_7X13_BOLD, 7),
+        (&iso_8859_1::FONT_10X20, 10),
+        (&iso_8859_1::FONT_8X13_BOLD, 8),
+        (&iso_8859_1::FONT_7X13_BOLD, 7),
     ];
     for (font, w) in candidates {
         if (name_len as u32) * w <= max_w {
@@ -62,7 +63,7 @@ fn pick_name_font(name_len: usize, max_w: u32) -> &'static MonoFont<'static> {
         }
     }
     // Smallest fallback — name will visibly clip beyond ~21 chars.
-    &FONT_7X13_BOLD
+    &iso_8859_1::FONT_7X13_BOLD
 }
 
 pub fn draw<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
@@ -107,8 +108,8 @@ where
     // ── Big name in the white area below the red band ────────────────────
     // Snapshot the current node name into a local buffer — keep the
     // mutex hold short and let the renderer work without holding any
-    // locks.  Strip non-printable bytes so the chosen font (ASCII-only
-    // for the bigger sizes) doesn't render replacement glyphs.
+    // locks.  Keeps printable ASCII + Latin-1 (all fonts below are Latin-1
+    // capable) and drops anything else.
     let mut name_buf: heapless::String<31> = heapless::String::new();
     snapshot_name(&mut name_buf);
 
@@ -125,29 +126,10 @@ where
         let name_str = name_buf.as_str();
         let len = name_str.chars().count();
 
-        // Huge u8g2 font for very short names — `fub42_tf` glyphs are
-        // ~26 px wide, so 5 chars = ~130 px and clears the 152 px panel
-        // with margin.  Falls back to the MonoFont chain for longer
-        // names so we still single-line up to ~21 chars.
-        if len <= 5 {
-            let renderer = FontRenderer::new::<u8g2_font_fub42_tf>();
-            renderer
-                .render_aligned(
-                    name_str,
-                    Point::new(76, 100),
-                    VerticalPosition::Center,
-                    HorizontalAlignment::Center,
-                    FontColor::Transparent(BLACK),
-                    display,
-                )
-                .map_err(|e| match e {
-                    u8g2_fonts::Error::DisplayError(d) => d,
-                    // Other variants (e.g. `GlyphNotFound`) — name was
-                    // pre-filtered to ASCII printable upstream so this
-                    // shouldn't be reachable.  Treat as unreachable.
-                    _ => panic!("u8g2 glyph render failure"),
-                })?;
-        } else {
+        // Render the name with the MonoFont chain (profont + iso_8859_1, all
+        // full Latin-1).  Also the fallback if the huge u8g2 font is missing a
+        // glyph.
+        let draw_mono = |display: &mut D| -> Result<(), D::Error> {
             let font = pick_name_font(len, 148);
             Text::with_text_style(
                 name_str,
@@ -155,7 +137,34 @@ where
                 MonoTextStyle::new(font, BLACK),
                 centered,
             )
-            .draw(display)?;
+            .draw(display)
+            .map(|_| ())
+        };
+
+        // Huge u8g2 font for very short names — `fub42_tf` glyphs are
+        // ~26 px wide, so 5 chars = ~130 px and clears the 152 px panel
+        // with margin.  Falls back to the MonoFont chain for longer
+        // names so we still single-line up to ~21 chars.
+        if len <= 5 {
+            let renderer = FontRenderer::new::<u8g2_font_fub42_tf>();
+            match renderer.render_aligned(
+                name_str,
+                Point::new(76, 100),
+                VerticalPosition::Center,
+                HorizontalAlignment::Center,
+                FontColor::Transparent(BLACK),
+                display,
+            ) {
+                Ok(_) => {}
+                Err(u8g2_fonts::Error::DisplayError(d)) => return Err(d),
+                // Missing glyph (`fub42_tf` lacks this Latin-1 code point, or a
+                // non-Latin-1 char slipped through the filter): fall back to the
+                // MonoFont chain — which covers full Latin-1 — instead of
+                // panicking.
+                Err(_) => draw_mono(display)?,
+            }
+        } else {
+            draw_mono(display)?;
         }
     }
 
@@ -175,31 +184,39 @@ where
     Ok(())
 }
 
-/// Copy the current `NODE_NAME` into `out`, dropping any non-printable
-/// bytes so the ASCII-only big fonts don't render `?` replacements.
-/// The full UTF-8 name is preserved in the source mutex — this is just
-/// for the on-screen big-text rendering.
+/// Copy the current `NODE_NAME` into `out`, keeping printable ASCII and
+/// Latin-1 characters (so accented names and `Æ` render — issue #111) and
+/// dropping everything else (control chars, and anything beyond U+00FF like
+/// CJK/emoji that the fonts have no glyph for — dropping bounds the rendered
+/// width and avoids missing-glyph fallbacks).  Iterates over `char`s of the
+/// already-UTF-8-validated `NODE_NAME`, so multi-byte sequences are preserved
+/// intact.  The full name is still kept in the source mutex — this is just the
+/// on-screen snapshot.
 fn snapshot_name(out: &mut heapless::String<31>) {
     out.clear();
     #[cfg(feature = "embassy-base")]
     {
         crate::NODE_NAME.lock(|cell| {
             let name = cell.borrow();
-            for b in name.as_bytes() {
-                if (0x20..=0x7e).contains(b) && out.push(*b as char).is_err() {
-                    break;
-                }
-            }
+            push_renderable(out, name.as_str());
         });
     }
     #[cfg(feature = "simulator")]
     {
         let guard = crate::NODE_NAME.lock().unwrap();
         let name = guard.borrow();
-        for b in name.as_bytes() {
-            if (0x20..=0x7e).contains(b) && out.push(*b as char).is_err() {
-                break;
-            }
+        push_renderable(out, name.as_str());
+    }
+}
+
+/// Push the printable ASCII (`0x20..=0x7e`) and Latin-1 (`U+00A0..=U+00FF`)
+/// characters of `name` into `out`, stopping if the buffer fills.
+fn push_renderable(out: &mut heapless::String<31>, name: &str) {
+    for c in name.chars() {
+        let renderable =
+            matches!(c, ' '..='~') || matches!(c, '\u{A0}'..='\u{FF}');
+        if renderable && out.push(c).is_err() {
+            break;
         }
     }
 }
@@ -218,5 +235,34 @@ fn write_device_id(out: &mut heapless::String<16>) {
     #[cfg(feature = "simulator")]
     {
         let _ = out.push_str("A3F7");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_renderable;
+
+    fn filter(s: &str) -> heapless::String<31> {
+        let mut out = heapless::String::new();
+        push_renderable(&mut out, s);
+        out
+    }
+
+    #[test]
+    fn keeps_ascii_and_latin1() {
+        // Issue #111: Æ and accented letters must survive to the renderer.
+        assert_eq!(filter("Ægg").as_str(), "Ægg");
+        assert_eq!(filter("José").as_str(), "José");
+        assert_eq!(filter("Zöe Müller").as_str(), "Zöe Müller");
+        assert_eq!(filter("Hello").as_str(), "Hello");
+    }
+
+    #[test]
+    fn drops_control_and_beyond_latin1() {
+        assert_eq!(filter("a\u{7f}b").as_str(), "ab"); // DEL
+        assert_eq!(filter("x\ty").as_str(), "xy"); // tab (control)
+        assert_eq!(filter("q\u{85}w").as_str(), "qw"); // C1 control (< U+00A0)
+        assert_eq!(filter("日本語").as_str(), ""); // CJK beyond Latin-1
+        assert_eq!(filter("hi🎉").as_str(), "hi"); // emoji beyond Latin-1
     }
 }
