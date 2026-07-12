@@ -244,19 +244,64 @@ pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::A
 #[cfg(feature = "embassy-base")]
 pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// LoRa radio parameters stored on-device.
+///
+/// Serialisation to/from the 12-byte `"settings:radio"` KV record lives in
+/// [`fw::mesh::settings`], which re-exports this type.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+pub struct RadioParams {
+    /// Carrier frequency in Hz (e.g. 869_618_000).
+    pub freq_hz: u32,
+    /// Bandwidth in Hz (e.g. 62_500).
+    pub bw_hz: u32,
+    /// Spreading factor (5–12).
+    pub sf: u8,
+    /// Coding rate — 5 = 4/5, 6 = 4/6, 7 = 4/7, 8 = 4/8.
+    pub cr: u8,
+    /// TX power in dBm.
+    pub tx_power: i8,
+    /// Client-repeat mode enabled.
+    pub client_repeat: bool,
+}
+
+/// Default radio parameters — **EU/UK Narrow**, the stock MeshCore channel
+/// (matches `fw::mesh::sx1262::MeshCoreConfig::UK_NARROW_BAND`).
+///
+/// 869.618 MHz · BW 62.5 kHz · SF8 · CR 4/5 · 22 dBm TX
+///
+/// Out-of-the-box the badge shares airtime with stock MeshCore badges on the
+/// standard EU/UK Narrow channel.  TX power defaults to 22 dBm (the SX1262
+/// maximum) — the antenna is not fully efficient, so radiated power stays
+/// within the band limit; trim it via the Power menu if needed.
+///
+/// Coding rate uses **MeshCore protocol encoding**: 5 = CR 4/5, 6 = CR 4/6,
+/// etc. (distinct from the sx126x hardware register encoding where CR4_5 = 1).
+///
+/// Single source of truth: the `LORA_*` atomics below are seeded from it, and
+/// `fw::mesh::settings::get_radio_params_or_default()` falls back to it when
+/// flash holds no stored record.
+pub const DEFAULT_RADIO: RadioParams = RadioParams {
+    freq_hz: 869_618_000,
+    bw_hz: 62_500,
+    sf: 8,
+    cr: 5, // CR 4/5 in MeshCore protocol encoding
+    tx_power: 22,
+    client_repeat: false,
+};
+
 /// Current LoRa radio parameters exposed as atomics so the menu can read them
 /// synchronously. Populated on boot from flash and kept in sync with
-/// `settings::get_radio_params_or_default()`.  Defaults match
-/// `crate::fw::mesh::settings::DEFAULT_RADIO` — BornHack Turbo (g4).
-pub static LORA_FREQ_HZ: AtomicU32 = AtomicU32::new(869_850_000);
-pub static LORA_BW_HZ: AtomicU32 = AtomicU32::new(250_000);
-pub static LORA_SF: AtomicU8 = AtomicU8::new(8);
-pub static LORA_CR: AtomicU8 = AtomicU8::new(5);
+/// `settings::get_radio_params_or_default()`; seeded from [`DEFAULT_RADIO`].
+pub static LORA_FREQ_HZ: AtomicU32 = AtomicU32::new(DEFAULT_RADIO.freq_hz);
+pub static LORA_BW_HZ: AtomicU32 = AtomicU32::new(DEFAULT_RADIO.bw_hz);
+pub static LORA_SF: AtomicU8 = AtomicU8::new(DEFAULT_RADIO.sf);
+pub static LORA_CR: AtomicU8 = AtomicU8::new(DEFAULT_RADIO.cr);
 /// LoRa TX power in dBm (−9..=22, matches the companion validation range).
-pub static LORA_TX_POWER: AtomicI8 = AtomicI8::new(14);
+pub static LORA_TX_POWER: AtomicI8 = AtomicI8::new(DEFAULT_RADIO.tx_power);
 /// Client-repeat mode — re-transmit received flood packets back onto the mesh.
 /// Menu-togglable; runtime relay behavior is wired up via the BLE task.
-pub static LORA_CLIENT_REPEAT: AtomicBool = AtomicBool::new(false);
+pub static LORA_CLIENT_REPEAT: AtomicBool = AtomicBool::new(DEFAULT_RADIO.client_repeat);
 
 /// `OtherParams.advert_loc_policy` — share this node's position in adverts.
 pub static ADVERT_LOC_POLICY: AtomicBool = AtomicBool::new(false);

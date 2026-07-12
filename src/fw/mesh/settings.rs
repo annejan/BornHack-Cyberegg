@@ -97,22 +97,10 @@ pub async fn set_node_name(name: &[u8]) -> Result<(), kv::KvError> {
 // Radio parameters  (CMD_SET_RADIO_PARAMS 0x0B / CMD_SET_RADIO_TX_POWER 0x0C)
 // ---------------------------------------------------------------------------
 
-/// LoRa radio parameters stored on-device.
-#[derive(Clone, Copy, Debug, defmt::Format)]
-pub struct RadioParams {
-    /// Carrier frequency in Hz (e.g. 869_618_000).
-    pub freq_hz: u32,
-    /// Bandwidth in Hz (e.g. 62_500).
-    pub bw_hz: u32,
-    /// Spreading factor (5–12).
-    pub sf: u8,
-    /// Coding rate — 5 = 4/5, 6 = 4/6, 7 = 4/7, 8 = 4/8.
-    pub cr: u8,
-    /// TX power in dBm.
-    pub tx_power: i8,
-    /// Client-repeat mode enabled.
-    pub client_repeat: bool,
-}
+/// [`RadioParams`] and [`DEFAULT_RADIO`] live at the crate root so the `LORA_*`
+/// atomics in `lib.rs` — which are not gated behind the `mesh` feature — can be
+/// seeded from the same single source of truth.
+pub use crate::{DEFAULT_RADIO, RadioParams};
 
 impl RadioParams {
     fn to_bytes(self) -> [u8; 12] {
@@ -137,27 +125,6 @@ impl RadioParams {
         }
     }
 }
-
-/// Default radio parameters — **BornHack Turbo (ETSI g4)**, the badge's
-/// out-of-the-box preset.
-///
-/// 869.85 MHz · BW 250 kHz · SF8 · CR 4/5 · 14 dBm TX
-///
-/// Spectrum-separated from the standard EU/UK Narrow channel at 869.618 MHz,
-/// so badges on this preset don't share airtime with stock MeshCore badges.
-/// TX power is kept at the legacy 14 dBm default; for fully compliant ETSI
-/// g4 100 % duty-cycle operation, drop it to +7 dBm via the Power menu.
-///
-/// Coding rate uses **MeshCore protocol encoding**: 5 = CR 4/5, 6 = CR 4/6,
-/// etc. (distinct from the sx126x hardware register encoding where CR4_5 = 1).
-pub const DEFAULT_RADIO: RadioParams = RadioParams {
-    freq_hz: 869_850_000,
-    bw_hz: 250_000,
-    sf: 8,
-    cr: 5, // CR 4/5 in MeshCore protocol encoding
-    tx_power: 14,
-    client_repeat: false,
-};
 
 /// Read the persisted radio parameters.  Returns `None` if not yet stored.
 pub async fn get_radio_params() -> Option<RadioParams> {

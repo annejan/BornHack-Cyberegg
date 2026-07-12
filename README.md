@@ -28,6 +28,28 @@ The rest of this README is developer-facing.
 | LoRa radio | SX1262            | SPI2           |
 | BLE        | nRF52840 built-in | nrf-sdc / MPSL |
 
+## Default LoRa radio settings
+
+Out of the box the badge joins **EU/UK Narrow**, the stock MeshCore channel, so it
+shares airtime with unmodified MeshCore nodes:
+
+| Parameter        | Default     |
+| ---------------- | ----------- |
+| Frequency        | 869.618 MHz |
+| Bandwidth        | 62.5 kHz    |
+| Spreading factor | SF8         |
+| Coding rate      | 4/5         |
+| TX power         | 22 dBm      |
+| Client repeat    | off         |
+
+All of these are overridable from the on-device Settings menu or the companion app,
+and the chosen values persist to flash. TX power defaults to the SX1262 maximum of
+22 dBm — the badge antenna is not fully efficient, so radiated power stays within the
+band limit; trim it via the Power menu if your local rules require it.
+
+Single source of truth: `DEFAULT_RADIO` in [src/lib.rs](src/lib.rs). Change it there
+and both the boot-time defaults and the persisted-settings fallback follow.
+
 ## Documentation
 
 All project documentation is in markdown files at the repository root and in `vendor/` subdirectories:
