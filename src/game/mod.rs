@@ -170,6 +170,16 @@ pub fn show_toast(toast: Toast) {
     crate::TOAST_SIGNAL.signal(());
 }
 
+/// True when the game screen is showing a red status message — an active
+/// toast, or the "gone / new egg" prompt.  The display loop uses this to run
+/// a genuine full (tri-color) refresh instead of the fast delta refresh: red
+/// ink under-drives on the non-inverting delta LUT (LUT2), so red text only
+/// seats properly on the full-waveform path.  `partial_idle` upstream keeps
+/// this from re-flashing once the message is drawn.
+pub fn status_wants_full_refresh() -> bool {
+    TOAST_ACTIVE.load(Ordering::Relaxed) || lifecycle::display_anim() == engine::DisplayAnim::Gone
+}
+
 /// Show the station-cooldown toast with the remaining time formatted
 /// from `secs` (e.g. `"wait 4:50"`).
 pub fn show_station_cooldown(secs: u16) {
