@@ -729,7 +729,17 @@ async fn display_loop(
                         // skips redundant redraws, so this only flashes on an
                         // actual content change (arriving / name edited).
                         let name_screen = active_screen == bornhack_aegg::SCREEN_NAME;
-                        if start_screen || name_screen {
+                        // Pet screen showing a red status message (toast /
+                        // "gone" prompt): run the full tri-color refresh so the
+                        // red text seats — the delta LUT under-drives red.
+                        // `partial_idle` above keeps this from re-flashing once
+                        // the message is drawn.
+                        #[cfg(feature = "game")]
+                        let game_status = active_screen == bornhack_aegg::SCREEN_GAME
+                            && bornhack_aegg::game::status_wants_full_refresh();
+                        #[cfg(not(feature = "game"))]
+                        let game_status = false;
+                        if start_screen || name_screen || game_status {
                             // Render via the full tri-color path (the same one
                             // the sponsor slideshow uses), NOT the delta
                             // no-invert LUT.  The no-invert LUT leaves the red

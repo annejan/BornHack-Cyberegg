@@ -41,7 +41,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 pub use nav::{GameNav, Row};
 
-use crate::{BLACK, TriColor};
+use crate::{BLACK, RED, TriColor};
 
 /// Action feedback shown briefly after an action.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -170,6 +170,16 @@ pub fn show_toast(toast: Toast) {
     crate::TOAST_SIGNAL.signal(());
 }
 
+/// True when the game screen is showing a red status message — an active
+/// toast, or the "gone / new egg" prompt.  The display loop uses this to run
+/// a genuine full (tri-color) refresh instead of the fast delta refresh: red
+/// ink under-drives on the non-inverting delta LUT (LUT2), so red text only
+/// seats properly on the full-waveform path.  `partial_idle` upstream keeps
+/// this from re-flashing once the message is drawn.
+pub fn status_wants_full_refresh() -> bool {
+    TOAST_ACTIVE.load(Ordering::Relaxed) || lifecycle::display_anim() == engine::DisplayAnim::Gone
+}
+
 /// Show the station-cooldown toast with the remaining time formatted
 /// from `secs` (e.g. `"wait 4:50"`).
 pub fn show_station_cooldown(secs: u16) {
@@ -231,6 +241,9 @@ where
         .alignment(Alignment::Center)
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    // Red style for pet status prompts (the "gone / new egg" screen) so they
+    // stand out from the black countdown timer / labels.
+    let font_red = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
 
     // ── Full-screen takeover screens ───────────────────────────────────
     if pet_select::is_active() {
@@ -337,11 +350,11 @@ where
     if anim == DisplayAnim::Gone {
         // Farewell animation blitted by embassy.rs if available.
         if sprite_loader::frame_count() == 0 {
-            Text::with_text_style("Your pet has left", Point::new(76, 50), font, centered)
+            Text::with_text_style("Your pet has left", Point::new(76, 50), font_red, centered)
                 .draw(display)?;
         }
-        Text::with_text_style("Press Fire", Point::new(76, 90), font, centered).draw(display)?;
-        Text::with_text_style("for a new egg", Point::new(76, 106), font, centered)
+        Text::with_text_style("Press Fire", Point::new(76, 90), font_red, centered).draw(display)?;
+        Text::with_text_style("for a new egg", Point::new(76, 106), font_red, centered)
             .draw(display)?;
         return Ok(());
     }
@@ -420,7 +433,9 @@ where
             Text::with_text_style(
                 msg,
                 Point::new(2, SEP_TOP + 2),
-                MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+                // Red so the action feedback (-hunger / -sick / +inspired /
+                // bonus) pops against the black UI.
+                MonoTextStyle::new(&FONT_7X13_BOLD, RED),
                 style,
             )
             .draw(display)?;
