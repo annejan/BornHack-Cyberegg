@@ -504,11 +504,10 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
     }
 
-    // ── First-boot sponsor slideshow ────────────────────────────────────
-    if !bornhack_aegg::fw::sponsors::already_shown().await {
-        defmt::info!("Running first-boot sponsor slideshow");
-        bornhack_aegg::fw::sponsors::run(&mut display, &mut button_rcvr).await;
-    }
+    // ── Boot sponsor slideshow ───────────────────────────────────────────
+    // Event sponsors first, then the badge hardware sponsors, 2s per slide.
+    // The root-menu "Sponsors" / "Badge sponsors" items replay them on demand.
+    bornhack_aegg::fw::sponsors::run_boot_slideshow(&mut display, &mut button_rcvr).await;
 
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
@@ -592,8 +591,9 @@ async fn display_loop(
     let mut last_screen: u8 = 0xFF;
 
     loop {
-        // Process any pending sponsor flag clear request from the menu.
-        bornhack_aegg::fw::sponsors::process_clear_request().await;
+        // Play the sponsor slideshow if the Bornagotchi "Badge sponsors" item
+        // requested it (we own the display + buttons here).
+        bornhack_aegg::fw::sponsors::run_if_requested(display, button_rcvr).await;
 
         // Qwiic Scan screen: run the I2C bus scan here (async, owns the bus)
         // before drawing, so the results are ready for this frame's draw.

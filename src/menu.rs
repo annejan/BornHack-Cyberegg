@@ -1762,7 +1762,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    11 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1833,13 +1833,6 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "",
         kind: MenuItemKind::Separator,
-    },
-    MenuItem {
-        label: || "Replay Sponsors",
-        kind: MenuItemKind::Action(|| {
-            #[cfg(feature = "embassy-base")]
-            crate::fw::sponsors::request_clear();
-        }),
     },
     MenuItem {
         label: || "Factory reset",
@@ -2115,7 +2108,7 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
-static MAIN_ITEMS: [MenuItem; 4] = [
+static MAIN_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
@@ -2131,6 +2124,20 @@ static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "About",
         kind: MenuItemKind::Submenu(&ABOUT_ITEMS),
+    },
+    MenuItem {
+        label: || "Badge sponsors",
+        kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::sponsors::request_show_badge();
+        }),
+    },
+    MenuItem {
+        label: || "Sponsors",
+        kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::sponsors::request_show_event();
+        }),
     },
 ];
 
@@ -2354,9 +2361,7 @@ where
                         let _ = label.push_str((item.label)());
                     }
                 }
-                if matches!(item.kind, MenuItemKind::Submenu(_)) {
-                    let _ = label.push_str(" >");
-                } else if is_stepper {
+                if is_stepper {
                     if stepper_active && is_center {
                         let _ = label.push_str(" ]");
                     } else {
