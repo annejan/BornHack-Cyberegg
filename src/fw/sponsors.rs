@@ -107,10 +107,10 @@ pub async fn run_if_requested(
     >,
 ) {
     if SHOW_BADGE.swap(false, Ordering::Relaxed) {
-        show_slideshow(display, button_rcvr, GROUP_BADGE, SLIDE_DURATION_SECS).await;
+        show_slideshow(display, button_rcvr, GROUP_BADGE, SLIDE_DURATION_SECS, true, true).await;
     }
     if SHOW_EVENT.swap(false, Ordering::Relaxed) {
-        show_slideshow(display, button_rcvr, GROUP_EVENT, SLIDE_DURATION_SECS).await;
+        show_slideshow(display, button_rcvr, GROUP_EVENT, SLIDE_DURATION_SECS, true, true).await;
     }
 }
 
@@ -133,8 +133,10 @@ pub async fn run_boot_slideshow(
     if already_shown().await {
         return;
     }
-    show_slideshow(display, button_rcvr, GROUP_EVENT, BOOT_SLIDE_SECS).await;
-    show_slideshow(display, button_rcvr, GROUP_BADGE, BOOT_SLIDE_SECS).await;
+    // Event sponsors get the intro; badge sponsors chain straight on (no
+    // mid white flash, no second intro); the final white comes after badge.
+    show_slideshow(display, button_rcvr, GROUP_EVENT, BOOT_SLIDE_SECS, true, false).await;
+    show_slideshow(display, button_rcvr, GROUP_BADGE, BOOT_SLIDE_SECS, false, true).await;
     mark_shown().await;
 }
 
@@ -153,6 +155,8 @@ async fn show_slideshow(
     >,
     group: u8,
     secs: u64,
+    intro: bool,
+    final_white: bool,
 ) {
     if !any_slide_present(group).await {
         defmt::info!("sponsors: group {} has no slides — nothing to show", group);
@@ -160,31 +164,33 @@ async fn show_slideshow(
     }
 
     // ── Intro screen ─────────────────────────────────────────────────
-    display.clear(Color::White);
+    if intro {
+        display.clear(Color::White);
 
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+        let centered = TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Center)
+            .build();
+        let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
 
-    let intro: &[&str] = if group == GROUP_EVENT {
-        &["BornHack 2026", "thanks its", "sponsors!"]
-    } else {
-        &["This badge has", "been made possible", "by our awesome", "sponsors!"]
-    };
-    let n = intro.len() as i32;
-    let mut y = 76 - (n - 1) * 8;
-    for line in intro {
-        let _ = Text::with_text_style(line, Point::new(76, y), font, centered).draw(display);
-        y += 16;
+        let lines: &[&str] = if group == GROUP_EVENT {
+            &["BornHack 2026", "thanks its", "sponsors!"]
+        } else {
+            &["This badge has", "been made possible", "by our awesome", "sponsors!"]
+        };
+        let n = lines.len() as i32;
+        let mut y = 76 - (n - 1) * 8;
+        for line in lines {
+            let _ = Text::with_text_style(line, Point::new(76, y), font, centered).draw(display);
+            y += 16;
+        }
+
+        let _ = display.reset().await;
+        let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
+        let _ = display.deep_sleep().await;
+
+        wait_or_button(button_rcvr, secs).await;
     }
-
-    let _ = display.reset().await;
-    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
-    let _ = display.deep_sleep().await;
-
-    wait_or_button(button_rcvr, secs).await;
 
     // ── Logo slides ──────────────────────────────────────────────────
     for i in 0..MAX_SPONSORS as u8 {
@@ -210,10 +216,14 @@ async fn show_slideshow(
     // ── Final white clear ────────────────────────────────────────────
     // Wipe the last sponsor logo so it doesn't linger — or ghost — into
     // the first carousel screen when the main loop takes over the panel.
-    display.clear(Color::White);
-    let _ = display.reset().await;
-    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
-    let _ = display.deep_sleep().await;
+    // Skipped between chained groups (boot: event → badge) so there's no
+    // white flash and no repeated intro in the middle.
+    if final_white {
+        display.clear(Color::White);
+        let _ = display.reset().await;
+        let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
+        let _ = display.deep_sleep().await;
+    }
 
     defmt::info!("sponsors: slideshow complete");
 }
