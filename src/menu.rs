@@ -1762,7 +1762,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    11 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1835,13 +1835,6 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
         kind: MenuItemKind::Separator,
     },
     MenuItem {
-        label: || "Replay Sponsors",
-        kind: MenuItemKind::Action(|| {
-            #[cfg(feature = "embassy-base")]
-            crate::fw::sponsors::request_clear();
-        }),
-    },
-    MenuItem {
         label: || "Factory reset",
         kind: MenuItemKind::Confirm {
             prompt: "Factory reset",
@@ -1850,7 +1843,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     },
 ];
 
-static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
+static BORNAGOTCHI_ITEMS: [MenuItem; 8] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1890,6 +1883,13 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
         kind: MenuItemKind::Action(|| {
             #[cfg(feature = "game")]
             crate::game::realm_view::open();
+        }),
+    },
+    MenuItem {
+        label: || "Badge sponsors",
+        kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::sponsors::request_show();
         }),
     },
 ];
@@ -2354,9 +2354,7 @@ where
                         let _ = label.push_str((item.label)());
                     }
                 }
-                if matches!(item.kind, MenuItemKind::Submenu(_)) {
-                    let _ = label.push_str(" >");
-                } else if is_stepper {
+                if is_stepper {
                     if stepper_active && is_center {
                         let _ = label.push_str(" ]");
                     } else {

@@ -1,12 +1,12 @@
-//! First-boot sponsor logo slideshow.
+//! Sponsor logo slideshow — shown on demand from the Bornagotchi menu.
 //!
 //! Displays full-screen sponsor logos (152×152 PCX files) stored on
 //! the FAT12 filesystem as `030000.PCX` through `030009.PCX`.
 //! Missing files are silently skipped.
 //!
-//! After the slideshow completes, a flag is written to ekv so the
-//! slideshow is only shown once. A menu option can clear the flag
-//! to replay it on the next boot.
+//! Triggered by the "Badge sponsors" menu item via [`request_show`]; the
+//! display loop polls [`run_if_requested`] and plays it inline (it owns the
+//! display + button receiver).  Not shown automatically at boot.
 
 use embassy_time::Timer;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -23,10 +23,6 @@ const MAX_SPONSORS: usize = 10;
 
 /// Seconds to display each sponsor logo.
 const SLIDE_DURATION_SECS: u64 = 10;
-
-/// EKV key: presence means the slideshow has already been shown.
-const KV_KEY: &str = "shown";
-const KV_NAMESPACE: &str = "sponsors";
 
 // ── Filename generation ──────────────────────────────────────────────────────
 
@@ -52,58 +48,21 @@ fn sponsor_filename(index: u8) -> [u8; 11] {
     ]
 }
 
-// ── Slideshow flag ───────────────────────────────────────────────────────────
+// ── On-demand show request ─────────────────────────────────────────────────
 
-/// Check if the slideshow has already been shown (flag exists in ekv).
-pub async fn already_shown() -> bool {
-    use super::kv;
-    let ns = kv::namespace(KV_NAMESPACE);
-    let mut buf = [0u8; 1];
-    ns.get(KV_KEY, &mut buf).await.is_ok()
+/// Set by the "Badge sponsors" menu item; the display loop polls it via
+/// [`run_if_requested`].  Sponsors are no longer shown automatically at boot.
+static SHOW_REQUESTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Request the sponsor slideshow (sync, for menu callbacks).
+pub fn request_show() {
+    SHOW_REQUESTED.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
-/// Mark the slideshow as shown (write flag to ekv).
-async fn mark_shown() {
-    use super::kv;
-    let ns = kv::namespace(KV_NAMESPACE);
-    let _ = ns.set(KV_KEY, &[1], true).await;
-}
-
-/// Clear the "already shown" flag so the slideshow replays on next boot.
-pub async fn clear_flag() {
-    use super::kv;
-    let ns = kv::namespace(KV_NAMESPACE);
-    let _ = ns.delete(KV_KEY).await;
-}
-
-/// Synchronous request to clear the flag (called from menu callback).
-/// The actual async clear happens on the next save cycle.
-static CLEAR_REQUESTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-
-/// Request that the slideshow flag be cleared (sync, for menu callbacks).
-pub fn request_clear() {
-    CLEAR_REQUESTED.store(true, core::sync::atomic::Ordering::Relaxed);
-}
-
-/// Poll and execute the pending clear request (call from an async context).
-pub async fn process_clear_request() {
-    if CLEAR_REQUESTED.swap(false, core::sync::atomic::Ordering::Relaxed) {
-        clear_flag().await;
-        defmt::info!("sponsors: flag cleared — slideshow will replay on next boot");
-    }
-}
-
-// ── Slideshow runner ─────────────────────────────────────────────────────────
-
-/// Run the sponsor slideshow. Blocks until all slides are shown.
-///
-/// `button_rcvr` is used to detect button presses to advance slides.
-///
-/// If no sponsor PCX files are present on the FAT partition, shows a
-/// "No assets found in flash" screen and blocks forever — the operator
-/// can then copy files in via USB mass storage (spawned separately) and
-/// power-cycle the badge to proceed.
-pub async fn run(
+/// If a show was requested, play the slideshow now.  Call from the display
+/// loop, which owns `display` + `button_rcvr`.  No-op when nothing was
+/// requested or no sponsor slides are present.
+pub async fn run_if_requested(
     display: &mut EpdGfx<'_>,
     button_rcvr: &mut embassy_sync::watch::Receiver<
         '_,
@@ -112,12 +71,29 @@ pub async fn run(
         2,
     >,
 ) {
-    // ── Pre-flight: check at least one sponsor slide exists ──────────
-    if !any_sponsor_file_present().await {
-        show_missing_assets_forever(display).await;
-        // show_missing_assets_forever never returns.
+    if !SHOW_REQUESTED.swap(false, core::sync::atomic::Ordering::Relaxed) {
+        return;
     }
+    if !any_sponsor_file_present().await {
+        defmt::info!("sponsors: no slides present — nothing to show");
+        return;
+    }
+    show_slideshow(display, button_rcvr).await;
+}
 
+// ── Slideshow runner ─────────────────────────────────────────────────────────
+
+/// Play the sponsor slideshow to completion (caller has already confirmed at
+/// least one slide is present).  `button_rcvr` advances slides early.
+async fn show_slideshow(
+    display: &mut EpdGfx<'_>,
+    button_rcvr: &mut embassy_sync::watch::Receiver<
+        '_,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        u8,
+        2,
+    >,
+) {
     // ── Intro screen ─────────────────────────────────────────────────
     display.clear(Color::White);
 
@@ -170,9 +146,6 @@ pub async fn run(
     let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
     let _ = display.deep_sleep().await;
 
-    // ── Mark as shown ────────────────────────────────────────────────
-    mark_shown().await;
-
     defmt::info!("sponsors: slideshow complete");
 }
 
@@ -186,38 +159,6 @@ async fn any_sponsor_file_present() -> bool {
         }
     }
     false
-}
-
-/// Draw a full-screen "No assets found" message, commit it to the display,
-/// then block forever.  Intended for mass-flashing: the operator flashes the
-/// firmware, waits for this message to appear, copies the asset PCX files in
-/// via USB mass storage, then power-cycles the badge.
-async fn show_missing_assets_forever(display: &mut EpdGfx<'_>) {
-    defmt::info!("sponsors: no sponsor PCX files found — waiting for USB upload");
-
-    display.clear(Color::White);
-
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
-
-    let _ =
-        Text::with_text_style("No assets found", Point::new(76, 60), font, centered).draw(display);
-    let _ = Text::with_text_style("in flash", Point::new(76, 76), font, centered).draw(display);
-    let _ =
-        Text::with_text_style("Copy via USB,", Point::new(76, 100), font, centered).draw(display);
-    let _ = Text::with_text_style("then power cycle", Point::new(76, 116), font, centered)
-        .draw(display);
-
-    let _ = display.reset().await;
-    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
-    let _ = display.deep_sleep().await;
-
-    // Block forever.  USB mass storage is running on its own task and stays
-    // live while we're parked here.  A power-cycle is the intended exit.
-    core::future::pending::<()>().await
 }
 
 /// Wait for `secs` seconds, or until any button is pressed.
