@@ -720,7 +720,7 @@ async fn draw_ship_image(display: &mut crate::fw::epd::EpdGfx<'_>, lut_speed: u8
 
     // Stamp text (bottom half).
     let _ = Text::with_text_style("CyberAegg", Point::new(76, 86), small, centered).draw(display);
-    let _ = Text::with_text_style("FACTORY TESTED", Point::new(76, 106), small, centered).draw(display);
+    let _ = Text::with_text_style("FIELD TESTED", Point::new(76, 106), small, centered).draw(display);
     let _ = Text::with_text_style("Ready to ship", Point::new(76, 126), small, centered).draw(display);
 
     let _ = display.update_tc(lut_speed).await;
