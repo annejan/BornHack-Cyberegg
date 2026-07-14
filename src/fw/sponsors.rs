@@ -19,11 +19,11 @@ use ssd1675::graphics::Color;
 use super::epd::EpdGfx;
 use super::fat12;
 
-/// Maximum number of sponsor slides (filenames 030000–030009).
-const MAX_SPONSORS: usize = 10;
+/// Maximum number of sponsor slides per group (indices 00..0F).
+const MAX_SPONSORS: usize = 16;
 
 /// Seconds to display each sponsor logo.
-const SLIDE_DURATION_SECS: u64 = 10;
+const SLIDE_DURATION_SECS: u64 = 5;
 
 // ── Filename generation ──────────────────────────────────────────────────────
 
