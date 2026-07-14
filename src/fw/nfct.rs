@@ -19,7 +19,7 @@ bind_interrupts!(struct Irqs {
     NFCT => nfct::InterruptHandler;
 });
 
-const NDEF_URL: &[u8] = b"badge.team";
+const NDEF_URL: &[u8] = b"badge.team/docs/badges/bornhack-2026/";
 const NDEF_URL_PREFIX: u8 = 0x04; // https://
 /// Default URL NDEF: NLEN(2) + record header(1) + type len(1) + payload len(1)
 /// + type 'U'(1) + URI prefix(1) + URL.
@@ -28,7 +28,7 @@ const NDEF_URL_LEN: usize = 7 + NDEF_URL.len();
 /// KV namespace + key for the user's persisted broadcast NDEF (the
 /// vCard / vanity URL served by default). Stored as the full
 /// `[NLEN(2) || message]` region, ready to copy straight into the file
-/// buffer. Absent ⇒ fall back to the built-in `badge.team` URL.
+/// buffer. Absent ⇒ fall back to the built-in Bornhack 2026 docs URL.
 const KV_NS: &str = "nfc";
 const KV_PROFILE_KEY: &str = "profile";
 
@@ -56,8 +56,8 @@ enum WriteOutcome {
 /// beyond that, but anything we receive that fits goes here.
 const NDEF_BUF_LEN: usize = 256;
 
-/// Initialise (or re-arm) the NDEF buffer to the default `badge.team`
-/// URL record.  Returns the number of valid bytes (NLEN + message).
+/// Initialise (or re-arm) the NDEF buffer to the default Bornhack 2026
+/// docs URL record.  Returns the number of valid bytes (NLEN + message).
 fn init_ndef_url(buf: &mut [u8; NDEF_BUF_LEN]) -> usize {
     // Zero out — anything past the message must read back as 0x00 so
     // a phone re-reading the tag sees a clean record.

@@ -6,7 +6,7 @@ The back of the badge has an NFC antenna. Tap a phone or a station reader to the
 
 ### 1. Phone reads your broadcast data
 
-Any standard NFC reader (Android default, iOS) sees whatever you've set as your broadcast profile — by default a `https://badge.team` URL, but you can replace it with your own vanity URL or a vCard (see [Set your own broadcast data](#set-your-own-broadcast-data)). Tapping with the OS reader just reads it. Harmless.
+Any standard NFC reader (Android default, iOS) sees whatever you've set as your broadcast profile — by default a `https://badge.team/docs/badges/bornhack-2026/` URL, but you can replace it with your own vanity URL or a vCard (see [Set your own broadcast data](#set-your-own-broadcast-data)). Tapping with the OS reader just reads it. Harmless.
 
 ### 2. BadgeCtl runs a station command
 
