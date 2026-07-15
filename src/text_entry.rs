@@ -70,10 +70,28 @@ enum InputState {
 
 const MAX_TEXT_LEN: usize = 160;
 
+/// A key from an external (I2C) keyboard, decoded to a text-entry action.
+/// Kept hardware-free so this module still builds on the simulator; the
+/// keyboard driver ([`crate::fw::i2c_keyboard`]) produces these.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ExtKey {
+    /// A printable ASCII byte (letters arrive lowercase; Shift upper-cases,
+    /// Alt maps to the alt-layer symbol).
+    Char(u8),
+    Space,
+    Backspace,
+    Enter,
+    /// Toggle the one-shot shift (next letter upper-cased / alt char shifted).
+    Shift,
+    /// Toggle the one-shot alt (next letter → its alt-layer symbol).
+    Alt,
+}
+
 pub struct TextEntry {
     text: heapless::Vec<u8, MAX_TEXT_LEN>,
     max_len: u8,
     shift: bool,
+    alt: bool,
     state: InputState,
     on_complete: fn(&[u8]),
     /// Optional title shown above the text area (e.g. "Name your Pet").
@@ -95,6 +113,46 @@ fn char_table(id: u8) -> &'static [u8] {
     }
 }
 
+/// Alt-layer mapping for a base letter → `(alt, alt+shift)`, transcribed from
+/// the keyboard silkscreen.  Top row = digits (shift → symbols); home row =
+/// brackets/punctuation (no distinct shift — those symbols each have their own
+/// key, so shift repeats the base); bottom row per the panel (`<` `>` are their
+/// own keys, `c` is `_`/`-`).  `None` = key has no alt char (stays a letter).
+fn alt_pair(ch: u8) -> Option<(u8, u8)> {
+    Some(match ch {
+        // Top row Q..P → digit / shifted symbol
+        b'q' => (b'1', b'!'),
+        b'w' => (b'2', b'@'),
+        b'e' => (b'3', b'#'),
+        b'r' => (b'4', b'$'),
+        b't' => (b'5', b'%'),
+        b'y' => (b'6', b'^'),
+        b'u' => (b'7', b'&'),
+        b'i' => (b'8', b'*'),
+        b'o' => (b'9', b'('),
+        b'p' => (b'0', b')'),
+        // Home row A..L → brackets / punctuation (shift repeats the base)
+        b'a' => (b'[', b'['),
+        b's' => (b']', b']'),
+        b'd' => (b'{', b'{'),
+        b'f' => (b'}', b'}'),
+        b'g' => (b'\\', b'\\'),
+        b'h' => (b'|', b'|'),
+        b'j' => (b';', b';'),
+        b'k' => (b':', b':'),
+        b'l' => (b'\'', b'"'),
+        // Bottom row Z..M
+        b'z' => (b'=', b'+'),
+        b'x' => (b'`', b'~'),
+        b'c' => (b'_', b'-'),
+        b'v' => (b',', b','),
+        b'b' => (b'.', b'.'),
+        b'n' => (b'<', b'<'),
+        b'm' => (b'>', b'>'),
+        _ => return None,
+    })
+}
+
 impl TextEntry {
     pub fn new(prefill: &[u8], max_len: u8, on_complete: fn(&[u8]), title: &'static str) -> Self {
         let mut text = heapless::Vec::new();
@@ -103,11 +161,12 @@ impl TextEntry {
         Self {
             text,
             max_len,
-            // Start in Shift so the first letter is uppercase by
-            // default — matches every other on-screen keyboard
-            // people are used to.  Auto-resets to lowercase on the
-            // first push (see `push_char`).
-            shift: true,
+            // First letter auto-capitalises via `text.is_empty()` in
+            // push_char (phone-style), NOT via a default Shift — a default
+            // Shift would also shift the first Alt-layer char (Alt+Z → "+"
+            // instead of "=").  So Shift/Alt both start unarmed.
+            shift: false,
+            alt: false,
             state: InputState::Root,
             on_complete,
             title,
@@ -118,13 +177,28 @@ impl TextEntry {
         if ch == BKSP {
             self.text.pop();
         } else if self.text.len() < self.max_len as usize {
-            let c = if self.shift {
+            let c = if self.alt {
+                // Alt-layer symbol, shifted variant when Shift is also armed.
+                match alt_pair(ch) {
+                    Some((base, shifted)) => {
+                        if self.shift {
+                            shifted
+                        } else {
+                            base
+                        }
+                    }
+                    None => ch, // no alt char for this key → base letter
+                }
+            } else if self.shift || self.text.is_empty() {
+                // Explicit Shift capitalises any letter; an empty buffer
+                // auto-capitalises the first letter (phone-style).
                 ch.to_ascii_uppercase()
             } else {
                 ch
             };
             let _ = self.text.push(c);
             self.shift = false;
+            self.alt = false;
         }
         self.state = InputState::Root;
     }
@@ -132,6 +206,29 @@ impl TextEntry {
     fn clear(&mut self) {
         self.text.clear();
         self.state = InputState::Root;
+    }
+
+    /// Inject a key from an external keyboard.  Returns `true` when the entry
+    /// completed (Enter → `on_complete` fired) and should be removed.
+    pub fn inject(&mut self, key: ExtKey) -> bool {
+        match key {
+            ExtKey::Char(c) => self.push_char(c),
+            ExtKey::Space => self.push_char(b' '),
+            ExtKey::Backspace => self.push_char(BKSP),
+            ExtKey::Shift => self.shift = !self.shift,
+            ExtKey::Alt => self.alt = !self.alt,
+            ExtKey::Enter => {
+                // Alt turns Enter into the "/" key (Alt+Shift → "?"); only a
+                // plain Enter submits the entry.
+                if self.alt {
+                    self.push_char(if self.shift { b'?' } else { b'/' });
+                } else {
+                    (self.on_complete)(&self.text);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Returns `true` when the session is complete (submitted or cancelled)
@@ -375,38 +472,75 @@ where
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
-    // Shift indicator
+    // Shift / Alt indicators (top-right of the keyboard area) — the armed
+    // one-shot toggles (same state for joystick and I2C keyboard).
     if entry.shift {
-        Rectangle::new(Point::new(DISPLAY_W - 14, KB_Y), Size::new(14, 14))
-            .into_styled(PrimitiveStyle::with_fill(BLACK))
-            .draw(display)?;
-        let ts = TextStyleBuilder::new()
-            .baseline(Baseline::Top)
-            .alignment(Alignment::Center)
-            .build();
-        Text::with_text_style("S", Point::new(DISPLAY_W - 7, KB_Y + 1), FONT_INV, ts)
-            .draw(display)?;
+        draw_mod_badge(display, "S", DISPLAY_W - 14)?;
+    }
+    if entry.alt {
+        draw_mod_badge(display, "A", DISPLAY_W - 30)?;
     }
 
-    match entry.state {
-        InputState::Root => draw_hub_root(display)?,
-        InputState::LetterQuad(q) => draw_hub_letter_quad(display, q)?,
-        InputState::CharPick { table_id, cursor } => {
-            draw_char_picker(display, char_table(table_id), cursor)?;
-        }
-        InputState::CmdHub => draw_hub_cmd(display)?,
-        InputState::CmdRightHub => draw_hub_cmd_right(display)?,
-        InputState::SpaceBkspPick { cursor } => {
-            draw_char_picker(display, SPACE_BKSP, cursor)?;
-        }
-        InputState::SpecialPick { cursor } => {
-            draw_char_picker(display, SPECIAL_CHARS, cursor)?;
-        }
-        InputState::NumberPick { cursor } => {
-            draw_char_picker(display, NUMBER_CHARS, cursor)?;
+    // With an external keyboard driving entry, the joystick char-picker is
+    // just clutter — show a plain hint so it's clear the keyboard is live.
+    if keyboard_active() {
+        draw_keyboard_hint(display)?;
+    } else {
+        match entry.state {
+            InputState::Root => draw_hub_root(display)?,
+            InputState::LetterQuad(q) => draw_hub_letter_quad(display, q)?,
+            InputState::CharPick { table_id, cursor } => {
+                draw_char_picker(display, char_table(table_id), cursor)?;
+            }
+            InputState::CmdHub => draw_hub_cmd(display)?,
+            InputState::CmdRightHub => draw_hub_cmd_right(display)?,
+            InputState::SpaceBkspPick { cursor } => {
+                draw_char_picker(display, SPACE_BKSP, cursor)?;
+            }
+            InputState::SpecialPick { cursor } => {
+                draw_char_picker(display, SPECIAL_CHARS, cursor)?;
+            }
+            InputState::NumberPick { cursor } => {
+                draw_char_picker(display, NUMBER_CHARS, cursor)?;
+            }
         }
     }
 
+    Ok(())
+}
+
+/// A small filled badge with an inverted single-char label (e.g. "S", "A")
+/// at `x` on the divider row — used for the Shift / Alt indicators.
+fn draw_mod_badge<D>(display: &mut D, label: &str, x: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    Rectangle::new(Point::new(x, KB_Y), Size::new(14, 14))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    let ts = TextStyleBuilder::new()
+        .baseline(Baseline::Top)
+        .alignment(Alignment::Center)
+        .build();
+    Text::with_text_style(label, Point::new(x + 7, KB_Y + 1), FONT_INV, ts).draw(display)?;
+    Ok(())
+}
+
+/// Centred hint shown in the keyboard area when an external I2C keyboard is
+/// driving text entry (instead of the joystick char-picker).
+fn draw_keyboard_hint<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let ts = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    let cx = DISPLAY_W / 2;
+    Text::with_text_style("- Keyboard -", Point::new(cx, KB_Y + 16), FONT, ts).draw(display)?;
+    Text::with_text_style("type to enter", Point::new(cx, KB_Y + 34), FONT, ts).draw(display)?;
+    Text::with_text_style("Enter = save", Point::new(cx, KB_Y + 52), FONT, ts).draw(display)?;
+    Text::with_text_style("Cancel = quit", Point::new(cx, KB_Y + 70), FONT, ts).draw(display)?;
     Ok(())
 }
 
@@ -764,4 +898,30 @@ pub fn is_active() -> bool {
     return TEXT_ENTRY.lock(|cell| cell.borrow().is_some());
     #[cfg(feature = "simulator")]
     return TEXT_ENTRY.lock().unwrap().borrow().is_some();
+}
+
+/// True while an external I2C keyboard is driving the active entry — set by
+/// the display loop.  Switches the on-screen view from the joystick picker to
+/// a plain "type here" hint.
+static KBD_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Set by the display loop when an I2C keyboard is present for this entry.
+pub fn set_keyboard_active(on: bool) {
+    KBD_ACTIVE.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+fn keyboard_active() -> bool {
+    KBD_ACTIVE.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Inject an external-keyboard key into the active entry (no-op if none).
+/// On Enter the entry completes and is removed (matching the button path).
+#[cfg(feature = "embassy-base")]
+pub fn inject(key: ExtKey) {
+    TEXT_ENTRY.lock(|cell| {
+        let done = cell.borrow_mut().as_mut().map(|e| e.inject(key)).unwrap_or(false);
+        if done {
+            cell.replace(None);
+        }
+    });
 }

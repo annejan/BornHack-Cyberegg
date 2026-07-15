@@ -517,23 +517,21 @@ async fn main(spawner: Spawner) {
     // `Duty50Once` auto-resets to Off after one 500 ms pulse.
     led::set_led(&led::LED_BLUE, led::LedState::Off);
     led::set_led(&led::LED_GREEN, led::LedState::Duty50Once);
-    // Qwiic I2C bus (external connector) — idle until the "Qwiic Scan" screen
-    // requests a scan. Owned by the display loop so scans run in its async
-    // context. TWISPI0 + P1_10/P1_11 are otherwise unused.
-    let mut qwiic_tx = [0u8; bornhack_aegg::fw::qwiic::TX_BUF_LEN];
-    let mut qwiic_bus = bornhack_aegg::fw::qwiic::new_bus(
+    // Qwiic I2C bus (external connector, TWISPI0 + P1_10/P1_11).  Owned by a
+    // dedicated `keyboard_task` so the optional I2C keyboard can be polled
+    // independently of the (slow) e-paper display loop — a wedged I2C read
+    // then can't stall the display, and the Qwiic Scan runs there too.
+    static QWIIC_TX: StaticCell<[u8; bornhack_aegg::fw::qwiic::TX_BUF_LEN]> = StaticCell::new();
+    let qwiic_tx = QWIIC_TX.init([0u8; bornhack_aegg::fw::qwiic::TX_BUF_LEN]);
+    let qwiic_bus = bornhack_aegg::fw::qwiic::new_bus(
         p.TWISPI0,
         board!(p, qwiic_sda).into(),
         board!(p, qwiic_scl).into(),
-        &mut qwiic_tx,
+        qwiic_tx,
     );
+    spawner.must_spawn(keyboard_task(qwiic_bus));
 
-    let main_loop = display_loop(
-        &mut display,
-        &mut button_rcvr,
-        &mut partial_state,
-        &mut qwiic_bus,
-    );
+    let main_loop = display_loop(&mut display, &mut button_rcvr, &mut partial_state);
 
     // USB mass storage is a separately-spawned task (see above), so it's
     // not in these joins.
@@ -561,6 +559,21 @@ async fn main(spawner: Spawner) {
 // Display loop
 // ---------------------------------------------------------------------------
 
+/// Signalled by `keyboard_task` whenever it injects one or more keys from the
+/// I2C keyboard.  The display loop waits on this alongside the buttons — and,
+/// crucially, WITHOUT the `allow_sprite` gate — so a keystroke interrupts an
+/// in-flight e-paper refresh and redraws with the new text, exactly the way a
+/// joystick move does (`button_rcvr.changed()` aborts the refresh the same
+/// way).  An e-paper refresh is a fixed ~500 ms+ whole-panel drive regardless
+/// of how few pixels changed; blocking on one per keystroke is what made fast
+/// typing lag seconds behind.  Interrupting instead means fast keys keep
+/// aborting and restarting the refresh, and the last one completes once typing
+/// pauses — so the screen always chases the latest text and feels responsive.
+static KBD_REDRAW: embassy_sync::signal::Signal<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    (),
+> = embassy_sync::signal::Signal::new();
+
 async fn display_loop(
     display: &mut EpdGfx<'_>,
     button_rcvr: &mut embassy_sync::watch::Receiver<
@@ -570,7 +583,6 @@ async fn display_loop(
         2,
     >,
     partial_state: &mut ssd1675::partial::PartialState,
-    qwiic_bus: &mut bornhack_aegg::fw::qwiic::QwiicBus<'_>,
 ) {
     use embassy_futures::select::{Either, select};
 
@@ -595,13 +607,9 @@ async fn display_loop(
         // requested it (we own the display + buttons here).
         bornhack_aegg::fw::sponsors::run_if_requested(display, button_rcvr).await;
 
-        // Qwiic Scan screen: run the I2C bus scan here (async, owns the bus)
-        // before drawing, so the results are ready for this frame's draw.
-        if bornhack_aegg::fw::qwiic::is_active()
-            && bornhack_aegg::fw::qwiic::take_scan_pending()
-        {
-            bornhack_aegg::fw::qwiic::run_scan(qwiic_bus).await;
-        }
+        // (The optional I2C keyboard and the Qwiic Scan now run in
+        // `keyboard_task`, which owns the Qwiic bus — see main().  Keeping I2C
+        // off the display loop means a wedged read can't stall the display.)
 
         display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
@@ -739,7 +747,12 @@ async fn display_loop(
                             && bornhack_aegg::game::status_wants_full_refresh();
                         #[cfg(not(feature = "game"))]
                         let game_status = false;
-                        if start_screen || name_screen || game_status {
+                        // Text-entry is a fast-changing overlay on top of
+                        // whatever screen is active — never do the multi-second
+                        // full/inverting refresh while typing (e.g. the
+                        // start-screen flag would otherwise force one per key).
+                        let text_entry = bornhack_aegg::text_entry::is_active();
+                        if !text_entry && (start_screen || name_screen || game_status) {
                             // Render via the full tri-color path (the same one
                             // the sponsor slideshow uses), NOT the delta
                             // no-invert LUT.  The no-invert LUT leaves the red
@@ -808,6 +821,72 @@ async fn display_loop(
         }
         #[cfg(not(feature = "game"))]
         let _ = sprite_advance;
+    }
+}
+
+/// Background task owning the Qwiic bus (TWISPI0).  Polls the optional I2C
+/// keyboard continuously while a text-entry screen is open — injecting keys
+/// straight into the entry buffer — independent of the (slow) e-paper display
+/// loop (which is on SPI3), so a wedged I2C read can never stall the display.
+/// Also runs the Qwiic Scan when that screen requests it.  No key buffer: keys
+/// go straight into the existing text_entry buffer.
+#[embassy_executor::task]
+async fn keyboard_task(mut bus: bornhack_aegg::fw::qwiic::QwiicBus<'static>) {
+    use bornhack_aegg::fw::{i2c_keyboard, qwiic};
+    use bornhack_aegg::text_entry;
+
+    let mut present = false;
+    let mut active = false;
+    let mut prev = [0u8; 5];
+    loop {
+        // The Qwiic Scan screen borrows the bus while it is shown.
+        if qwiic::is_active() {
+            if qwiic::take_scan_pending() {
+                qwiic::run_scan(&mut bus).await;
+            }
+            active = false;
+            Timer::after_millis(100).await;
+            continue;
+        }
+
+        let te = text_entry::is_active();
+        if te && !active {
+            // Entry just opened — probe for the keyboard, light LED A, and
+            // tell the entry screen to show the keyboard hint if present.
+            present = i2c_keyboard::present(&mut bus).await;
+            prev = [0u8; 5];
+            if present {
+                i2c_keyboard::set_led_a(&mut bus, true).await;
+            }
+            text_entry::set_keyboard_active(present);
+            active = true;
+        } else if !te && active {
+            if present {
+                i2c_keyboard::set_led_a(&mut bus, false).await;
+            }
+            text_entry::set_keyboard_active(false);
+            active = false;
+        }
+
+        if te
+            && present
+            && let Some(m) = i2c_keyboard::read_matrix(&mut bus).await
+        {
+            let mut keys: heapless::Vec<text_entry::ExtKey, 8> = heapless::Vec::new();
+            i2c_keyboard::newly_pressed(&m, &prev, &mut keys);
+            prev = m;
+            if !keys.is_empty() {
+                for k in keys {
+                    text_entry::inject(k);
+                }
+                // Wake the display loop now, interrupting any in-flight refresh,
+                // so the new text redraws immediately — the same mechanism a
+                // joystick move uses (see KBD_REDRAW).
+                KBD_REDRAW.signal(());
+            }
+        }
+
+        Timer::after_millis(15).await;
     }
 }
 
@@ -897,15 +976,22 @@ async fn wait_display_event(
         // joining it here lets the token screen redraw immediately
         // rather than waiting for the next minute tick.
         let button_or_toast = async {
-            use embassy_futures::select::{Either3, select3};
-            match select3(
+            use embassy_futures::select::{Either4, select4};
+            // KBD_REDRAW fires when the I2C keyboard injects keys.  It is NOT
+            // gated on `allow_sprite`, so a keystroke interrupts an in-flight
+            // e-paper refresh and forces an immediate redraw with the new text
+            // — the same way `button_rcvr.changed()` (joystick / buttons) does.
+            // That mid-refresh interrupt is what makes typing feel responsive
+            // instead of blocking on each ~500 ms whole-panel refresh.
+            match select4(
                 button_rcvr.changed(),
                 bornhack_aegg::TOAST_SIGNAL.wait(),
                 bornhack_aegg::TOKEN_SIGNAL.wait(),
+                KBD_REDRAW.wait(),
             )
             .await
             {
-                Either3::First(_) | Either3::Second(_) | Either3::Third(_) => {}
+                Either4::First(_) | Either4::Second(_) | Either4::Third(_) | Either4::Fourth(_) => {}
             }
         };
 

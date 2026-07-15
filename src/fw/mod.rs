@@ -16,6 +16,7 @@ pub mod health;
 pub mod iso14443;
 pub mod kv;
 pub mod qwiic;
+pub mod i2c_keyboard;
 pub mod led;
 pub mod nfct;
 /// PETS.CFG parser — registers custom pets from the USB-MSC partition.
