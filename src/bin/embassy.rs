@@ -748,7 +748,6 @@ async fn display_loop(
                             // LUT2.  Keep the delta shadow consistent with the
                             // panel afterwards so the next screen diffs cleanly.
                             let _ = display.update_tc(speed).await;
-                            partial_state.snapshot_pending();
                             partial_state.commit_refresh();
                         } else {
                             let _ = display.update_partial(partial_state, speed).await;
