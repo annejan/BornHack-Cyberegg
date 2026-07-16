@@ -24,7 +24,7 @@ power, your pet will be right where you left it.
 
 ```text
  ┌───────────────────────────────────────┐
- │  [Stats] [Hibernate] [Exercise]        │  top icon row
+ │  [Stats] [Hibernate] [Exercise] [Drink] │  top icon row
  ├───────────────────────────────────────┤
  │                                       │
  │            [pet / egg]                │  pet area (animation)
@@ -57,7 +57,9 @@ things before they spiral!
 
 Select the **Stats** icon (top-left) and choose "View stats" to see all
 six stat bars at once (labeled "Fit" for weight — 100% = lean, 0% =
-obese).
+obese), or "Health status" for a plain-language readout of Diabetic /
+Overweight / Alcoholic / Fit%, with a short explanation of what triggers
+each.
 
 ## Actions
 
@@ -69,7 +71,9 @@ obese).
 |              | Pizza            | Very filling — but the biggest weight gain short of dessert      |
 |              | Cake             | Barely touches hunger, big mood boost, worst weight gain by far |
 | **Heal**     | Give medicine    | Reduces sick                                                     |
-|              | Give medication  | Only shown once diabetic — suppresses the diabetes sick-penalty for a while |
+|              | Insulin          | Only shown once diabetic — suppresses the diabetes sick-penalty for a while |
+|              | Ozempic          | Accelerated weight loss — not gated on being diabetic; appetite-suppressing (also relieves a little hunger), but the strongest cooldown of any action |
+|              | Rehab            | Only shown once alcoholic — suppresses the alcoholism sick-penalty for a while |
 | **Play**     | Play now         | Zeroes miserable (costs some energy)                             |
 |              | Tic Tac Toe      | Mini-game: draw/win to boost inspiration                         |
 |              | Lights Out       | Mini-game: solve to boost inspiration                            |
@@ -77,6 +81,11 @@ obese).
 | **Rest**     | Sleep            | Pet sleeps until rested (reduces tired)                          |
 |              | Relax            | Reduces drained (costs some hunger)                              |
 | **Exercise** | Exercise now     | Reduces weight (costs some hunger and tired, small drained bonus) |
+| **Drink**    | Water            | No effect on drunk, refreshing (drained relief)                  |
+|              | Cola             | No effect on drunk; a little weight gain, good drained relief    |
+|              | Beer             | Baseline drunk gain and weight gain                              |
+|              | Wine             | More drunk than Beer, less weight gain                           |
+|              | Whiskey          | Most drunk by far, least weight gain, strongest drained relief   |
 
 Each action has a **cooldown** — you'll see "(wait)" next to items that
 aren't ready yet. Actions are mutually exclusive: the pet can only do one
@@ -135,10 +144,39 @@ down.
 
 If weight stays overweight (Fit below ~40%) for a sustained period —
 several days of neglecting exercise — your pet develops **type 2
-diabetes**. This is permanent: there's no cure, only management. Once
-diabetic, "Give medication" appears as a new option under the **Heal**
-icon. Skipping medication for too long makes sick decay faster; a dose
-protects the pet for a while before it needs another.
+diabetes**. The moment it happens, a buzzer sounds and the badge shows
+a full-screen "TYPE 2 DIABETES — Give medication soon" alert for at
+least 3 seconds before returning to normal. This is permanent: there's
+no cure, only management. Once diabetic, **Insulin** appears as a new
+option under the **Heal** icon. Skipping it for too long makes sick
+decay faster; a dose protects the pet for a while before it needs
+another.
+
+## Drinks & Alcoholism
+
+Same shape as the weight/diabetes arc, on a separate track. Select the
+**Drink** icon (top row) to choose Water, Cola, Beer, Wine, or Whiskey.
+Water and Cola never affect drunk; Beer/Wine/Whiskey do, with Whiskey
+hitting hardest. Unlike weight, drunk sobers up on its own over several
+hours — no action needed — so staying alcoholic-track-worthy requires
+repeated drinking, not just one binge.
+
+If your pet stays drunk (past a threshold) for a sustained period —
+several days of repeated heavy drinking — it develops permanent
+**alcoholism**, exactly like diabetes: no cure, only management via
+**Rehab**, a new option under the **Heal** icon (alongside Give
+medicine, Insulin, and Ozempic). Skipping it makes sick decay faster,
+same as skipping Insulin; a session protects the pet for a while.
+
+**Ozempic**, also under Heal, is a separate, stronger weight-loss
+treatment — usable any time, not just once diabetic — but on a much
+longer cooldown than Exercise, so it's a once-in-a-while boost rather
+than a routine option.
+
+Whenever medication has lapsed, a persistent **"NEEDS MEDS"** banner
+shows in the corner of the pet screen until you re-dose — the pet itself
+keeps showing its normal animation underneath, the banner doesn't
+replace it.
 
 ## Hibernate
 
@@ -259,6 +297,10 @@ Opens a **Debug** menu with:
   the multi-day onset timer
 - **Clear diabetes** — resets diabetic status and overweight progress,
   so the arc can be re-tested without starting a new pet
+- **Force drunk** — pushes drunk just over its trigger
+- **Trigger alcoholism** — flips the pet alcoholic immediately, skipping
+  the multi-day onset timer
+- **Clear alcoholism** — resets alcoholic status and drunk progress
 - **Skip 1 hour** / **Skip 1 day** — fast-forwards the engine, useful
   for any time-based mechanic, not just this one
 

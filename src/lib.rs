@@ -702,6 +702,12 @@ where
         return game::traits_view::draw(display);
     }
 
+    // Health status: full-screen weight/diabetes modifiers view.
+    #[cfg(feature = "game")]
+    if game::health_view::is_active() {
+        return game::health_view::draw(display);
+    }
+
     let active = with_display_state!(|state| state.active_screen());
     match active {
         #[cfg(feature = "game")]

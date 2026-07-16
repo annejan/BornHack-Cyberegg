@@ -29,6 +29,12 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
+    // ── Health status view: any button closes it ────────────────────────
+    if super::health_view::is_active() {
+        super::health_view::close();
+        return true;
+    }
+
     // ── Pet selection screen ────────────────────────────────────────────
     // Cancel is intentionally ignored here — picking a pet is mandatory
     // for the game to start, so closing the screen without a confirmed

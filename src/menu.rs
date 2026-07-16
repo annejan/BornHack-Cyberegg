@@ -2108,7 +2108,7 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
-static MAIN_ITEMS: [MenuItem; 6] = [
+static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
@@ -2124,20 +2124,6 @@ static MAIN_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "About",
         kind: MenuItemKind::Submenu(&ABOUT_ITEMS),
-    },
-    MenuItem {
-        label: || "Badge sponsors",
-        kind: MenuItemKind::Action(|| {
-            #[cfg(feature = "embassy-base")]
-            crate::fw::sponsors::request_show_badge();
-        }),
-    },
-    MenuItem {
-        label: || "Sponsors",
-        kind: MenuItemKind::Action(|| {
-            #[cfg(feature = "embassy-base")]
-            crate::fw::sponsors::request_show_event();
-        }),
     },
 ];
 

@@ -277,7 +277,19 @@ pub fn cycle() -> Option<PetStats> {
     let tick = now_tick();
     let stats = state.stats(tick);
     check_severity_transition(state);
+    check_diabetes_onset(state);
     Some(stats)
+}
+
+/// Read-only accessor: is the pet diabetic with medication currently
+/// lapsed? Drives the persistent on-screen "needs meds" banner (see
+/// `game::mod::draw_screen_game`) — kept separate from `DisplayAnim`
+/// since there's no sprite art for a dedicated diabetic animation, and
+/// swapping the pet's whole display out for it made the pet disappear
+/// entirely whenever the condition was active.
+pub fn is_diabetic_unmedicated() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    state.is_some_and(|s| s.diabetic && s.cooldown_medicate == 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +318,11 @@ enum Severity {
 }
 
 static LAST_SEVERITY: AtomicU8 = AtomicU8::new(Severity::Uninit as u8);
+
+/// Tracks whether the pet was diabetic as of the previous cycle, so the
+/// one-shot onset alert (buzzer + toast) fires exactly once, the instant
+/// `diabetic` flips false → true — not on every cycle it stays true.
+static WAS_DIABETIC: AtomicBool = AtomicBool::new(false);
 
 /// Set when the in-memory Unicorn Realm buffer has been mutated (a pet pushed)
 /// and needs persisting on the next save cycle, but the record was NOT derived
@@ -385,6 +402,26 @@ fn check_severity_transition(state: &GameState) {
     }
 }
 
+/// One-shot alert (buzzer + toast) the instant the pet becomes diabetic.
+/// Separate from `check_severity_transition` since diabetes is a
+/// permanent flag, not a point on the Neutral→Leaving ladder — it can
+/// become true at any severity level and should announce itself
+/// regardless of what else is going on.
+fn check_diabetes_onset(state: &super::engine::GameState) {
+    let now = state.diabetic;
+    let prev = WAS_DIABETIC.swap(now, Ordering::Relaxed);
+    if now && !prev {
+        let muted = crate::GAME_MUTE.load(Ordering::Relaxed);
+        if !muted {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::buzzer::play(crate::PET_WARN_INDEX);
+        }
+        // Full-screen takeover, not just a toast — this is a rare,
+        // one-time event worth making unmissable.
+        super::show_diabetes_alert();
+    }
+}
+
 /// Tick at which the sleep animation should stop being shown.  When
 /// the player taps Sleep, the engine may auto-wake within a single
 /// tick (10 s) if `tired` was already low — too short for the 4-frame
@@ -457,6 +494,18 @@ pub fn medicate() -> bool {
     with_state(|s| s.medicate())
 }
 
+pub fn ozempic() -> bool {
+    with_state(|s| s.ozempic())
+}
+
+pub fn drink(kind: super::engine::DrinkKind) -> bool {
+    with_state(|s| s.drink(kind))
+}
+
+pub fn rehab() -> bool {
+    with_state(|s| s.rehab())
+}
+
 // ---------------------------------------------------------------------------
 // Debug cheats — see engine::GameState's debug_* methods for what each does.
 // ---------------------------------------------------------------------------
@@ -486,6 +535,27 @@ pub fn debug_skip_ticks(ticks: u32) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
         s.debug_skip_ticks(ticks);
+    }
+}
+
+pub fn debug_force_drunk() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_force_drunk();
+    }
+}
+
+pub fn debug_force_alcoholic() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_force_alcoholic();
+    }
+}
+
+pub fn debug_clear_alcoholism() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_clear_alcoholism();
     }
 }
 

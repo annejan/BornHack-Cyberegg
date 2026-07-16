@@ -18,6 +18,7 @@ pub mod blackhole;
 pub mod bornjeweled;
 pub mod debug_cheats;
 pub mod engine;
+pub mod health_view;
 pub mod input;
 pub mod lifecycle;
 pub mod lightsout;
@@ -42,7 +43,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 pub use nav::{GameNav, Row};
 
-use crate::{BLACK, RED, TriColor};
+use crate::{BLACK, RED, WHITE, TriColor};
 
 /// Action feedback shown briefly after an action.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,8 @@ pub enum Toast {
     Exercise = 15,
     Medicate = 16,
     DebugCheat = 17,
+    Drink = 18,
+    Rehab = 19,
 }
 
 impl Toast {
@@ -93,6 +96,8 @@ impl Toast {
             15 => Self::Exercise,
             16 => Self::Medicate,
             17 => Self::DebugCheat,
+            18 => Self::Drink,
+            19 => Self::Rehab,
             _ => Self::None,
         }
     }
@@ -118,6 +123,8 @@ impl Toast {
             Toast::Exercise => "-weight",
             Toast::Medicate => "+medicated",
             Toast::DebugCheat => "cheat applied",
+            Toast::Drink => "+drunk",
+            Toast::Rehab => "+sober",
         }
     }
 }
@@ -147,6 +154,27 @@ static TRIPLEBORN_BONUS_SCORE: AtomicU16 = AtomicU16::new(0);
 /// (fast LUT or full) take roughly 0.5–3 s each, so the actual
 /// on-screen time is `max(TOAST_MIN_VISIBLE_MS, time-to-next-refresh)`.
 const TOAST_MIN_VISIBLE_MS: u32 = 2000;
+
+/// Whether the full-screen "now diabetic" alert is currently taking
+/// over the display.  Set by [`show_diabetes_alert`], cleared once
+/// `DIABETES_ALERT_MIN_VISIBLE_MS` has elapsed since it started — same
+/// start-timestamp-plus-minimum-duration pattern as the toast above,
+/// just occupying the whole screen instead of one line.
+static DIABETES_ALERT_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DIABETES_ALERT_STARTED_MS: AtomicU32 = AtomicU32::new(0);
+/// Minimum wall-clock visibility for the diabetes alert screen.
+const DIABETES_ALERT_MIN_VISIBLE_MS: u32 = 3000;
+
+/// Show the full-screen "now diabetic" alert, taking over the whole
+/// display (icons, pet, everything) for at least
+/// `DIABETES_ALERT_MIN_VISIBLE_MS`. Called once, the instant diabetes
+/// triggers — see `lifecycle::check_diabetes_onset`.
+pub fn show_diabetes_alert() {
+    DIABETES_ALERT_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
+    DIABETES_ALERT_ACTIVE.store(true, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::TOAST_SIGNAL.signal(());
+}
 
 /// Low 32 bits of the current uptime in milliseconds.  Cross-platform
 /// wrapper so `mod.rs` compiles on both firmware (`embassy_time`) and
@@ -187,7 +215,10 @@ pub fn show_toast(toast: Toast) {
 /// seats properly on the full-waveform path.  `partial_idle` upstream keeps
 /// this from re-flashing once the message is drawn.
 pub fn status_wants_full_refresh() -> bool {
-    TOAST_ACTIVE.load(Ordering::Relaxed) || lifecycle::display_anim() == engine::DisplayAnim::Gone
+    TOAST_ACTIVE.load(Ordering::Relaxed)
+        || DIABETES_ALERT_ACTIVE.load(Ordering::Relaxed)
+        || lifecycle::display_anim() == engine::DisplayAnim::Gone
+        || lifecycle::is_diabetic_unmedicated()
 }
 
 /// Show the station-cooldown toast with the remaining time formatted
@@ -256,6 +287,30 @@ where
     let font_red = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
 
     // ── Full-screen takeover screens ───────────────────────────────────
+    // Diabetes onset alert takes priority over everything else, including
+    // mini-games and modals — a rare, one-shot event worth interrupting
+    // whatever's on screen for.
+    if DIABETES_ALERT_ACTIVE.load(Ordering::Relaxed) {
+        Rectangle::new(Point::new(0, 0), Size::new(152, 152))
+            .into_styled(PrimitiveStyle::with_fill(WHITE))
+            .draw(display)?;
+        Text::with_text_style("TYPE 2", Point::new(76, 56), font, centered).draw(display)?;
+        Text::with_text_style("DIABETES", Point::new(76, 74), font, centered).draw(display)?;
+        Text::with_text_style(
+            "Give medication soon",
+            Point::new(76, 100),
+            font_red,
+            centered,
+        )
+        .draw(display)?;
+
+        let elapsed = now_ms_u32().wrapping_sub(DIABETES_ALERT_STARTED_MS.load(Ordering::Relaxed));
+        if elapsed >= DIABETES_ALERT_MIN_VISIBLE_MS {
+            DIABETES_ALERT_ACTIVE.store(false, Ordering::Relaxed);
+        }
+        return Ok(());
+    }
+
     if pet_select::is_active() {
         return pet_select::draw(display);
     }
@@ -382,6 +437,7 @@ where
         let (row_kind, col) = match slot {
             0 | 1 => (Row::Top, slot),
             6 => (Row::Top, 2), // Exercise — added after slots 0-5 shipped.
+            7 => (Row::Top, 3), // Drink — added after slot 6 shipped.
             _ => (Row::Bottom, slot - 2),
         };
         let cy = if matches!(row_kind, Row::Top) {
@@ -459,6 +515,30 @@ where
         }
     }
 
+    // Persistent "needs meds" banner — diabetic and medication has
+    // lapsed. Deliberately independent of the toast timer above: unlike
+    // a toast, this needs to stay visible for as long as the condition
+    // holds, not just flash briefly. Drawn on the opposite side from
+    // the toast (top-right vs top-left) so the two can't collide if
+    // both are showing at once. There's no dedicated sprite/animation
+    // for this state — see the note in `engine::to_display` for why.
+    if lifecycle::is_diabetic_unmedicated() {
+        use embedded_graphics::mono_font::MonoTextStyle;
+        use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
+        use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+        let style = TextStyleBuilder::new()
+            .baseline(Baseline::Top)
+            .alignment(Alignment::Right)
+            .build();
+        Text::with_text_style(
+            "NEEDS MEDS",
+            Point::new(150, SEP_TOP + 2),
+            MonoTextStyle::new(&FONT_7X13_BOLD, RED),
+            style,
+        )
+        .draw(display)?;
+    }
+
     modal::draw_modal(display)?;
 
     Ok(())
@@ -522,6 +602,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             let (top_row, col) = match slot {
                 0 | 1 => (true, slot),
                 6 => (true, 2), // Exercise — added after slots 0-5 shipped.
+                7 => (true, 3), // Drink — added after slot 6 shipped.
                 _ => (false, slot - 2),
             };
             let cy = if top_row { TOP_CY } else { BOT_CY };
@@ -555,18 +636,15 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Exercising => "EXERCISING",
             DisplayAnim::Medicating => "MEDICATING",
             DisplayAnim::Leaving { .. } => "LEAVING",
-            DisplayAnim::DiabetesUntreated => "DIABETIC",
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",
             DisplayAnim::CriticalHungry => "CRIT:HUNGRY",
             DisplayAnim::CriticalDrained => "CRIT:DRAINED",
-            DisplayAnim::CriticalOverweight => "CRIT:WEIGHT",
             DisplayAnim::WarningSick => "WARN:SICK",
             DisplayAnim::WarningTired => "WARN:TIRED",
             DisplayAnim::WarningHungry => "WARN:HUNGRY",
             DisplayAnim::WarningDrained => "WARN:DRAINED",
             DisplayAnim::WarningMiserable => "WARN:MISER",
-            DisplayAnim::WarningOverweight => "WARN:WEIGHT",
             DisplayAnim::Happy => "HAPPY",
             DisplayAnim::Idle => "IDLE",
         };

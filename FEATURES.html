@@ -275,7 +275,9 @@
     <a href="#exercise">Exercise</a>
     <a href="#medicate">Medicate</a>
     <a href="#food">Food</a>
+    <a href="#drinks">Drinks</a>
     <a href="#assets">Sprite assets</a>
+    <a href="#health-status">Health status view</a>
     <a href="#cheats">Debug cheats</a>
     <a href="#changelog">Changelog</a>
   </nav>
@@ -300,6 +302,8 @@
       <span><b>diabetic = true</b>, permanently</span>
     </div>
     <p>Dropping weight back under the line before that window elapses resets the clock to zero — no partial credit. Once triggered, though, there's no cure, only management: while diabetic and unmedicated, Sick accrues an extra penalty every tick, on top of whatever else is already pushing it up.</p>
+    <h3>Announcing it</h3>
+    <p>The moment diabetes triggers, the badge plays a buzzer alert and takes over the entire screen for at least 3 seconds — "TYPE 2 DIABETES / Give medication soon" — before returning to normal. From then on, whenever medication has lapsed, a persistent <b>NEEDS MEDS</b> banner sits in the corner of the pet screen — the pet's own animation keeps playing underneath it, the banner doesn't take over the display. Earlier neither of these existed: the state silently swapped the whole pet display for plain debug text with no sprite art behind it (so the pet vanished) and nothing alerted the player at all. Fixed by pulling diabetic-unmedicated (and the still-artless weight critical/warning tiers) out of the sprite-selection ladder entirely and rendering the alert and banner as independent overlays instead.</p>
   </section>
 
   <section class="entry" id="exercise">
@@ -326,11 +330,14 @@
   <section class="entry" id="medicate">
     <div class="entry-head">
       <span class="tag">action</span>
-      <h2>Give medication</h2>
+      <h2>Insulin &amp; Ozempic</h2>
       <span class="pill ok">shipped</span>
     </div>
-    <p class="lede">Lives inside the existing <b>Heal</b> icon, as a second item alongside "Give medicine" — the same pattern Rest already uses for Sleep + Relax under one icon. No new icon slot needed.</p>
+    <p class="lede">Both live inside the existing <b>Heal</b> icon, alongside "Give medicine" — the same pattern Rest already uses for Sleep + Relax under one icon. No new icon slot needed for either. ("Give medication" was renamed to <b>Insulin</b> for clarity now that there are two medications on the same menu.)</p>
+    <h3>Insulin</h3>
     <p>Only selectable once the pet is diabetic; shows as a permanently disabled row before that, same treatment as "Defrost" sitting disabled outside Hibernate. Administering it resets a cooldown that doubles as a protection window: while it's running, the diabetes sick-penalty is suppressed. When it lapses, the penalty resumes right as the item becomes selectable again — the game's way of telling you it's time to re-dose.</p>
+    <h3>Ozempic</h3>
+    <p>A separate, stronger weight-loss treatment — <b>not</b> gated on being diabetic, unlike Insulin. Roughly double Exercise's weight relief in one dose, with a bit of appetite suppression (small hunger relief) and mild side-effect nausea (small drained cost) for flavor. Balanced by a cooldown far longer than Exercise's — a once-in-a-while option, not a routine substitute for actually exercising.</p>
   </section>
 
   <section class="entry" id="food">
@@ -357,6 +364,31 @@
     <p>One shared cooldown across all five — it's still just "feeding," whatever's on the plate.</p>
   </section>
 
+  <section class="entry" id="drinks">
+    <div class="entry-head">
+      <span class="tag">action</span>
+      <h2>Drinks &amp; Alcoholism</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">A second, parallel "permanent condition" track, same shape as weight/diabetes: new <b>Drink</b> icon (top row, 4th slot) offers five choices, each scaling baseline drunk-gain/drained-relief/weight-gain numbers by a percentage — <b>Beer sits at 100%</b> as the reference point.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Drink</th><th class="num">Drunk gain</th><th class="num">Drained relief</th><th class="num">Weight gain</th><th class="desc">Read</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Water</td><td class="num">0%</td><td class="num">100%</td><td class="num">0%</td><td class="desc">no alcohol at all</td></tr>
+          <tr><td>Cola</td><td class="num">0%</td><td class="num">150%</td><td class="num">80%</td><td class="desc">no alcohol, but sugary</td></tr>
+          <tr><td>Beer</td><td class="num">100%</td><td class="num">120%</td><td class="num">100%</td><td class="desc">baseline</td></tr>
+          <tr><td>Wine</td><td class="num">150%</td><td class="num">110%</td><td class="num">70%</td><td class="desc">more drunk than Beer, less weight</td></tr>
+          <tr><td>Whiskey</td><td class="num">250%</td><td class="num">140%</td><td class="num">30%</td><td class="desc">most drunk by far, least weight — spirits are lower-calorie than beer</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Unlike weight, <code>drunk</code> passively <em>sobers up</em> on its own over several hours — no Exercise-equivalent action needed. That makes the permanent condition genuinely about repeated heavy drinking: sustained drunk-above-trigger for a multi-day window (mirroring <code>DIABETES_ONSET_TICKS</code>) flips <b>alcoholic</b> permanently, same buzzer/full-screen-alert treatment, same "extra sick penalty until treated" consequence. Managed via <b>Rehab</b>, a fourth item under Heal alongside Give medicine/Insulin/Ozempic — gated on being alcoholic, same protection-window cooldown pattern as Insulin.</p>
+    <p>Drink and Rehab reuse the existing Feeding and Medicating animations respectively rather than getting dedicated sprite art — both are thematically "consuming something" / "receiving treatment" moments, and reusing already-cataloged anim IDs sidesteps the catalog-bounds bug found and fixed earlier this session.</p>
+  </section>
+
   <section class="entry" id="assets">
     <div class="entry-head">
       <span class="tag">asset</span>
@@ -376,6 +408,16 @@
     </div>
     <p>The prop-over-static-body approach is lifted directly from how the existing Playing animation works — the pet doesn't change pose, a prop just appears in open canvas space next to it.</p>
     <div class="callout"><b>Verification note —</b> art was round-trip verified byte-for-byte against its own encoder and sanity-checked as ASCII art, but the actual e-paper/simulator render hasn't been seen firsthand. Worth a look in <code>make sim</code> or on hardware before calling it final.</div>
+  </section>
+
+  <section class="entry" id="health-status">
+    <div class="entry-head">
+      <span class="tag">ui</span>
+      <h2>Health status view</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">New third item under the <b>Stats</b> icon, alongside "View stats" and "Rolled stats" — a plain-language readout of the weight/diabetes and drink/alcoholism "modifiers": <b>Diabetic</b> (Yes/No), <b>Overweight</b> (Yes/No), <b>Alcoholic</b> (Yes/No), and the Fit% bar, plus a short in-context explanation of what triggers each. Row height/spacing recomputed to fit all three rows plus the bar without collision when Alcoholic was added.</p>
+    <p>Full-screen view, same pattern as the existing Rolled Stats screen — any button closes it.</p>
   </section>
 
   <section class="entry" id="cheats">
@@ -410,6 +452,11 @@
       <h2>Changelog</h2>
     </div>
     <ul class="notes">
+      <li><b>2026-07-16 (7)</b> — Second permanent-condition track: Drinks. New <b>Drink</b> icon (top row, 4th slot) offers Water/Cola/Beer/Wine/Whiskey, each scaling drunk-gain/drained-relief/weight-gain off a Beer=100% baseline. Unlike weight, <code>drunk</code> passively sobers up over hours — repeated heavy drinking (not one binge) is what sustains it long enough to trigger permanent <b>alcoholism</b>, managed via a new <b>Rehab</b> item under Heal. Drink/Rehab reuse the Feeding/Medicating animations rather than new anim IDs, deliberately avoiding the catalog-bounds class of bug hit earlier. Health Status view now shows Alcoholic alongside Diabetic/Overweight. Debug menu gained Force drunk / Trigger alcoholism / Clear alcoholism cheats, mirroring the diabetes ones.</li>
+      <li><b>2026-07-16 (6)</b> — Three fixes/additions: (1) The Exercising/Medicating sprite files existed in the repo but had never actually been copied onto any physical badge's FAT12 storage — copied now, fixing the pet going invisible during Exercise. (2) Fixed a real layout bug: the 6-bar Stats view's last row ("Fit") overlapped the footer text drawn below it, making it look like it had no background — recomputed the bar height/spacing to restore the same proven bottom edge the original 5-bar layout used. (3) Added a "Health status" view under the Stats icon — Diabetic/Overweight/Fit% at a glance with a plain-language explanation of what triggers each.</li>
+      <li><b>2026-07-16 (5)</b> — "Give medication" renamed to <b>Insulin</b> for clarity. Added <b>Ozempic</b> as a second, stronger weight-loss treatment under Heal — not gated on being diabetic, roughly double Exercise's relief per dose, balanced by a much longer cooldown.</li>
+      <li><b>2026-07-16 (4)</b> — Diabetes-onset alert upgraded from a corner toast to a full-screen takeover (buzzer + "TYPE 2 DIABETES / Give medication soon", minimum 3 seconds) for visibility. Also removed the sponsor logo slideshow entirely (boot sequence, root-menu entries, and the module itself) along with its 16 PCX slides — frees ~64 KB of on-badge asset storage and trims the firmware binary.</li>
+      <li><b>2026-07-16 (3)</b> — Fixed: becoming diabetic gave no alert at all, and the "DIABETIC" text state showed instead of the pet (no sprite art ever existed for it, same latent gap for the weight critical/warning tiers). Removed those three states from the sprite-selection ladder — the pet now always shows its normal animation — and added a buzzer + one-shot toast on diabetes onset, plus a persistent "NEEDS MEDS" corner banner drawn independently while medication has lapsed.</li>
       <li><b>2026-07-16 (2)</b> — Hidden debug-cheat menu added: a button sequence (Up Up Down Down Left Right Left Right Fire) from the idle main screen opens a Debug modal with instant weight/diabetes cheats plus a time-skip, so the multi-day arc can be tested in seconds. Not reachable from any icon, no cooldowns.</li>
       <li><b>2026-07-16</b> — Food choice (Salad/Apple/Burger/Pizza/Cake) added to Feed. Exercising and Medicating animations built for all three pets. Caught and fixed an anim-ID collision: the first pass reused slots the asset manifest had already reserved for unbuilt features (<code>ICON_HUNGER</code>, <code>ENV_MEDICINE</code>, etc.) across Bartholomeus and Slug — two real pre-existing sprite files were briefly overwritten and restored from git before anything left this machine. Moved everything to a range confirmed clear across all three pets.</li>
       <li><b>2026-07-15</b> — Weight stat, permanent diabetes trigger, and the Exercise/Medicate actions shipped. Save format bumped 66 → 77 bytes (existing saves reset on update, same as a prior <code>pet_kind</code> byte bump). Exercise menu icon art added after launching with a blank slot.</li>

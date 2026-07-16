@@ -140,6 +140,27 @@ thresholds_table! {
     // Medication
     MEDICATE_DURATION: u8,
     MEDICATE_COOLDOWN: u16,
+    // Ozempic — accelerated weight loss, not gated on being diabetic.
+    OZEMPIC_DURATION: u8,
+    OZEMPIC_COOLDOWN: u16,
+    OZEMPIC_WEIGHT_RELIEF: u16,
+    OZEMPIC_HUNGER_RELIEF: u16,
+    OZEMPIC_DRAINED_COST: u16,
+    // Drink
+    DRINK_DURATION: u8,
+    DRINK_COOLDOWN: u16,
+    DRINK_DRUNK_GAIN: u16,
+    DRINK_DRAINED_RELIEF: u16,
+    DRINK_WEIGHT_GAIN: u16,
+    // Drunk / alcoholism
+    DRUNK_SOBER_RATE: u16,
+    DRUNK_TRIGGER: u16,
+    ALCOHOLIC_ONSET_TICKS: u32,
+    ALCOHOLIC_SICK_RATE: u16,
+    ALCOHOLIC_SICK_MISERABLE_RATE: u16,
+    // Rehab
+    REHAB_DURATION: u8,
+    REHAB_COOLDOWN: u16,
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +261,27 @@ impl Thresholds {
 
         MEDICATE_DURATION: 2,
         MEDICATE_COOLDOWN: 720,
+
+        OZEMPIC_DURATION: 2,
+        OZEMPIC_COOLDOWN: 4320,
+        OZEMPIC_WEIGHT_RELIEF: 13100,
+        OZEMPIC_HUNGER_RELIEF: 1500,
+        OZEMPIC_DRAINED_COST: 800,
+
+        DRINK_DURATION: 2,
+        DRINK_COOLDOWN: 24,
+        DRINK_DRUNK_GAIN: 4915,
+        DRINK_DRAINED_RELIEF: 3275,
+        DRINK_WEIGHT_GAIN: 655,
+
+        DRUNK_SOBER_RATE: 6,
+        DRUNK_TRIGGER: 39321,
+        ALCOHOLIC_ONSET_TICKS: 17280,
+        ALCOHOLIC_SICK_RATE: 655,
+        ALCOHOLIC_SICK_MISERABLE_RATE: 1310,
+
+        REHAB_DURATION: 3,
+        REHAB_COOLDOWN: 1440,
     };
 
     /// Half-speed decay, doubled lifetimes, more generous action relief.
@@ -337,6 +379,27 @@ impl Thresholds {
 
         MEDICATE_DURATION: 2,
         MEDICATE_COOLDOWN: 1440,
+
+        OZEMPIC_DURATION: 2,
+        OZEMPIC_COOLDOWN: 2880,
+        OZEMPIC_WEIGHT_RELIEF: 16400,
+        OZEMPIC_HUNGER_RELIEF: 2000,
+        OZEMPIC_DRAINED_COST: 400,
+
+        DRINK_DURATION: 2,
+        DRINK_COOLDOWN: 24,
+        DRINK_DRUNK_GAIN: 2500,
+        DRINK_DRAINED_RELIEF: 4915,
+        DRINK_WEIGHT_GAIN: 328,
+
+        DRUNK_SOBER_RATE: 10,
+        DRUNK_TRIGGER: 39321,
+        ALCOHOLIC_ONSET_TICKS: 34560,
+        ALCOHOLIC_SICK_RATE: 328,
+        ALCOHOLIC_SICK_MISERABLE_RATE: 655,
+
+        REHAB_DURATION: 3,
+        REHAB_COOLDOWN: 2880,
     };
 }
 

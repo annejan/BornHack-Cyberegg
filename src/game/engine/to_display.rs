@@ -51,16 +51,11 @@ pub enum DisplayAnim {
         maxed_count: u8,
     },
 
-    /// Diabetic and medication has lapsed — the single most actionable
-    /// alert, so it outranks the ordinary critical/warning stat ladder.
-    DiabetesUntreated,
-
     // ── Group 4: critical stats (needs immediate action) ────────────
     CriticalSick,
     CriticalTired,
     CriticalHungry,
     CriticalDrained,
-    CriticalOverweight,
 
     // ── Group 5: warning stats (attention needed soon) ──────────────
     WarningSick,
@@ -68,7 +63,6 @@ pub enum DisplayAnim {
     WarningHungry,
     WarningDrained,
     WarningMiserable,
-    WarningOverweight,
 
     // ── Group 6: content ────────────────────────────────────────────
     /// Pet is happy (all stats well below warning thresholds).
@@ -112,7 +106,13 @@ impl GameState {
                 Action::Relax => DisplayAnim::Relaxing,
                 Action::Play => DisplayAnim::Playing,
                 Action::Exercise => DisplayAnim::Exercising,
-                Action::Medicate => DisplayAnim::Medicating,
+                // Ozempic and Rehab share the Medicating animation —
+                // all three are "receiving treatment" moments, and
+                // there's no separate sprite art for each.
+                Action::Medicate | Action::Ozempic | Action::Rehab => DisplayAnim::Medicating,
+                // Drink shares the Feeding animation — both are
+                // "consuming something" moments.
+                Action::Drink => DisplayAnim::Feeding,
             };
         }
         if self.is_sleeping {
@@ -126,11 +126,14 @@ impl GameState {
             };
         }
 
-        // Diabetic and medication has lapsed — outranks the ordinary
-        // critical/warning stat ladder below.
-        if self.diabetic && self.cooldown_medicate == 0 {
-            return DisplayAnim::DiabetesUntreated;
-        }
+        // Note: diabetic-and-unmedicated is deliberately *not* a
+        // DisplayAnim state — there's no sprite art for it (or for the
+        // weight critical/warning tiers below), and swapping the pet's
+        // whole display out for a debug-text-only screen made the pet
+        // disappear entirely whenever the condition was active. It's
+        // surfaced instead as a persistent on-screen banner drawn
+        // alongside whatever the pet's normal animation is — see
+        // `lifecycle::is_diabetic_unmedicated()` / `game::mod` render.
 
         // ── Group 4: critical stats ─────────────────────────────────
         // Ranked by recovery difficulty: sick > tired > hungry > drained.
@@ -145,9 +148,6 @@ impl GameState {
         }
         if self.drained > SICK_TRIGGER_DRAINED() {
             return DisplayAnim::CriticalDrained;
-        }
-        if self.weight > OVERWEIGHT_TRIGGER() {
-            return DisplayAnim::CriticalOverweight;
         }
 
         // ── Group 5: warning stats ──────────────────────────────────
@@ -166,9 +166,6 @@ impl GameState {
         }
         if self.miserable > WARNING_MISERABLE() {
             return DisplayAnim::WarningMiserable;
-        }
-        if self.weight > WARNING_WEIGHT() {
-            return DisplayAnim::WarningOverweight;
         }
 
         // ── Group 6: content ────────────────────────────────────────

@@ -51,6 +51,7 @@ pub enum ModalKind {
     // Hidden — opened only via the button sequence in `debug_cheats`,
     // not reachable from any icon.
     Debug = 9,
+    Drink = 10, // top row, col 3
 }
 
 impl ModalKind {
@@ -65,6 +66,7 @@ impl ModalKind {
             7 => Self::Music,
             8 => Self::Exercise,
             9 => Self::Debug,
+            10 => Self::Drink,
             _ => Self::None,
         }
     }
@@ -81,12 +83,18 @@ impl ModalKind {
             Self::Music => "Music",
             Self::Exercise => "Exercise",
             Self::Debug => "Debug",
+            Self::Drink => "Drink",
         }
     }
 
     fn items(self) -> &'static [Item] {
         match self {
-            Self::Stats => &[Item::ViewStats, Item::RolledStats, Item::Cancel],
+            Self::Stats => &[
+                Item::ViewStats,
+                Item::RolledStats,
+                Item::HealthStatus,
+                Item::Cancel,
+            ],
             Self::Hibernate => &[Item::Hibernate, Item::WakeUp, Item::Cancel],
             Self::Feed => &[
                 Item::FeedFood(super::engine::FoodKind::Salad),
@@ -96,14 +104,31 @@ impl ModalKind {
                 Item::FeedFood(super::engine::FoodKind::Cake),
                 Item::Cancel,
             ],
-            Self::Heal => &[Item::GiveMedicine, Item::GiveMedication, Item::Cancel],
+            Self::Heal => &[
+                Item::GiveMedicine,
+                Item::GiveMedication,
+                Item::Ozempic,
+                Item::Rehab,
+                Item::Cancel,
+            ],
             Self::Exercise => &[Item::ExerciseNow, Item::Cancel],
             Self::Debug => &[
                 Item::CheatForceOverweight,
                 Item::CheatForceDiabetic,
                 Item::CheatClearDiabetes,
+                Item::CheatForceDrunk,
+                Item::CheatForceAlcoholic,
+                Item::CheatClearAlcoholism,
                 Item::CheatSkipHour,
                 Item::CheatSkipDay,
+                Item::Cancel,
+            ],
+            Self::Drink => &[
+                Item::DrinkChoice(super::engine::DrinkKind::Water),
+                Item::DrinkChoice(super::engine::DrinkKind::Cola),
+                Item::DrinkChoice(super::engine::DrinkKind::Beer),
+                Item::DrinkChoice(super::engine::DrinkKind::Wine),
+                Item::DrinkChoice(super::engine::DrinkKind::Whiskey),
                 Item::Cancel,
             ],
             Self::Play => &[
@@ -147,15 +172,22 @@ enum Item {
     Cancel,
     ViewStats,
     RolledStats,
+    HealthStatus,
     FeedFood(super::engine::FoodKind),
     GiveMedicine,
     GiveMedication,
+    Ozempic,
     ExerciseNow,
     CheatForceOverweight,
     CheatForceDiabetic,
     CheatClearDiabetes,
     CheatSkipHour,
     CheatSkipDay,
+    CheatForceDrunk,
+    CheatForceAlcoholic,
+    CheatClearAlcoholism,
+    DrinkChoice(super::engine::DrinkKind),
+    Rehab,
     Sleep,
     Relax,
     PlayNow,
@@ -179,15 +211,22 @@ impl Item {
             Self::Cancel => "Cancel",
             Self::ViewStats => "View stats",
             Self::RolledStats => "Rolled stats",
+            Self::HealthStatus => "Health status",
             Self::FeedFood(food) => food.label(),
             Self::GiveMedicine => "Give medicine",
-            Self::GiveMedication => "Give medication",
+            Self::GiveMedication => "Insulin",
+            Self::Ozempic => "Ozempic",
             Self::ExerciseNow => "Exercise now",
             Self::CheatForceOverweight => "Force overweight",
             Self::CheatForceDiabetic => "Trigger diabetes",
             Self::CheatClearDiabetes => "Clear diabetes",
             Self::CheatSkipHour => "Skip 1 hour",
             Self::CheatSkipDay => "Skip 1 day",
+            Self::CheatForceDrunk => "Force drunk",
+            Self::CheatForceAlcoholic => "Trigger alcoholism",
+            Self::CheatClearAlcoholism => "Clear alcoholism",
+            Self::DrinkChoice(drink) => drink.label(),
+            Self::Rehab => "Rehab",
             Self::Sleep => "Sleep",
             Self::Relax => "Relax",
             Self::PlayNow => "Play now",
@@ -232,16 +271,23 @@ impl Item {
             Self::Cancel
             | Self::ViewStats
             | Self::RolledStats
+            | Self::HealthStatus
             | Self::PlayMusic
             | Self::Song(_)
             | Self::CheatForceOverweight
             | Self::CheatForceDiabetic
             | Self::CheatClearDiabetes
             | Self::CheatSkipHour
-            | Self::CheatSkipDay => true,
+            | Self::CheatSkipDay
+            | Self::CheatForceDrunk
+            | Self::CheatForceAlcoholic
+            | Self::CheatClearAlcoholism => true,
+            Self::DrinkChoice(_) => stats.can_drink,
+            Self::Rehab => stats.can_rehab,
             Self::FeedFood(_) => stats.can_feed,
             Self::GiveMedicine => stats.can_heal,
             Self::GiveMedication => stats.can_medicate,
+            Self::Ozempic => stats.can_ozempic,
             Self::ExerciseNow => stats.can_exercise,
             Self::Sleep => stats.can_sleep,
             Self::Relax => stats.can_relax,
@@ -277,6 +323,9 @@ impl Item {
             Self::GiveMedication => {
                 action_remaining(Action::Medicate).max(stats.cooldown_medicate)
             }
+            Self::Ozempic => action_remaining(Action::Ozempic).max(stats.cooldown_ozempic),
+            Self::DrinkChoice(_) => action_remaining(Action::Drink).max(stats.cooldown_drink),
+            Self::Rehab => action_remaining(Action::Rehab).max(stats.cooldown_rehab),
             Self::ExerciseNow => action_remaining(Action::Exercise).max(stats.cooldown_exercise),
             Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
             Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
@@ -300,6 +349,10 @@ impl Item {
                 super::traits_view::open();
                 close();
             }
+            Self::HealthStatus => {
+                super::health_view::open();
+                close();
+            }
             Self::FeedFood(food) => {
                 lifecycle::feed(food);
                 super::show_toast(super::Toast::Feed);
@@ -313,6 +366,11 @@ impl Item {
             Self::GiveMedication => {
                 lifecycle::medicate();
                 super::show_toast(super::Toast::Medicate);
+                close();
+            }
+            Self::Ozempic => {
+                lifecycle::ozempic();
+                super::show_toast(super::Toast::Exercise);
                 close();
             }
             Self::ExerciseNow => {
@@ -343,6 +401,31 @@ impl Item {
             Self::CheatSkipDay => {
                 lifecycle::debug_skip_ticks(8640);
                 super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatForceDrunk => {
+                lifecycle::debug_force_drunk();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatForceAlcoholic => {
+                lifecycle::debug_force_alcoholic();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatClearAlcoholism => {
+                lifecycle::debug_clear_alcoholism();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::DrinkChoice(drink) => {
+                lifecycle::drink(drink);
+                super::show_toast(super::Toast::Drink);
+                close();
+            }
+            Self::Rehab => {
+                lifecycle::rehab();
+                super::show_toast(super::Toast::Rehab);
                 close();
             }
             Self::Sleep => {
@@ -434,7 +517,7 @@ pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
         (Row::Top, 0) => ModalKind::Stats,
         (Row::Top, 1) => ModalKind::Hibernate,
         (Row::Top, 2) => ModalKind::Exercise,
-        // Top row col 3: empty (no modal).
+        (Row::Top, 3) => ModalKind::Drink,
         (Row::Top, _) => ModalKind::None,
         // Bottom row: actions.
         (Row::Bottom, 0) => ModalKind::Feed,
@@ -769,13 +852,21 @@ where
 
 /// Bar width in pixels (modal inner is 128 px; subtract label width + margins).
 const BAR_MAX_W: u32 = 60;
-/// Bar height — tall enough to render the inline percentage text.
-const BAR_H: u32 = 16;
-/// Vertical spacing between bars (height + small gap).  16 (== BAR_H,
-/// zero extra gap) rather than the more breathing-room-y 18 used when
-/// there were only 5 bars — needed so all 6 bars + the footer still fit
-/// inside the 132px popover without collision.
-const BAR_SPACING: i32 = 16;
+/// Bar height — the documented minimum for the 13px inline percentage
+/// font to fit without clipping.  Was 16 with 5 bars; had to shrink to
+/// this floor to fit 6 without the last bar (`Fit`) colliding with the
+/// footer text drawn below (that collision was a real bug — see the
+/// vertical budget note below).
+const BAR_H: u32 = 15;
+/// Vertical spacing between bars (== BAR_H, zero extra gap). Six bars
+/// at 15px each, starting 2px below the title bar, land exactly on the
+/// same bottom edge (y=122) the original 5-bar/18px layout used —
+/// same proven clearance above the footer, just spread across one more
+/// row. The previous attempt kept BAR_H/BAR_SPACING at 16 with only a
+/// 2px reduction elsewhere, which undershot: the last bar ended up 8px
+/// into the footer's text, rendering black-on-white footer glyphs over
+/// the bar (looked like the bar had "no background").
+const BAR_SPACING: i32 = 15;
 
 fn draw_stats_view<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -821,7 +912,7 @@ where
     let bar_x = label_x + 60; // 4 px clearance after the longest label
 
     for (i, (label, value)) in bars.iter().enumerate() {
-        let y = inner_y + TITLE_H + 4 + i as i32 * BAR_SPACING;
+        let y = inner_y + TITLE_H + 2 + i as i32 * BAR_SPACING;
         // Label vertically centred against the bar.
         let label_y = y + (BAR_H as i32 - 13) / 2;
         // Critical (< 25 %) values are highlighted in red.

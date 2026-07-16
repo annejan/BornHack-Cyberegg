@@ -495,19 +495,10 @@ async fn main(spawner: Spawner) {
     // ── Boot-complete chime ───────────────────────────────────────────────
     // Plays once on every boot (first boot included) when the user
     // hasn't disabled it via Settings → Boot chime.  The audible
-    // signal that init has finished and the badge is ready.  Fires
-    // before the first-boot sponsor slideshow so the sound and the
-    // slideshow don't compete for attention, and so the chime always
-    // plays at the same wall-clock moment in the boot sequence
-    // regardless of whether the slideshow is going to run.
+    // signal that init has finished and the badge is ready.
     if bornhack_aegg::BOOT_CHIME_ENABLED.load(core::sync::atomic::Ordering::Relaxed) {
         bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
     }
-
-    // ── Boot sponsor slideshow ───────────────────────────────────────────
-    // Event sponsors first, then the badge hardware sponsors, 2s per slide.
-    // The root-menu "Sponsors" / "Badge sponsors" items replay them on demand.
-    bornhack_aegg::fw::sponsors::run_boot_slideshow(&mut display, &mut button_rcvr).await;
 
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
@@ -591,10 +582,6 @@ async fn display_loop(
     let mut last_screen: u8 = 0xFF;
 
     loop {
-        // Play the sponsor slideshow if the Bornagotchi "Badge sponsors" item
-        // requested it (we own the display + buttons here).
-        bornhack_aegg::fw::sponsors::run_if_requested(display, button_rcvr).await;
-
         // Qwiic Scan screen: run the I2C bus scan here (async, owns the bus)
         // before drawing, so the results are ready for this frame's draw.
         if bornhack_aegg::fw::qwiic::is_active()

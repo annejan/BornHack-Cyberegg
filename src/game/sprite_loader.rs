@@ -49,10 +49,20 @@ const PCX_HEADER_SIZE: usize = 128;
 /// this table overflows the stack and corrupts adjacent statics.
 #[cfg(feature = "embassy-base")]
 const PP_MAX: usize = 8;
-/// Anim-id range covered.  Anim ids go 0x00..=0x14 (start screen +
-/// 20 lifecycle anims) — 21 entries.
+/// Anim-id range covered.  Anim ids go 0x00..=0x14 (start screen + 20
+/// lifecycle anims), plus 0x23/0x24 (Exercising/Medicating — picked
+/// starting at 0x20 to land clear of 0x15-0x1F, which
+/// `assets/to-badge/MANIFEST.TXT` reserves for other, currently-unbuilt
+/// features).  37 entries covers up to 0x24 inclusive.  This bound is
+/// checked on both the write side (`init`, scanning the FAT12 catalog
+/// at boot) and the read side (`count_anim_frames`) — an anim id at or
+/// past this value is silently never catalogued, which is exactly what
+/// happened before this was bumped: Exercising/Medicating had real,
+/// correctly-formatted sprite files on flash, but the catalog couldn't
+/// see far enough to notice them, so the game fell back to the
+/// no-artwork debug-text path as if the files didn't exist at all.
 #[cfg(feature = "embassy-base")]
-const AA_MAX: usize = 21;
+const AA_MAX: usize = 37;
 /// Maximum frame index per animation (bit position in the u16 presence cell).
 /// No animation exceeds a handful of frames; 16 is ample.
 #[cfg(feature = "embassy-base")]
