@@ -161,6 +161,8 @@ thresholds_table! {
     // Rehab
     REHAB_DURATION: u8,
     REHAB_COOLDOWN: u16,
+    // Battle — no duration (resolves instantly), just a cooldown between fights.
+    BATTLE_COOLDOWN: u16,
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +284,8 @@ impl Thresholds {
 
         REHAB_DURATION: 3,
         REHAB_COOLDOWN: 1440,
+
+        BATTLE_COOLDOWN: 180,
     };
 
     /// Half-speed decay, doubled lifetimes, more generous action relief.
@@ -400,6 +404,8 @@ impl Thresholds {
 
         REHAB_DURATION: 3,
         REHAB_COOLDOWN: 2880,
+
+        BATTLE_COOLDOWN: 180,
     };
 }
 

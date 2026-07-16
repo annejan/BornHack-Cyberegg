@@ -14,6 +14,8 @@
 //! └───────────────────────────────────────┘  y = 152
 //! ```
 
+pub mod battle;
+pub mod battle_view;
 pub mod blackhole;
 pub mod bornjeweled;
 pub mod debug_cheats;
@@ -78,6 +80,10 @@ pub enum Toast {
     Rehab = 19,
     NewFriend = 20,
     FriendReunion = 21,
+    /// Shown when we were the *target* of a friend's mesh Battle
+    /// challenge and it resolved in our favor — see `game::battle`.
+    BattleWon = 22,
+    BattleLost = 23,
 }
 
 impl Toast {
@@ -104,6 +110,8 @@ impl Toast {
             19 => Self::Rehab,
             20 => Self::NewFriend,
             21 => Self::FriendReunion,
+            22 => Self::BattleWon,
+            23 => Self::BattleLost,
             _ => Self::None,
         }
     }
@@ -133,6 +141,8 @@ impl Toast {
             Toast::Rehab => "+sober",
             Toast::NewFriend => "new friend!",
             Toast::FriendReunion => "+happy",
+            Toast::BattleWon => "won a battle!",
+            Toast::BattleLost => "lost a battle",
         }
     }
 }

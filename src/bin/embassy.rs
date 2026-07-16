@@ -1023,8 +1023,10 @@ async fn advert_ticker_task() {
 /// Periodic BornPets friend-discovery beacon on the private SHDW channel.
 ///
 /// Wakes every 15 minutes; while a pet is active, broadcasts a `PetBeacon`
-/// (identity + pet snapshot) as `GrpData` so other badges on SHDW can
-/// record a new/returning friend — see `game::friends::on_pet_beacon`.
+/// (identity + pet snapshot + current combat stats) as `GrpData` so other
+/// badges on SHDW can record a new/returning friend — see
+/// `game::friends::on_pet_beacon` — and cache combat stats fresh enough
+/// to battle against later (`game::battle::challenge`).
 /// Skipped entirely when no pet is active (nothing to announce).
 #[cfg(all(feature = "mesh", feature = "game"))]
 #[embassy_executor::task]
@@ -1045,12 +1047,17 @@ async fn pet_beacon_ticker_task() {
             let n = name.len().min(PET_NAME_MAX);
             beacon_name[..n].copy_from_slice(&name.as_bytes()[..n]);
 
+            let combat = lifecycle::combat_stats();
             let beacon = friends::PetBeacon {
                 device_id: bornhack_aegg::fw::device_id::get(),
                 pet_kind: kind.id(),
                 generation: lifecycle::pet_generation(),
                 name: beacon_name,
                 name_len: n as u8,
+                attack: combat.map_or(0, |c| c.attack),
+                defense: combat.map_or(0, |c| c.defense),
+                speed: combat.map_or(0, |c| c.speed),
+                max_hp: combat.map_or(0, |c| c.max_hp),
             };
 
             let mut data: heapless::Vec<u8, { bornhack_aegg::fw::mesh::MAX_CHANNEL_DATA }> =

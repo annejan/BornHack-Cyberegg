@@ -58,8 +58,10 @@ things before they spiral!
 Select the **Stats** icon (top-left) and choose "View stats" to see all
 six stat bars at once (labeled "Fit" for weight — 100% = lean, 0% =
 obese), "Health status" for a plain-language readout of Diabetic /
-Overweight / Alcoholic / Fit%, with a short explanation of what triggers
-each, or "Friends" for the pets your badge has met over the mesh (see
+Overweight / Alcoholic / Fit% (plus your lifetime Battle win/loss
+record — see [Battles](#battles) below), with a short explanation of
+what triggers each, or "Friends" for the pets your badge has met over
+the mesh (see
 [Friends & the SHDW Channel](#friends--the-shdw-channel) below).
 
 ## Actions
@@ -75,7 +77,8 @@ each, or "Friends" for the pets your badge has met over the mesh (see
 |              | Insulin          | Only shown once diabetic — suppresses the diabetes sick-penalty for a while |
 |              | Ozempic          | Accelerated weight loss — not gated on being diabetic; appetite-suppressing (also relieves a little hunger), but the strongest cooldown of any action |
 |              | Rehab            | Only shown once alcoholic — suppresses the alcoholism sick-penalty for a while |
-| **Play**     | Play now         | Zeroes miserable (costs some energy)                             |
+| **Play**     | Battle           | Fight a friend over the mesh — see [Battles](#battles) below      |
+|              | Play now         | Zeroes miserable (costs some energy)                             |
 |              | Tic Tac Toe      | Mini-game: draw/win to boost inspiration                         |
 |              | Lights Out       | Mini-game: solve to boost inspiration                            |
 |              | Play music       | Play a melody on the buzzer                                      |
@@ -194,14 +197,66 @@ another SHDW badge is in LoRa range and its beacon comes in, your pet
 - **Meeting a known friend again too soon** — no boost (they need some
   time apart before it counts as quality time again)
 
-Check who your pet has met via **Stats > Friends** — a scrollable list
-of every friend seen so far, with how long ago you first met and whether
-you've spent time together recently. Use **Up/Down** to scroll, any
-other button to close.
+Check who your pet has met via **Stats > Friends** — a scrollable,
+clickable menu of every friend seen so far. Use **Up/Down** to move the
+cursor and **Fire** on a friend to see their details: kind, how long
+you've known them, their cached combat stats, and your head-to-head
+Battle record against them specifically (see [Battles](#battles)
+below). Any button on the detail screen goes back to the list; any
+button on the list itself (other than Up/Down/Fire) closes the whole
+screen. Long names wrap onto a second line instead of running off the
+edge of the screen.
 
 This only works between two physical badges, both running this firmware
 and both in LoRa range of each other and on the SHDW channel — there's
 no simulated version of meeting a friend.
+
+## Battles
+
+Every pet has four combat stats — **Attack**, **Defense**, **Speed**,
+and **HP** — derived automatically from its regular stats, so there's
+nothing extra to manage:
+
+| Combat stat | Driven mainly by                              |
+| ----------- | ---------------------------------------------- |
+| Attack      | Curiosity trait + how well cared-for the pet is |
+| Defense     | Resilience trait + how lean/fit the pet is      |
+| Speed       | How lean/fit the pet is + Vitality trait        |
+| HP          | Vitality trait, reduced if the pet is sick      |
+
+Being diabetic or alcoholic takes a flat toll on Attack/Defense/Speed —
+the same permanent conditions that hurt everyday care also make your
+pet a weaker fighter.
+
+Select **Battle** — now the first option under the **Play** icon — to
+challenge a friend from your Friends list. Battling is **instant**:
+your badge resolves the whole fight immediately using your pet's live
+stats and your friend's most recently broadcast combat stats, no
+waiting around. You'll see a result screen with both pets' remaining
+HP and a WIN/LOSE banner right away.
+
+Your friend's badge finds out asynchronously — whenever it next
+receives your battle broadcast on SHDW, it registers the result (from
+their side, a loss for them if you won) and shows its own toast, even
+if they weren't looking at the Battle screen.
+
+**Battle HP is entirely separate from your pet's real health** — it's
+computed fresh for each fight and discarded afterward. Losing a battle
+never affects `sick`, `miserable`, or anything else about the pet's
+actual wellbeing; the worst that happens is you lose the bragging
+rights. Wins and losses are tracked two ways: a simple lifetime counter
+on your pet overall (visible in Health Status), and a **head-to-head
+record against each specific friend** (visible on that friend's detail
+screen under Stats > Friends). Both badges update the same
+head-to-head tally for every battle between them — win it as the
+challenger and your friend's copy shows the matching loss, and vice
+versa — so the record reads the same from either side. Battling has
+its own cooldown, same as every other action.
+
+Like Friends, actually having your opponent's badge learn the outcome
+needs two physical badges in range of each other on SHDW — but you can
+always battle solo against any cached friend regardless of whether
+they're currently nearby.
 
 ## Hibernate
 

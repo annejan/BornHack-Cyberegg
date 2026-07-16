@@ -279,6 +279,7 @@
     <a href="#assets">Sprite assets</a>
     <a href="#health-status">Health status view</a>
     <a href="#friends">Friends (SHDW mesh)</a>
+    <a href="#battle">Battles</a>
     <a href="#cheats">Debug cheats</a>
     <a href="#changelog">Changelog</a>
   </nav>
@@ -438,8 +439,35 @@
         </tbody>
       </table>
     </div>
-    <p>The beacon is sent as a <code>GrpData</code> packet with a private <code>data_type</code>, not <code>GrpTxt</code> — it never shows up in the channel-browser chat UI or gets forwarded to the companion app, it's picked up directly by the game layer. Friend records (up to 20) persist in their own KV namespace, independent of the main save. Check who's been met via <b>Stats &gt; Friends</b> — a scrollable list (Up/Down, any other button closes), mirroring the Unicorn Realm screen.</p>
-    <div class="callout"><b>Verification note —</b> unit-tested in isolation (friend list add/dedupe/ring-overflow, beacon round-trip, cooldown boundary) and built clean across all firmware variants including the standalone mesh-only and game-only builds. Actually meeting a friend requires two physical badges, both on this firmware, both in LoRa range — not something verifiable single-handed.</div>
+    <p>The beacon is sent as a <code>GrpData</code> packet with a private <code>data_type</code>, not <code>GrpTxt</code> — it never shows up in the channel-browser chat UI or gets forwarded to the companion app, it's picked up directly by the game layer. Friend records (up to 20) persist in their own KV namespace, independent of the main save.</p>
+    <p>Check who's been met via <b>Stats &gt; Friends</b> — now a proper clickable menu rather than a passive list. Each friend is one cursor-selectable row (word-wrapped so long name/kind combos never run off the 152px screen — the original single-line "name (kind) - since" layout could overflow). Fire on a friend opens a detail screen: kind, how long you've known them, their cached combat-stat snapshot, and your head-to-head Battle record against them specifically (see <a href="#battle">Battles</a>). Any button on the detail screen steps back to the list; any non-navigation button on the list closes the whole screen.</p>
+    <div class="callout"><b>Verification note —</b> unit-tested in isolation (friend list add/dedupe/ring-overflow, beacon round-trip, cooldown boundary, head-to-head record update) and built clean across all firmware variants including the standalone mesh-only and game-only builds. Actually meeting a friend requires two physical badges, both on this firmware, both in LoRa range — not something verifiable single-handed.</div>
+  </section>
+
+  <section class="entry" id="battle">
+    <div class="entry-head">
+      <span class="tag">mesh</span>
+      <h2>Battles with friends</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">A new <b>Battle</b> item — now the first option under the <b>Play</b> icon — lets you fight any pet on your Friends list. Every pet has four combat stats derived automatically from its existing care stats and traits, no separate grinding required.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Combat stat</th><th class="desc">Driven mainly by</th></tr></thead>
+        <tbody>
+          <tr><td>Attack</td><td class="desc">Curiosity trait + how well cared-for the pet is</td></tr>
+          <tr><td>Defense</td><td class="desc">Resilience trait + how lean/fit the pet is</td></tr>
+          <tr><td>Speed</td><td class="desc">How lean/fit the pet is + Vitality trait</td></tr>
+          <tr><td>HP</td><td class="desc">Vitality trait, reduced if the pet is sick</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Being diabetic or alcoholic takes a flat penalty off Attack/Defense/Speed — the same permanent conditions that hurt everyday care make the pet a weaker fighter too.</p>
+    <p><b>Battles are instant, using cached stats</b> — no waiting on the other badge. The periodic Friends beacon (every 15 min) now also carries the sender's current combat-stat snapshot, cached in the receiver's Friends list. Challenging a friend resolves the whole fight immediately, locally, using your pet's live stats plus that cached snapshot: a small deterministic turn simulation (both sides act every round, faster one first, seeded 80-120% damage variance, hard-capped at 20 rounds) decides the winner on the spot — no live round-trip over LoRa needed.</p>
+    <p>After resolving, the challenger broadcasts a small result packet on SHDW (same private <code>GrpData</code> pattern as the Friends beacon, distinct <code>data_type</code>) so the friend's badge can learn about it whenever it next receives it — updating its own win/loss tally (inverted: your win is their loss) and showing its own toast, even if they weren't looking at the Battle screen.</p>
+    <p><b>Battle HP is completely separate from the pet's real health</b> — computed fresh at the start of every fight from current stats and discarded afterward. It never touches <code>sick</code>, the Leaving/Gone lifecycle, or anything else about the pet's actual wellbeing; losing a battle costs nothing but bragging rights.</p>
+    <p>Win/loss is tracked two ways: a lifetime counter on the pet overall (shown on the battle result screen and in <b>Stats &gt; Health status</b>), and — new — a <b>per-friend head-to-head record</b>, stored on the <code>FriendRecord</code> itself and shown on that friend's detail screen (<b>Stats &gt; Friends</b>, click a friend). Both sides of a battle update the <em>same</em> head-to-head tally: the challenger bumps it locally right after resolving, and the target bumps its own copy (inverted) upon receiving the result broadcast — so the record reads consistently whichever badge you check it from, not just a one-sided log. Battling has its own cooldown (30 min), same shape as every other action.</p>
+    <div class="callout"><b>Verification note —</b> unit-tested in isolation (combat-stat derivation bounds/penalties, battle-simulation determinism and guaranteed termination, result-packet round-trip, extended beacon/friend-record round-trip incl. the head-to-head fields, save-format round-trip) and built clean across all firmware variants including the standalone mesh-only and game-only builds. As with Friends, verifying the *other* badge actually receives the async result broadcast needs two physical badges in range — not verifiable single-handed.</div>
   </section>
 
   <section class="entry" id="cheats">
@@ -474,6 +502,8 @@
       <h2>Changelog</h2>
     </div>
     <ul class="notes">
+      <li><b>2026-07-16 (10)</b> — Friends screen reworked into an actual clickable menu (word-wrapped rows, cursor + Fire to open a per-friend detail screen) instead of a passive multi-line list that could overflow the 152px screen. Detail screen shows kind, met-duration, cached combat-stat snapshot, and a new <b>per-friend head-to-head Battle record</b> — separate from the pet's overall win/loss tally. Both badges keep their copy of the head-to-head record in sync: the challenger updates it locally when resolving a fight, the target updates its own (inverted) copy when the result broadcast arrives, so it reads the same from either side. Word-wrap itself was promoted from `fw::mesh::text_wrap` (mesh-only) to a crate-root `text_wrap` module so the game layer can use it without pulling in the mesh feature.</li>
+      <li><b>2026-07-16 (9)</b> — Battles with friends: every pet gets Attack/Defense/Speed/HP combat stats derived from its existing care stats and traits (curiosity/care → Attack, resilience/fit → Defense, fit/vitality → Speed, vitality/health → HP; diabetic/alcoholic take a flat penalty off all three). New <b>Battle</b> item, now first under <b>Play</b>, challenges anyone on your Friends list. Resolves instantly using your live stats plus the friend's most recently broadcast combat snapshot (the Friends beacon now carries 4 extra bytes for this) — a small deterministic turn simulation picks a winner on the spot, no waiting on the other badge. The challenger then broadcasts the result on SHDW (same private <code>GrpData</code> pattern as the beacon) so the friend's badge can register it and toast whenever it next hears it. Battle HP is fully separate from real pet health — computed fresh per fight, discarded after, never touches <code>sick</code> or the lifecycle. Lifetime win/loss counters live on the pet (bumped <code>SAVE_SIZE</code> 90→96 bytes) and show on the result screen and in Health Status.</li>
       <li><b>2026-07-16 (8)</b> — Mesh "Friends" feature: every badge auto-joins a private <b>SHDW</b> channel on boot (same deterministic key-derivation as <code>#bornhack</code>/<code>#test</code>), and broadcasts a small pet-presence beacon on it every 15 minutes while a pet is active. Meeting another SHDW badge for the first time gives a big happiness boost; meeting a known friend again after a few hours gives a smaller one. New <b>Stats &gt; Friends</b> screen lists everyone met so far. Beacon uses a private <code>GrpData</code> type so it never surfaces in the channel-chat UI or companion sync. Friend records persist in their own KV namespace, cap 20, ring-buffer-evicted like the Unicorn Realm.</li>
       <li><b>2026-07-16 (7)</b> — Second permanent-condition track: Drinks. New <b>Drink</b> icon (top row, 4th slot) offers Water/Cola/Beer/Wine/Whiskey, each scaling drunk-gain/drained-relief/weight-gain off a Beer=100% baseline. Unlike weight, <code>drunk</code> passively sobers up over hours — repeated heavy drinking (not one binge) is what sustains it long enough to trigger permanent <b>alcoholism</b>, managed via a new <b>Rehab</b> item under Heal. Drink/Rehab reuse the Feeding/Medicating animations rather than new anim IDs, deliberately avoiding the catalog-bounds class of bug hit earlier. Health Status view now shows Alcoholic alongside Diabetic/Overweight. Debug menu gained Force drunk / Trigger alcoholism / Clear alcoholism cheats, mirroring the diabetes ones.</li>
       <li><b>2026-07-16 (6)</b> — Three fixes/additions: (1) The Exercising/Medicating sprite files existed in the repo but had never actually been copied onto any physical badge's FAT12 storage — copied now, fixing the pet going invisible during Exercise. (2) Fixed a real layout bug: the 6-bar Stats view's last row ("Fit") overlapped the footer text drawn below it, making it look like it had no background — recomputed the bar height/spacing to restore the same proven bottom edge the original 5-bar layout used. (3) Added a "Health status" view under the Stats icon — Diabetic/Overweight/Fit% at a glance with a plain-language explanation of what triggers each.</li>

@@ -164,6 +164,11 @@ pub struct GameState {
     pub leaving_countdown: u32,
     pub generation: u16,
 
+    // Mesh Battle record — lifetime counters, never reset by anything
+    // other than a fresh egg (see `new_egg`/`new_generation`).
+    pub wins: u16,
+    pub losses: u16,
+
     // Action state.
     pub active_action: Option<Action>,
     /// Which food is being eaten during an in-progress `Action::Feed`.
@@ -192,6 +197,10 @@ pub struct GameState {
     /// Doubles as the alcoholism-treatment protection window, mirrors
     /// `cooldown_medicate`.
     pub cooldown_rehab: u16,
+    /// Cooldown between mesh Battles — resolves instantly (no in-progress
+    /// duration), so this is the only battle-related field that behaves
+    /// like the other primary-action cooldowns above.
+    pub cooldown_battle: u16,
     /// Per-mini-game cooldown after winning.  Each game tracks its
     /// own counter so winning one doesn't gate the others.  None of
     /// these are persisted to flash — rebooting clears them.
@@ -286,6 +295,9 @@ impl GameState {
             leaving_countdown: 0,
             generation: 0,
 
+            wins: 0,
+            losses: 0,
+
             active_action: None,
             active_food: None,
             active_drink: None,
@@ -299,6 +311,7 @@ impl GameState {
             cooldown_ozempic: 0,
             cooldown_drink: 0,
             cooldown_rehab: 0,
+            cooldown_battle: 0,
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
@@ -820,6 +833,7 @@ impl GameState {
         self.cooldown_ozempic = self.cooldown_ozempic.saturating_sub(d);
         self.cooldown_drink = self.cooldown_drink.saturating_sub(d);
         self.cooldown_rehab = self.cooldown_rehab.saturating_sub(d);
+        self.cooldown_battle = self.cooldown_battle.saturating_sub(d);
         self.cooldown_tictactoe = self.cooldown_tictactoe.saturating_sub(d);
         self.cooldown_lightsout = self.cooldown_lightsout.saturating_sub(d);
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
@@ -1507,6 +1521,10 @@ pub struct PetStats {
     /// Generation number (0 = first pet).
     pub generation: u16,
 
+    /// Lifetime mesh Battle wins/losses — see `crate::game::battle`.
+    pub wins: u16,
+    pub losses: u16,
+
     /// Currently active action (if any).
     pub active_action: Option<Action>,
     /// Ticks remaining on the active action.
@@ -1537,6 +1555,11 @@ pub struct PetStats {
     pub can_play_maze: bool,
     pub can_play_tripleborn: bool,
     pub can_play_bornjeweled: bool,
+    /// Whether a mesh Battle can be started right now (cooldown-gated,
+    /// same shape as the mini-game `can_play_*` flags above). Does not
+    /// factor in whether any friends exist — the Battle screen handles
+    /// the "no friends yet" empty state itself.
+    pub can_battle: bool,
 
     /// Remaining action cooldowns in ticks (1 tick = 10 s).  0 = ready.
     /// Mirrored from the matching `GameState` fields so the modal can
@@ -1557,6 +1580,7 @@ pub struct PetStats {
     pub cooldown_maze: u16,
     pub cooldown_tripleborn: u16,
     pub cooldown_bornjeweled: u16,
+    pub cooldown_battle: u16,
 
     /// Whether the pet is hibernating (all progression frozen).
     pub hibernating: bool,
@@ -1604,6 +1628,9 @@ impl GameState {
             age_ticks: self.age_ticks,
             generation: self.generation,
 
+            wins: self.wins,
+            losses: self.losses,
+
             active_action: self.active_action,
             action_ticks_remaining: self.action_ticks_remaining,
 
@@ -1628,6 +1655,7 @@ impl GameState {
             can_play_maze: awake_active && action_idle && self.cooldown_maze == 0,
             can_play_tripleborn: awake_active && action_idle && self.cooldown_tripleborn == 0,
             can_play_bornjeweled: awake_active && action_idle && self.cooldown_bornjeweled == 0,
+            can_battle: awake_active && action_idle && self.cooldown_battle == 0,
 
             cooldown_feed: self.cooldown_feed,
             cooldown_heal: self.cooldown_heal,
@@ -1645,6 +1673,7 @@ impl GameState {
             cooldown_maze: self.cooldown_maze,
             cooldown_tripleborn: self.cooldown_tripleborn,
             cooldown_bornjeweled: self.cooldown_bornjeweled,
+            cooldown_battle: self.cooldown_battle,
 
             hibernating: self.hibernating,
             hibernate_hours: self.hibernate_hours(),
@@ -1697,6 +1726,19 @@ impl GameState {
         };
         self.miserable = self.miserable.saturating_sub(amount);
     }
+
+    /// Record the outcome of a mesh Battle — see `crate::game::battle`.
+    /// Purely a lifetime win/loss tally plus the cooldown gate; battle HP
+    /// itself is never persisted or connected to any real stat, so a loss
+    /// here has no effect on the pet's actual health/lifecycle.
+    pub fn record_battle(&mut self, won: bool) {
+        if won {
+            self.wins = self.wins.saturating_add(1);
+        } else {
+            self.losses = self.losses.saturating_add(1);
+        }
+        self.cooldown_battle = BATTLE_COOLDOWN();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1704,7 +1746,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 90;
+pub const SAVE_SIZE: usize = 96;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -1784,7 +1826,11 @@ impl GameState {
         w32!(self.last_save_tick);
         // Pet kind (1 byte).
         w8!(self.pet_kind.0);
-        // Total: 90 bytes.
+        // Battle record + cooldown (6 bytes).
+        w16!(self.wins);
+        w16!(self.losses);
+        w16!(self.cooldown_battle);
+        // Total: 96 bytes.
         b
     }
 
@@ -1874,6 +1920,9 @@ impl GameState {
         let hibernate_ticks = r32!();
         let last_save_tick = r32!();
         let pet_kind = PetKind::from_u8(r8!());
+        let wins = r16!();
+        let losses = r16!();
+        let cooldown_battle = r16!();
 
         Some(Self {
             pet_kind,
@@ -1897,6 +1946,8 @@ impl GameState {
             hatching_countdown,
             leaving_countdown,
             generation,
+            wins,
+            losses,
             active_action,
             // Not persisted — see the field doc on `active_food`.
             active_food: None,
@@ -1911,6 +1962,7 @@ impl GameState {
             cooldown_ozempic,
             cooldown_drink,
             cooldown_rehab,
+            cooldown_battle,
             // Not persisted: rebooting clears all mini-game cooldowns.
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
@@ -2111,7 +2163,7 @@ mod overweight_diabetes_tests {
     use super::*;
 
     /// New fields round-trip through `to_bytes`/`from_bytes` at the new
-    /// 77-byte `SAVE_SIZE`.
+    /// 96-byte `SAVE_SIZE`.
     #[test]
     fn save_round_trip_includes_new_fields() {
         let mut state = GameState::new_egg(42, PetKind::Cat);
@@ -2119,17 +2171,43 @@ mod overweight_diabetes_tests {
         state.diabetic = true;
         state.cooldown_exercise = 12;
         state.cooldown_medicate = 345;
+        state.wins = 3;
+        state.losses = 1;
+        state.cooldown_battle = 77;
 
         let bytes = state.to_bytes();
         assert_eq!(bytes.len(), SAVE_SIZE);
-        assert_eq!(SAVE_SIZE, 90);
+        assert_eq!(SAVE_SIZE, 96);
 
         let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
         assert_eq!(restored.weight, 41000);
         assert!(restored.diabetic);
         assert_eq!(restored.cooldown_exercise, 12);
         assert_eq!(restored.cooldown_medicate, 345);
+        assert_eq!(restored.wins, 3);
+        assert_eq!(restored.losses, 1);
+        assert_eq!(restored.cooldown_battle, 77);
         assert_eq!(restored.pet_kind.id(), PetKind::Cat.id());
+    }
+
+    /// `record_battle` bumps the right counter and always sets the
+    /// cooldown, regardless of win/loss.
+    #[test]
+    fn record_battle_updates_counters_and_cooldown() {
+        let mut state = GameState::new_egg(1, PetKind::Bartholomeus);
+        assert_eq!(state.wins, 0);
+        assert_eq!(state.losses, 0);
+
+        state.record_battle(true);
+        assert_eq!(state.wins, 1);
+        assert_eq!(state.losses, 0);
+        assert_eq!(state.cooldown_battle, BATTLE_COOLDOWN());
+
+        state.cooldown_battle = 0;
+        state.record_battle(false);
+        assert_eq!(state.wins, 1);
+        assert_eq!(state.losses, 1);
+        assert_eq!(state.cooldown_battle, BATTLE_COOLDOWN());
     }
 
     /// Sustained overweight for `DIABETES_ONSET_TICKS()` flips `diabetic`

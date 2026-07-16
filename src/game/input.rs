@@ -35,13 +35,15 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
-    // ── Friends view: Up/Down scrolls, any other button closes it ───────
+    // ── Friends view: owns its own input logic across its two states ────
     if super::friends_view::is_active() {
-        match btn {
-            ButtonId::Up => super::friends_view::scroll_up(),
-            ButtonId::Down => super::friends_view::scroll_down(),
-            _ => super::friends_view::close(),
-        }
+        super::friends_view::handle_input(btn);
+        return true;
+    }
+
+    // ── Battle screen: owns its own input logic across its two states ───
+    if super::battle_view::is_active() {
+        super::battle_view::handle_input(btn);
         return true;
     }
 

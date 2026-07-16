@@ -1,0 +1,427 @@
+//! Mesh Battles — pets fighting over the private SHDW channel.
+//!
+//! Each pet's Attack/Defense/Speed/HP are derived from its existing care
+//! stats and traits (see [`derive_combat_stats`]). Battling a friend is
+//! **instant, using cached stats**: the challenger simulates the entire
+//! fight locally, right away, using its own live stats plus the friend's
+//! most recently broadcast combat snapshot (cached in
+//! `crate::game::friends::FriendRecord`) — no waiting for the other
+//! badge to be in range or respond.
+//!
+//! After resolving, the challenger broadcasts a small [`BattleResultMsg`]
+//! on the SHDW channel (same `GrpData` broadcast + device-id filtering
+//! pattern `friends::PetBeacon` already uses) so the friend's badge can
+//! independently learn the outcome and update its own win/loss tally
+//! whenever it next receives it — see [`on_battle_result`].
+//!
+//! Battle HP exists only for the duration of one `simulate()` call: it is
+//! never persisted and never touches the pet's real `sick`/lifecycle
+//! stats, so losing a battle cannot harm the pet.
+
+use super::engine::PetStats;
+use super::friends::FriendRecord;
+
+// ---------------------------------------------------------------------------
+// Combat stats — derived from existing care stats + traits
+// ---------------------------------------------------------------------------
+
+/// Derived combat attributes. Tunable numbers, but concrete and
+/// self-contained — a pure function of a `PetStats` snapshot plus the
+/// trait percentages `lifecycle::pet_traits()` already exposes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CombatStats {
+    pub attack: u8,
+    pub defense: u8,
+    pub speed: u8,
+    pub max_hp: u8,
+}
+
+/// Flat combat-stat penalty per permanent condition (diabetic/alcoholic)
+/// — the ongoing health toll shows up in the arena too, not just as
+/// faster `sick` decay.
+const CONDITION_PENALTY: u16 = 10;
+
+/// Derive Attack/Defense/Speed/HP from a stats snapshot and the pet's
+/// (percentage, 0-100, higher=better) traits.
+///
+/// - `attack`  — curiosity-driven, plus a bonus for being well cared for.
+/// - `defense` — resilience-driven, plus a bonus for being lean/fit.
+/// - `speed`   — fitness-driven (lighter pet = faster), plus vitality.
+/// - `max_hp`  — vitality-driven, scaled down by how sick the pet is.
+pub fn derive_combat_stats(
+    stats: &PetStats,
+    vitality_pct: u8,
+    curiosity_pct: u8,
+    resilience_pct: u8,
+) -> CombatStats {
+    let care_pct = (stats.hunger as u16
+        + stats.tired as u16
+        + stats.inspired as u16
+        + stats.healthy as u16
+        + stats.happy as u16)
+        / 5;
+    let fit_pct = stats.weight as u16;
+
+    let mut attack = 20u16 + (curiosity_pct as u16 * 5 / 10) + (care_pct * 3 / 10);
+    let mut defense = 20u16 + (resilience_pct as u16 * 5 / 10) + (fit_pct * 3 / 10);
+    let mut speed = 20u16 + (fit_pct * 6 / 10) + (vitality_pct as u16 * 2 / 10);
+    let max_hp = (50u16 + vitality_pct as u16) * stats.healthy as u16 / 100;
+
+    let penalty = (stats.diabetic as u16 + stats.alcoholic as u16) * CONDITION_PENALTY;
+    attack = attack.saturating_sub(penalty);
+    defense = defense.saturating_sub(penalty);
+    speed = speed.saturating_sub(penalty);
+
+    CombatStats {
+        attack: attack.clamp(1, 100) as u8,
+        defense: defense.clamp(1, 100) as u8,
+        speed: speed.clamp(1, 100) as u8,
+        max_hp: max_hp.clamp(20, 150) as u8,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Battle simulation — deterministic, run once by the challenger only
+// ---------------------------------------------------------------------------
+
+/// Hard cap on rounds, purely a termination guarantee — whoever has more
+/// remaining HP% when the cap hits wins.
+const MAX_ROUNDS: u8 = 20;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BattleOutcome {
+    pub challenger_won: bool,
+    pub challenger_hp_pct: u8,
+    pub target_hp_pct: u8,
+    pub rounds: u8,
+}
+
+/// Tiny xorshift32 step — deterministic, no external RNG crate needed.
+fn next_rng(state: &mut u32) -> u32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    x
+}
+
+/// Damage = attacker's Attack minus roughly half the defender's Defense
+/// (floored at 1), with 80-120% seeded variance so identical stats don't
+/// produce a totally flat, predictable fight.
+fn damage(attacker: CombatStats, defender: CombatStats, rng: &mut u32) -> i32 {
+    let base = (attacker.attack as i32 - defender.defense as i32 / 2).max(1);
+    let variance = 80 + (next_rng(rng) % 41) as i32; // 80..=120
+    (base * variance / 100).max(1)
+}
+
+/// Simulate a full battle in one shot: both combatants act every round,
+/// faster (higher Speed) one first, until either HP hits 0 or the round
+/// cap is reached. Deterministic given the same `seed` + stats — only
+/// the challenger ever calls this (see module docs); the target does not
+/// need to re-simulate or agree with the outcome.
+pub fn simulate(seed: u32, challenger: CombatStats, target: CombatStats) -> BattleOutcome {
+    let mut rng = seed | 1; // never let the generator get stuck on 0
+    let max_a = challenger.max_hp as i32;
+    let max_b = target.max_hp as i32;
+    let mut hp_a = max_a;
+    let mut hp_b = max_b;
+    let mut rounds = 0u8;
+
+    while hp_a > 0 && hp_b > 0 && rounds < MAX_ROUNDS {
+        rounds += 1;
+        if challenger.speed >= target.speed {
+            hp_b = (hp_b - damage(challenger, target, &mut rng)).max(0);
+            if hp_b > 0 {
+                hp_a = (hp_a - damage(target, challenger, &mut rng)).max(0);
+            }
+        } else {
+            hp_a = (hp_a - damage(target, challenger, &mut rng)).max(0);
+            if hp_a > 0 {
+                hp_b = (hp_b - damage(challenger, target, &mut rng)).max(0);
+            }
+        }
+    }
+
+    let challenger_hp_pct = (hp_a * 100 / max_a.max(1)) as u8;
+    let target_hp_pct = (hp_b * 100 / max_b.max(1)) as u8;
+    let challenger_won = match (hp_a > 0, hp_b > 0) {
+        (true, false) => true,
+        (false, true) => false,
+        // Round cap reached (or a simultaneous knockout) — more remaining
+        // HP% wins.
+        _ => challenger_hp_pct >= target_hp_pct,
+    };
+
+    BattleOutcome {
+        challenger_won,
+        challenger_hp_pct,
+        target_hp_pct,
+        rounds,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wire result — broadcast on SHDW after the challenger resolves locally
+// ---------------------------------------------------------------------------
+
+/// Private `GrpData` `data_type` marking a Battle result — distinct from
+/// `friends::PET_BEACON_TYPE`.
+pub const PET_BATTLE_TYPE: u16 = 0xBA71;
+
+pub struct BattleResultMsg {
+    pub challenger_id: [u8; 2],
+    pub target_id: [u8; 2],
+    pub challenger_won: bool,
+    pub challenger_hp_pct: u8,
+    pub target_hp_pct: u8,
+}
+
+const RESULT_SIZE: usize = 7; // 2 + 2 + 1 + 1 + 1
+
+impl BattleResultMsg {
+    pub fn to_bytes(&self) -> [u8; RESULT_SIZE] {
+        let mut buf = [0u8; RESULT_SIZE];
+        buf[0..2].copy_from_slice(&self.challenger_id);
+        buf[2..4].copy_from_slice(&self.target_id);
+        buf[4] = self.challenger_won as u8;
+        buf[5] = self.challenger_hp_pct;
+        buf[6] = self.target_hp_pct;
+        buf
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> Option<Self> {
+        if buf.len() < RESULT_SIZE {
+            return None;
+        }
+        Some(Self {
+            challenger_id: [buf[0], buf[1]],
+            target_id: [buf[2], buf[3]],
+            challenger_won: buf[4] != 0,
+            challenger_hp_pct: buf[5],
+            target_hp_pct: buf[6],
+        })
+    }
+}
+
+/// Broadcast a `BattleResultMsg` on the SHDW channel. No-op under builds
+/// without the `mesh` feature (e.g. the plain host `simulator` build,
+/// which still enables `game`) — mirrors `friends::local_device_id`'s
+/// embassy-base/not split.
+#[cfg(feature = "mesh")]
+fn broadcast_result(msg: &BattleResultMsg) {
+    let mut data: heapless::Vec<u8, { crate::fw::mesh::MAX_CHANNEL_DATA }> = heapless::Vec::new();
+    let _ = data.extend_from_slice(&msg.to_bytes());
+    let _ = crate::fw::mesh::tx_send(crate::fw::mesh::TxRequest::ChannelData(
+        crate::fw::mesh::TxChannelData {
+            channel_idx: crate::fw::mesh::channels::SHDW_SLOT,
+            data_type: PET_BATTLE_TYPE,
+            path_len: crate::fw::mesh::contacts::OUT_PATH_UNKNOWN,
+            path: heapless::Vec::new(),
+            data,
+        },
+    ));
+}
+
+#[cfg(not(feature = "mesh"))]
+fn broadcast_result(_msg: &BattleResultMsg) {}
+
+// ---------------------------------------------------------------------------
+// Challenge — entry point called from `battle_view` on Fire
+// ---------------------------------------------------------------------------
+
+/// Challenge `friend` right now: derive our live combat stats, simulate
+/// against the friend's cached snapshot, record the result on our own
+/// pet (both the overall tally and the head-to-head record against this
+/// friend), and broadcast it so the friend's badge can sync its own side
+/// of the same head-to-head tally.
+///
+/// Returns `None` if no pet is currently active.
+pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
+    let my_stats = super::lifecycle::combat_stats()?;
+    let their_stats = CombatStats {
+        attack: friend.attack,
+        defense: friend.defense,
+        speed: friend.speed,
+        max_hp: friend.max_hp,
+    };
+
+    let seed = super::lifecycle::now_tick()
+        ^ ((friend.device_id[0] as u32) << 8)
+        ^ (friend.device_id[1] as u32);
+    let outcome = simulate(seed, my_stats, their_stats);
+
+    super::lifecycle::record_battle(outcome.challenger_won);
+    super::friends::record_battle_vs(friend.device_id, outcome.challenger_won);
+
+    broadcast_result(&BattleResultMsg {
+        challenger_id: super::friends::local_device_id(),
+        target_id: friend.device_id,
+        challenger_won: outcome.challenger_won,
+        challenger_hp_pct: outcome.challenger_hp_pct,
+        target_hp_pct: outcome.target_hp_pct,
+    });
+
+    Some(outcome)
+}
+
+// ---------------------------------------------------------------------------
+// Receive handler — fires on the *target's* badge
+// ---------------------------------------------------------------------------
+
+/// Handle a `BattleResultMsg` received on the SHDW channel.
+///
+/// Called from `fw::mesh::meshcore::push_grp_data` when a `GrpData`
+/// packet on the SHDW slot carries `data_type == PET_BATTLE_TYPE`. Only
+/// acts if we are the named target — otherwise it's someone else's
+/// battle and is ignored, same broadcast-filtering idea as
+/// `friends::on_pet_beacon` ignoring its own echo.
+pub async fn on_battle_result(data: &[u8]) {
+    let Some(msg) = BattleResultMsg::from_bytes(data) else {
+        return;
+    };
+
+    if msg.target_id != super::friends::local_device_id() {
+        return;
+    }
+
+    // From our side, the challenger's result is inverted: their win is
+    // our loss. Update both the overall tally and our head-to-head
+    // record against the challenger specifically, so it reads the same
+    // from either badge — a no-op on the head-to-head side if we've
+    // never received a beacon from this challenger (not yet a known
+    // friend on our side, even though we were just battled).
+    let we_won = !msg.challenger_won;
+    super::lifecycle::record_battle(we_won);
+    super::friends::record_battle_vs(msg.challenger_id, we_won);
+    super::show_toast(if we_won {
+        super::Toast::BattleWon
+    } else {
+        super::Toast::BattleLost
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_stats() -> PetStats {
+        // A cheap way to get a valid PetStats without going through the
+        // full lifecycle module: build a fresh egg, mark it Active, and
+        // snapshot it directly.
+        use crate::game::engine::{GameState, PetKind, Phase};
+        let mut state = GameState::new_egg(1, PetKind::Cat);
+        state.phase = Phase::Active;
+        state.stats(0)
+    }
+
+    #[test]
+    fn derive_combat_stats_stays_in_bounds() {
+        let stats = base_stats();
+        let combat = derive_combat_stats(&stats, 0, 0, 0);
+        assert!(combat.attack >= 1 && combat.attack <= 100);
+        assert!(combat.defense >= 1 && combat.defense <= 100);
+        assert!(combat.speed >= 1 && combat.speed <= 100);
+        assert!(combat.max_hp >= 20 && combat.max_hp <= 150);
+
+        let combat_max = derive_combat_stats(&stats, 100, 100, 100);
+        assert!(combat_max.attack <= 100);
+        assert!(combat_max.defense <= 100);
+        assert!(combat_max.speed <= 100);
+        assert!(combat_max.max_hp <= 150);
+    }
+
+    #[test]
+    fn permanent_conditions_reduce_combat_stats() {
+        let mut stats = base_stats();
+        let healthy = derive_combat_stats(&stats, 50, 50, 50);
+
+        stats.diabetic = true;
+        stats.alcoholic = true;
+        let sick = derive_combat_stats(&stats, 50, 50, 50);
+
+        assert!(sick.attack < healthy.attack);
+        assert!(sick.defense < healthy.defense);
+        assert!(sick.speed < healthy.speed);
+    }
+
+    #[test]
+    fn simulate_is_deterministic() {
+        let a = CombatStats {
+            attack: 40,
+            defense: 30,
+            speed: 25,
+            max_hp: 100,
+        };
+        let b = CombatStats {
+            attack: 35,
+            defense: 35,
+            speed: 20,
+            max_hp: 90,
+        };
+        let outcome1 = simulate(12345, a, b);
+        let outcome2 = simulate(12345, a, b);
+        assert_eq!(outcome1, outcome2);
+    }
+
+    #[test]
+    fn simulate_always_terminates_with_a_winner() {
+        let a = CombatStats {
+            attack: 50,
+            defense: 10,
+            speed: 30,
+            max_hp: 100,
+        };
+        let b = CombatStats {
+            attack: 10,
+            defense: 50,
+            speed: 10,
+            max_hp: 100,
+        };
+        let outcome = simulate(999, a, b);
+        assert!(outcome.rounds <= MAX_ROUNDS);
+        // A big attack/defense mismatch should decide it well before the
+        // round cap — not a hard guarantee, but a useful smoke check that
+        // damage is actually being applied.
+        assert!(outcome.rounds < MAX_ROUNDS);
+    }
+
+    #[test]
+    fn evenly_matched_stats_can_hit_the_round_cap_and_still_pick_a_winner() {
+        let a = CombatStats {
+            attack: 20,
+            defense: 20,
+            speed: 20,
+            max_hp: 150,
+        };
+        let b = CombatStats {
+            attack: 20,
+            defense: 20,
+            speed: 20,
+            max_hp: 150,
+        };
+        let outcome = simulate(1, a, b);
+        // Whichever way it resolves, exactly one side should be reported
+        // as the winner and the round count must respect the cap.
+        assert!(outcome.rounds <= MAX_ROUNDS);
+        let _ = outcome.challenger_won; // just needs to not panic/underflow
+    }
+
+    #[test]
+    fn battle_result_msg_round_trips() {
+        let msg = BattleResultMsg {
+            challenger_id: [0x11, 0x22],
+            target_id: [0x33, 0x44],
+            challenger_won: true,
+            challenger_hp_pct: 80,
+            target_hp_pct: 0,
+        };
+        let bytes = msg.to_bytes();
+        let restored = BattleResultMsg::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.challenger_id, [0x11, 0x22]);
+        assert_eq!(restored.target_id, [0x33, 0x44]);
+        assert!(restored.challenger_won);
+        assert_eq!(restored.challenger_hp_pct, 80);
+        assert_eq!(restored.target_hp_pct, 0);
+    }
+}

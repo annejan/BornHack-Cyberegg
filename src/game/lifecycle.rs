@@ -680,6 +680,31 @@ pub fn pet_traits() -> Option<(u16, u16, u16)> {
     state.map(|s| (s.vitality, s.curiosity, s.resilience))
 }
 
+/// Derive the current pet's mesh-Battle combat stats (Attack/Defense/
+/// Speed/HP) from its live `PetStats` snapshot plus traits. Used both by
+/// the beacon ticker (to fill the outgoing `PetBeacon`) and by
+/// `battle::challenge` (to compute the challenger's live stats).
+/// `None` if no pet is active.
+pub fn combat_stats() -> Option<super::battle::CombatStats> {
+    let stats = cycle()?;
+    let (vitality, curiosity, resilience) = pet_traits()?;
+    let pct = |v: u16| (v as u32 * 100 / 65535) as u8;
+    Some(super::battle::derive_combat_stats(
+        &stats,
+        pct(vitality),
+        pct(curiosity),
+        pct(resilience),
+    ))
+}
+
+/// Apply the outcome of a mesh Battle to the current pet's lifetime
+/// win/loss tally and cooldown. No-op if no game is active.
+pub fn record_battle(won: bool) {
+    if let Some(state) = unsafe { (*GAME.get()).as_mut() } {
+        state.record_battle(won);
+    }
+}
+
 /// Get the current generation (defaults to 0 if no game).
 pub fn pet_generation() -> u16 {
     let state = unsafe { (*GAME.get()).as_ref() };

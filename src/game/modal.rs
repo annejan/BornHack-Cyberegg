@@ -133,6 +133,7 @@ impl ModalKind {
                 Item::Cancel,
             ],
             Self::Play => &[
+                Item::Battle,
                 Item::PlayNow,
                 Item::PlayMusic,
                 Item::TicTacToe,
@@ -175,6 +176,7 @@ enum Item {
     RolledStats,
     HealthStatus,
     Friends,
+    Battle,
     FeedFood(super::engine::FoodKind),
     GiveMedicine,
     GiveMedication,
@@ -215,6 +217,7 @@ impl Item {
             Self::RolledStats => "Rolled stats",
             Self::HealthStatus => "Health status",
             Self::Friends => "Friends",
+            Self::Battle => "Battle",
             Self::FeedFood(food) => food.label(),
             Self::GiveMedicine => "Give medicine",
             Self::GiveMedication => "Insulin",
@@ -288,6 +291,7 @@ impl Item {
             | Self::CheatClearAlcoholism => true,
             Self::DrinkChoice(_) => stats.can_drink,
             Self::Rehab => stats.can_rehab,
+            Self::Battle => stats.can_battle,
             Self::FeedFood(_) => stats.can_feed,
             Self::GiveMedicine => stats.can_heal,
             Self::GiveMedication => stats.can_medicate,
@@ -331,6 +335,7 @@ impl Item {
             Self::DrinkChoice(_) => action_remaining(Action::Drink).max(stats.cooldown_drink),
             Self::Rehab => action_remaining(Action::Rehab).max(stats.cooldown_rehab),
             Self::ExerciseNow => action_remaining(Action::Exercise).max(stats.cooldown_exercise),
+            Self::Battle => stats.cooldown_battle,
             Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
             Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
             Self::TicTacToe => stats.cooldown_tictactoe,
@@ -359,6 +364,10 @@ impl Item {
             }
             Self::Friends => {
                 super::friends_view::open();
+                close();
+            }
+            Self::Battle => {
+                super::battle_view::open();
                 close();
             }
             Self::FeedFood(food) => {

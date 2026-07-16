@@ -104,5 +104,20 @@ where
     )
     .draw(display)?;
 
+    // Lifetime mesh Battle record — see `game::battle`. Plenty of
+    // vertical room left below the footnote (screen is 152px tall).
+    let mut record: heapless::String<24> = heapless::String::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut record,
+        format_args!("Battles: {}W-{}L", stats.wins, stats.losses),
+    );
+    Text::with_text_style(
+        record.as_str(),
+        Point::new(ROW_X, note_y + 16),
+        TEXT_BOLD_BLACK,
+        left,
+    )
+    .draw(display)?;
+
     Ok(())
 }

@@ -606,7 +606,7 @@ fn total_thread_lines(pub_key: &[u8; 32]) -> usize {
     })
 }
 
-use super::text_wrap::word_wrap;
+use crate::text_wrap::word_wrap;
 
 /// Wrap the shared relative-time formatter in a thread-local helper —
 /// the thread renderer wants a `String<8>` to push into a header slot.

@@ -133,6 +133,7 @@ pub mod qr_screen;
 #[cfg(feature = "signed-channel")]
 pub mod signed_channel;
 pub mod text_entry;
+pub mod text_wrap;
 pub mod token;
 pub mod ui;
 #[cfg(feature = "watch")]
@@ -712,6 +713,12 @@ where
     #[cfg(feature = "game")]
     if game::friends_view::is_active() {
         return game::friends_view::draw(display);
+    }
+
+    // Battle: full-screen friend picker + result report.
+    #[cfg(feature = "game")]
+    if game::battle_view::is_active() {
+        return game::battle_view::draw(display);
     }
 
     let active = with_display_state!(|state| state.active_screen());

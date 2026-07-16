@@ -1,19 +1,24 @@
-//! Word-aware line breaker shared by the on-device chat surfaces.
+//! Word-aware line breaker shared across the on-device text surfaces.
 //!
-//! Both [`pm_inbox`] (per-peer DM threads) and [`channel_browser`]
-//! (group-channel messages) need to lay out wrapped text on the
-//! 152-px-wide tri-color e-paper.  Before this module the two
-//! surfaces had divergent implementations: PM had a polished
-//! word-wrap with newline / leading-whitespace handling; channels
-//! sliced the byte buffer at fixed `chars_per_line` boundaries and
-//! rendered embedded `\n` as junk glyphs (no `FONT_7X13` codepoint).
+//! [`fw::mesh::pm_inbox`] (per-peer DM threads) and
+//! [`fw::mesh::channel_browser`] (group-channel messages) need to lay
+//! out wrapped text on the 152-px-wide tri-color e-paper; the game's
+//! Friends screen (`game::friends_view`) does too, for friend names
+//! that don't fit one line. Before this module the two mesh surfaces
+//! had divergent implementations: PM had a polished word-wrap with
+//! newline / leading-whitespace handling; channels sliced the byte
+//! buffer at fixed `chars_per_line` boundaries and rendered embedded
+//! `\n` as junk glyphs (no `FONT_7X13` codepoint).
+//!
+//! Lives at the crate root (not under `fw::mesh`) so it's usable from
+//! `game`-only builds that don't enable the `mesh` feature at all.
 //!
 //! This file exposes one free function — no generics, no display
 //! target, no closures — so the abstraction is flash-neutral
 //! (calling it from N sites instantiates one body, not N).
 //!
-//! [`pm_inbox`]: super::pm_inbox
-//! [`channel_browser`]: super::channel_browser
+//! [`fw::mesh::pm_inbox`]: crate::fw::mesh::pm_inbox
+//! [`fw::mesh::channel_browser`]: crate::fw::mesh::channel_browser
 
 /// Word-aware line breaker — walks `bytes` and produces a list of
 /// `(start, end)` byte ranges, each yielding ≤ `max_chars` printable
