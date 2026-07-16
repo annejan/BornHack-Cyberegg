@@ -198,13 +198,16 @@ another SHDW badge is in LoRa range and its beacon comes in, your pet
   time apart before it counts as quality time again)
 
 Check who your pet has met via **Stats > Friends** — a scrollable,
-clickable menu of every friend seen so far. Use **Up/Down** to move the
-cursor and **Fire** on a friend to see their details: kind, how long
-you've known them, their cached combat stats, and your head-to-head
-Battle record against them specifically (see [Battles](#battles)
-below). Any button on the detail screen goes back to the list; any
-button on the list itself (other than Up/Down/Fire) closes the whole
-screen. Long names wrap onto a second line instead of running off the
+clickable menu of every friend seen so far, ordered with whoever you've
+**seen most recently at the top** (a friend jumps back to the top of
+the list the moment a fresh beacon from them comes in). Use **Up/Down**
+to move the cursor and **Fire** on a friend to see their details: kind,
+how long you've known them, how long since their last beacon ("Last
+seen"), their cached combat stats, and your head-to-head Battle record
+against them specifically (see [Battles](#battles) below). Any button
+on the detail screen goes back to the list; any button on the list
+itself (other than Up/Down/Fire) closes the whole screen. Long names
+wrap onto a second line instead of running off the
 edge of the screen.
 
 This only works between two physical badges, both running this firmware

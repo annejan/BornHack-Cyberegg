@@ -5,13 +5,17 @@
 //! - **List**: a cursor-based menu, one row per friend, word-wrapped so
 //!   long names/kind combos never overflow the 152px width (the old
 //!   single-line "name (kind) - since" layout could run off-screen).
-//!   Up/Down moves the cursor, Fire opens the detail screen for the
-//!   highlighted friend, Cancel/any other button closes the whole
-//!   screen.
+//!   Ordered most-recently-*seen*-first — `friends::FriendsList` moves a
+//!   friend to the front every time a fresh beacon comes in (see
+//!   `friends::on_pet_beacon`), so index 0 here is always whoever you
+//!   last heard from. Up/Down moves the cursor, Fire opens the detail
+//!   screen for the highlighted friend, Cancel/any other button closes
+//!   the whole screen.
 //! - **Detail**: full stats for one friend — kind, how long you've known
-//!   them, their cached combat-stat snapshot, and your head-to-head
-//!   Battle record against them. That record is kept in sync between
-//!   both badges — see `battle::challenge` (challenger's side) and
+//!   them, how long since their last beacon, their cached combat-stat
+//!   snapshot, and your head-to-head Battle record against them. That
+//!   record is kept in sync between both badges — see
+//!   `battle::challenge` (challenger's side) and
 //!   `battle::on_battle_result` (target's side), which both update
 //!   `friends::record_battle_vs` for the same pair of device IDs. Any
 //!   button returns to the list.
@@ -233,7 +237,7 @@ where
     let label = friend_label(friend.name_str(), kind_name);
 
     let mut y = draw_wrapped(display, label.as_str(), 6, 22, TEXT_BOLD_BLACK)?;
-    y += 4;
+    y += 2;
 
     let now = super::lifecycle::now_tick();
     let mut met: heapless::String<24> = heapless::String::new();
@@ -245,7 +249,18 @@ where
         ),
     );
     Text::with_text_style(met.as_str(), Point::new(6, y), TEXT_BLACK, left).draw(display)?;
-    y += 16;
+    y += 13;
+
+    let mut seen: heapless::String<24> = heapless::String::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut seen,
+        format_args!(
+            "Last seen {} ago",
+            since_str(now.saturating_sub(friend.last_seen_tick))
+        ),
+    );
+    Text::with_text_style(seen.as_str(), Point::new(6, y), TEXT_BLACK, left).draw(display)?;
+    y += 13 + 2;
 
     // Cached combat-stat snapshot — see `battle::CombatStats`. Attack/
     // Defense/Speed are already 1-100; HP (20-150) is normalized to the
@@ -271,29 +286,26 @@ where
             Size::new(106, BAR_H),
             BLACK,
         )?;
-        y += 16;
+        y += 14;
     }
-    y += 2;
 
+    // Bottom row: Battle record (left) + close hint (right), sharing one
+    // line like the list screen's indicator+hint row — keeps this screen
+    // from needing yet another line of vertical space.
     let mut record: heapless::String<24> = heapless::String::new();
     let _ = core::fmt::Write::write_fmt(
         &mut record,
         format_args!("Battles: {}W-{}L", friend.wins, friend.losses),
     );
-    Text::with_text_style(record.as_str(), Point::new(6, y), TEXT_BOLD_BLACK, left)
+    let bottom_left = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    Text::with_text_style(record.as_str(), Point::new(6, 150), TEXT_BOLD_BLACK, bottom_left)
         .draw(display)?;
 
-    let hint = TextStyleBuilder::new()
+    let bottom_right = TextStyleBuilder::new()
         .baseline(Baseline::Bottom)
-        .alignment(Alignment::Center)
+        .alignment(Alignment::Right)
         .build();
-    Text::with_text_style(
-        "Any button to go back",
-        Point::new(76, 150),
-        TEXT_BLACK,
-        hint,
-    )
-    .draw(display)?;
+    Text::with_text_style("Back", Point::new(148, 150), TEXT_BLACK, bottom_right).draw(display)?;
 
     Ok(())
 }

@@ -88,7 +88,7 @@ impl PetBeacon {
 pub const FRIEND_BOOST_COOLDOWN_TICKS: u32 = 360 * 4;
 
 pub const FRIENDS_MAX: usize = 20;
-const FRIEND_RECORD_SIZE: usize = 32; // 2 + 1 + 12 + 1 + 4 + 4 + 4 + 2 + 2
+const FRIEND_RECORD_SIZE: usize = 36; // 2 + 1 + 12 + 1 + 4 + 4 + 4 + 4 + 2 + 2
 pub const FRIENDS_SAVE_SIZE: usize = 1 + FRIENDS_MAX * FRIEND_RECORD_SIZE;
 
 #[derive(Clone, Copy)]
@@ -99,6 +99,12 @@ pub struct FriendRecord {
     pub name_len: u8,
     pub first_seen_tick: u32,
     pub last_boost_tick: u32,
+    /// Tick of the most recent beacon received from this friend,
+    /// regardless of whether it also triggered a happiness boost —
+    /// unlike `last_boost_tick`, this updates on every sighting. Drives
+    /// the "Last seen" line on the detail screen and the most-recently-
+    /// seen-first ordering of the list.
+    pub last_seen_tick: u32,
     /// Cached combat-stat snapshot from this friend's most recent beacon —
     /// see `crate::game::battle::CombatStats`. Used to battle them without
     /// needing their badge in range at that exact moment.
@@ -123,6 +129,7 @@ impl FriendRecord {
         name_len: 0,
         first_seen_tick: 0,
         last_boost_tick: 0,
+        last_seen_tick: 0,
         attack: 0,
         defense: 0,
         speed: 0,
@@ -138,12 +145,13 @@ impl FriendRecord {
         buf[15] = self.name_len;
         buf[16..20].copy_from_slice(&self.first_seen_tick.to_le_bytes());
         buf[20..24].copy_from_slice(&self.last_boost_tick.to_le_bytes());
-        buf[24] = self.attack;
-        buf[25] = self.defense;
-        buf[26] = self.speed;
-        buf[27] = self.max_hp;
-        buf[28..30].copy_from_slice(&self.wins.to_le_bytes());
-        buf[30..32].copy_from_slice(&self.losses.to_le_bytes());
+        buf[24..28].copy_from_slice(&self.last_seen_tick.to_le_bytes());
+        buf[28] = self.attack;
+        buf[29] = self.defense;
+        buf[30] = self.speed;
+        buf[31] = self.max_hp;
+        buf[32..34].copy_from_slice(&self.wins.to_le_bytes());
+        buf[34..36].copy_from_slice(&self.losses.to_le_bytes());
     }
 
     fn from_bytes(buf: &[u8]) -> Self {
@@ -156,12 +164,13 @@ impl FriendRecord {
             name_len: buf[15],
             first_seen_tick: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
             last_boost_tick: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
-            attack: buf[24],
-            defense: buf[25],
-            speed: buf[26],
-            max_hp: buf[27],
-            wins: u16::from_le_bytes([buf[28], buf[29]]),
-            losses: u16::from_le_bytes([buf[30], buf[31]]),
+            last_seen_tick: u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]),
+            attack: buf[28],
+            defense: buf[29],
+            speed: buf[30],
+            max_hp: buf[31],
+            wins: u16::from_le_bytes([buf[32], buf[33]]),
+            losses: u16::from_le_bytes([buf[34], buf[35]]),
         }
     }
 
@@ -198,6 +207,26 @@ impl FriendsList {
         self.friends[..self.count as usize]
             .iter_mut()
             .find(|f| f.device_id == device_id)
+    }
+
+    fn find_index(&self, device_id: [u8; 2]) -> Option<usize> {
+        self.friends[..self.count as usize]
+            .iter()
+            .position(|f| f.device_id == device_id)
+    }
+
+    /// Move the entry at `index` to the front, shifting everything
+    /// between it and the front down by one. Used to keep the list
+    /// ordered most-recently-seen-first as beacons come in.
+    fn move_to_front(&mut self, index: usize) {
+        if index == 0 {
+            return;
+        }
+        let rec = self.friends[index];
+        for i in (1..=index).rev() {
+            self.friends[i] = self.friends[i - 1];
+        }
+        self.friends[0] = rec;
     }
 
     /// Add a newly-met friend, newest first, dropping the oldest if full.
@@ -299,7 +328,8 @@ pub fn count() -> u8 {
     unsafe { (*FRIENDS.get()).count }
 }
 
-/// Get a known friend by index (0 = most recently met/reunited).
+/// Get a known friend by index (0 = most recently *seen* — the list is
+/// kept ordered by `last_seen_tick`, newest first, via `move_to_front`).
 pub fn get(index: usize) -> Option<FriendRecord> {
     let list = unsafe { &*FRIENDS.get() };
     if index < list.count as usize {
@@ -351,7 +381,9 @@ pub(super) fn local_device_id() -> [u8; 2] {
 }
 
 /// Handle a `PetBeacon` received on the SHDW channel: record the friend
-/// (new or already known) and apply the matching happiness boost.
+/// (new or already known), refresh `last_seen_tick`, move them to the
+/// front of the list (most-recently-seen first), and apply the matching
+/// happiness boost.
 ///
 /// Called from `fw::mesh::meshcore::push_grp_data` when a `GrpData`
 /// packet on the SHDW slot carries `data_type == PET_BEACON_TYPE`.
@@ -369,8 +401,9 @@ pub async fn on_pet_beacon(data: &[u8]) {
     let now = super::lifecycle::now_tick();
     let list = unsafe { &mut *FRIENDS.get() };
 
-    let big_boost = match list.find_mut(beacon.device_id) {
-        Some(friend) => {
+    let big_boost = match list.find_index(beacon.device_id) {
+        Some(idx) => {
+            let friend = &mut list.friends[idx];
             friend.name = beacon.name;
             friend.name_len = beacon.name_len;
             friend.pet_kind = beacon.pet_kind;
@@ -378,14 +411,20 @@ pub async fn on_pet_beacon(data: &[u8]) {
             friend.defense = beacon.defense;
             friend.speed = beacon.speed;
             friend.max_hp = beacon.max_hp;
-            if now.saturating_sub(friend.last_boost_tick) < FRIEND_BOOST_COOLDOWN_TICKS {
+            friend.last_seen_tick = now;
+            let boost = if now.saturating_sub(friend.last_boost_tick) < FRIEND_BOOST_COOLDOWN_TICKS
+            {
                 None // seen too recently — no boost, just refreshed the record above
             } else {
                 friend.last_boost_tick = now;
                 Some(false)
-            }
+            };
+            list.move_to_front(idx);
+            boost
         }
         None => {
+            // `push` already inserts at the front, so a brand-new friend
+            // needs no separate move.
             list.push(FriendRecord {
                 device_id: beacon.device_id,
                 pet_kind: beacon.pet_kind,
@@ -393,6 +432,7 @@ pub async fn on_pet_beacon(data: &[u8]) {
                 name_len: beacon.name_len,
                 first_seen_tick: now,
                 last_boost_tick: now,
+                last_seen_tick: now,
                 attack: beacon.attack,
                 defense: beacon.defense,
                 speed: beacon.speed,
@@ -442,6 +482,7 @@ mod tests {
             name_len: 0,
             first_seen_tick,
             last_boost_tick,
+            last_seen_tick: last_boost_tick,
             attack: 0,
             defense: 0,
             speed: 0,
@@ -478,6 +519,33 @@ mod tests {
     }
 
     #[test]
+    fn move_to_front_reorders_without_losing_entries() {
+        let mut list = FriendsList::new();
+        list.push(friend_record([1, 1], 1, 1)); // becomes index 1 after next push
+        list.push(friend_record([2, 2], 2, 2)); // index 0
+        list.push(friend_record([3, 3], 3, 3)); // index 0, pushes the others down
+        // Order is now [3,3], [2,2], [1,1].
+        assert_eq!(list.friends[0].device_id, [3, 3]);
+        assert_eq!(list.friends[1].device_id, [2, 2]);
+        assert_eq!(list.friends[2].device_id, [1, 1]);
+
+        // "Re-seeing" [1,1] (last in the list) should promote it to the
+        // front without dropping or duplicating anyone.
+        let idx = list.find_index([1, 1]).unwrap();
+        list.move_to_front(idx);
+        assert_eq!(list.count, 3);
+        assert_eq!(list.friends[0].device_id, [1, 1]);
+        assert_eq!(list.friends[1].device_id, [3, 3]);
+        assert_eq!(list.friends[2].device_id, [2, 2]);
+
+        // Already at the front: a no-op, not a duplicate/shift.
+        list.move_to_front(0);
+        assert_eq!(list.friends[0].device_id, [1, 1]);
+        assert_eq!(list.friends[1].device_id, [3, 3]);
+        assert_eq!(list.friends[2].device_id, [2, 2]);
+    }
+
+    #[test]
     fn friends_list_ring_overflow_drops_oldest() {
         let mut list = FriendsList::new();
         for i in 0..(FRIENDS_MAX as u16 + 3) {
@@ -503,6 +571,7 @@ mod tests {
             name_len: 5,
             first_seen_tick: 100,
             last_boost_tick: 200,
+            last_seen_tick: 250,
             attack: 55,
             defense: 45,
             speed: 35,
@@ -517,6 +586,7 @@ mod tests {
         assert_eq!(restored.friends[0].name_str(), "Mochi");
         assert_eq!(restored.friends[0].first_seen_tick, 100);
         assert_eq!(restored.friends[0].last_boost_tick, 200);
+        assert_eq!(restored.friends[0].last_seen_tick, 250);
         assert_eq!(restored.friends[0].attack, 55);
         assert_eq!(restored.friends[0].defense, 45);
         assert_eq!(restored.friends[0].speed, 35);
