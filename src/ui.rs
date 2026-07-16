@@ -164,9 +164,7 @@ where
     let visible = total.min(MAX_VISIBLE);
 
     // Slide the scroll window so `pos` is always visible.
-    let scroll = if total <= MAX_VISIBLE {
-        0
-    } else if pos < MAX_VISIBLE {
+    let scroll = if total <= MAX_VISIBLE || pos < MAX_VISIBLE {
         0
     } else {
         (pos + 1).saturating_sub(MAX_VISIBLE)

@@ -374,7 +374,7 @@ pub fn thread_for(pub_key: &[u8; 32]) -> heapless::Vec<PmEntry, MAX_ENTRIES> {
             }
         }
     });
-    out.sort_unstable_by(|a, b| a.observed_at_secs.cmp(&b.observed_at_secs));
+    out.sort_unstable_by_key(|a| a.observed_at_secs);
     out
 }
 

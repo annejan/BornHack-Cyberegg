@@ -919,11 +919,11 @@ pub fn dispatch(btn: ButtonId) -> bool {
                 }
                 ButtonId::Fire | ButtonId::Execute => {
                     // Open PM compose if this contact is a chat node.
-                    if let Some(entry) = filtered_get(filter, target) {
-                        if entry.node_type == 1 {
-                            b.mode = Mode::List;
-                            start_pm_compose(entry.pub_key);
-                        }
+                    if let Some(entry) = filtered_get(filter, target)
+                        && entry.node_type == 1
+                    {
+                        b.mode = Mode::List;
+                        start_pm_compose(entry.pub_key);
                     }
                     false
                 }

@@ -450,13 +450,13 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
         self.enabled[idx] = on;
-        if !on && self.active_screen as usize == idx {
-            if let Some(s) = self
+        if !on
+            && self.active_screen as usize == idx
+            && let Some(s) = self
                 .next_enabled_right(self.active_screen)
                 .or_else(|| self.next_enabled_left(self.active_screen))
-            {
-                self.active_screen = s;
-            }
+        {
+            self.active_screen = s;
         }
     }
 

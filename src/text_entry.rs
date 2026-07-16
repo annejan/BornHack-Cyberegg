@@ -60,12 +60,21 @@ enum Quadrant {
 enum InputState {
     Root,
     LetterQuad(Quadrant),
-    CharPick { table_id: u8, cursor: u8 },
+    CharPick {
+        table_id: u8,
+        cursor: u8,
+    },
     CmdHub,
     CmdRightHub,
-    SpaceBkspPick { cursor: u8 },
-    SpecialPick { cursor: u8 },
-    NumberPick { cursor: u8 },
+    SpaceBkspPick {
+        cursor: u8,
+    },
+    SpecialPick {
+        cursor: u8,
+    },
+    NumberPick {
+        cursor: u8,
+    },
     /// Submit confirmation — reached from `Root` on Execute so a single
     /// stray press at the start can't commit + exit (issue #126).  Execute
     /// here commits; any other button returns to editing.
@@ -311,21 +320,17 @@ impl TextEntry {
             InputState::CharPick { table_id, cursor } => {
                 let chars = char_table(table_id);
                 match btn {
-                    ButtonId::Left => {
-                        if cursor > 0 {
-                            self.state = InputState::CharPick {
-                                table_id,
-                                cursor: cursor - 1,
-                            };
-                        }
+                    ButtonId::Left if cursor > 0 => {
+                        self.state = InputState::CharPick {
+                            table_id,
+                            cursor: cursor - 1,
+                        };
                     }
-                    ButtonId::Right => {
-                        if (cursor + 1) < chars.len() as u8 {
-                            self.state = InputState::CharPick {
-                                table_id,
-                                cursor: cursor + 1,
-                            };
-                        }
+                    ButtonId::Right if (cursor + 1) < chars.len() as u8 => {
+                        self.state = InputState::CharPick {
+                            table_id,
+                            cursor: cursor + 1,
+                        };
                     }
                     ButtonId::Execute | ButtonId::Fire => {
                         self.push_char(chars[cursor as usize]);
@@ -375,15 +380,11 @@ impl TextEntry {
             },
 
             InputState::SpaceBkspPick { cursor } => match btn {
-                ButtonId::Left => {
-                    if cursor > 0 {
-                        self.state = InputState::SpaceBkspPick { cursor: cursor - 1 };
-                    }
+                ButtonId::Left if cursor > 0 => {
+                    self.state = InputState::SpaceBkspPick { cursor: cursor - 1 };
                 }
-                ButtonId::Right => {
-                    if (cursor + 1) < SPACE_BKSP.len() as u8 {
-                        self.state = InputState::SpaceBkspPick { cursor: cursor + 1 };
-                    }
+                ButtonId::Right if (cursor + 1) < SPACE_BKSP.len() as u8 => {
+                    self.state = InputState::SpaceBkspPick { cursor: cursor + 1 };
                 }
                 ButtonId::Execute | ButtonId::Fire => {
                     self.push_char(SPACE_BKSP[cursor as usize]);
@@ -395,15 +396,11 @@ impl TextEntry {
             },
 
             InputState::SpecialPick { cursor } => match btn {
-                ButtonId::Left => {
-                    if cursor > 0 {
-                        self.state = InputState::SpecialPick { cursor: cursor - 1 };
-                    }
+                ButtonId::Left if cursor > 0 => {
+                    self.state = InputState::SpecialPick { cursor: cursor - 1 };
                 }
-                ButtonId::Right => {
-                    if (cursor + 1) < SPECIAL_CHARS.len() as u8 {
-                        self.state = InputState::SpecialPick { cursor: cursor + 1 };
-                    }
+                ButtonId::Right if (cursor + 1) < SPECIAL_CHARS.len() as u8 => {
+                    self.state = InputState::SpecialPick { cursor: cursor + 1 };
                 }
                 ButtonId::Execute | ButtonId::Fire => {
                     self.push_char(SPECIAL_CHARS[cursor as usize]);
@@ -415,15 +412,11 @@ impl TextEntry {
             },
 
             InputState::NumberPick { cursor } => match btn {
-                ButtonId::Left => {
-                    if cursor > 0 {
-                        self.state = InputState::NumberPick { cursor: cursor - 1 };
-                    }
+                ButtonId::Left if cursor > 0 => {
+                    self.state = InputState::NumberPick { cursor: cursor - 1 };
                 }
-                ButtonId::Right => {
-                    if (cursor + 1) < NUMBER_CHARS.len() as u8 {
-                        self.state = InputState::NumberPick { cursor: cursor + 1 };
-                    }
+                ButtonId::Right if (cursor + 1) < NUMBER_CHARS.len() as u8 => {
+                    self.state = InputState::NumberPick { cursor: cursor + 1 };
                 }
                 ButtonId::Execute | ButtonId::Fire => {
                     self.push_char(NUMBER_CHARS[cursor as usize]);
@@ -961,7 +954,11 @@ fn keyboard_active() -> bool {
 #[cfg(feature = "embassy-base")]
 pub fn inject(key: ExtKey) {
     TEXT_ENTRY.lock(|cell| {
-        let done = cell.borrow_mut().as_mut().map(|e| e.inject(key)).unwrap_or(false);
+        let done = cell
+            .borrow_mut()
+            .as_mut()
+            .map(|e| e.inject(key))
+            .unwrap_or(false);
         if done {
             cell.replace(None);
         }

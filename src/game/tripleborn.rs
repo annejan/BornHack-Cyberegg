@@ -223,7 +223,7 @@ pub fn cursor_down() {
 
 pub fn cursor_left() {
     let c = CURSOR.load(Ordering::Relaxed) as usize;
-    if c % BOARD_W > 0 {
+    if !c.is_multiple_of(BOARD_W) {
         CURSOR.store((c - 1) as u8, Ordering::Relaxed);
     }
 }
@@ -570,7 +570,7 @@ fn any_empty() -> bool {
 /// Roll a fresh tile for the preview slot, with Triple-Town-style
 /// odds: mostly grass, occasionally bush/tree, rare car/wildcard.
 fn roll_next_tile() -> u8 {
-    let r = (rng_next() & 0xFF) as u32;
+    let r = rng_next() & 0xFF;
     if r < 160 {
         T_GRASS // ~62 %
     } else if r < 215 {
