@@ -283,6 +283,14 @@ async fn main(spawner: Spawner) {
         // the roster.  No file → built-in roster only.
         bornhack_aegg::fw::pets_cfg::load_and_install().await;
         spawner.must_spawn(bornhack_aegg::game::settings::persister_task());
+        // Apply the persisted "game enabled" flag to the display state so a
+        // previously disabled game screen stays hidden across reboot (default
+        // is enabled).
+        let game_on = bornhack_aegg::game::settings::load_enabled_from_kv().await;
+        DISPLAY_STATE.lock(|cell| {
+            cell.borrow_mut()
+                .set_screen_enabled(bornhack_aegg::SCREEN_GAME as usize, game_on);
+        });
     }
 
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
