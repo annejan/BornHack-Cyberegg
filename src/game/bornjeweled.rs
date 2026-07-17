@@ -64,7 +64,6 @@ fn seed_rng() {
     {
         let s = embassy_time::Instant::now().as_ticks() as u32;
         GAME_RNG.store(s.max(1), Ordering::Relaxed);
-        return;
     }
     #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
     {
@@ -150,7 +149,7 @@ fn cursor_down() {
 
 fn cursor_left() {
     let c = CURSOR.load(Ordering::Relaxed) as usize;
-    let new = if c % BOARD_W > 0 { c - 1 } else { c };
+    let new = if !c.is_multiple_of(BOARD_W) { c - 1 } else { c };
     CURSOR.store(new as u8, Ordering::Relaxed);
 }
 
@@ -452,7 +451,7 @@ where
     let row = (c / BOARD_W) as i32;
     let x = BOARD_X + col * CELL;
     let y = BOARD_Y + row * CELL;
-    let _ = Rectangle::new(Point::new(x, y), Size::new(CELL as u32, CELL as u32))
+    Rectangle::new(Point::new(x, y), Size::new(CELL as u32, CELL as u32))
         .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
         .draw(display)?;
 

@@ -466,6 +466,37 @@ impl<const M: usize> DisplayState<M> {
         }
     }
 
+    /// Enable or disable a screen at runtime.  When disabling the screen
+    /// that is currently active, move focus to an adjacent enabled screen
+    /// (right first, then left) so the user isn't stranded on a screen the
+    /// navigation would otherwise skip.
+    pub fn set_screen_enabled(&mut self, idx: usize, on: bool) {
+        if idx >= M {
+            return;
+        }
+        self.enabled[idx] = on;
+        if !on
+            && self.active_screen as usize == idx
+            && let Some(s) = self
+                .next_enabled_right(self.active_screen)
+                .or_else(|| self.next_enabled_left(self.active_screen))
+        {
+            self.active_screen = s;
+        }
+    }
+
+    /// Reconcile the game screen's enabled bit with the persisted
+    /// game-enabled flag.  Cheap (one atomic load) — called after every
+    /// button dispatch so the "Disable Game" toggle takes effect live.
+    #[cfg(feature = "game")]
+    fn apply_game_enabled(&mut self) {
+        let idx = ScreenId::Game as usize;
+        let on = crate::game::settings::is_enabled();
+        if idx < M && self.enabled[idx] != on {
+            self.set_screen_enabled(idx, on);
+        }
+    }
+
     pub fn current_screen(&self) -> &ScreenState {
         &self.screens[self.active_screen as usize]
     }
@@ -697,6 +728,10 @@ impl<const M: usize> DisplayState<M> {
         // A menu action (e.g. "My QR") may have requested a screen switch;
         // apply it now that `fire()` has returned and we still hold `&mut self`.
         self.apply_requested_screen();
+        // The "Disable/Enable Game" toggle only flips an atomic; reconcile
+        // the game screen's enabled bit here where we hold `&mut self`.
+        #[cfg(feature = "game")]
+        self.apply_game_enabled();
     }
 }
 
@@ -1060,6 +1095,32 @@ fn label_game_mute() -> &'static str {
 fn action_game_mute_toggle() {
     let cur = crate::GAME_MUTE.load(Ordering::Relaxed);
     crate::GAME_MUTE.store(!cur, Ordering::Relaxed);
+}
+
+fn label_game_enabled() -> &'static str {
+    #[cfg(feature = "game")]
+    {
+        if crate::game::settings::is_enabled() {
+            "Disable Game"
+        } else {
+            "Enable Game"
+        }
+    }
+    #[cfg(not(feature = "game"))]
+    {
+        "Disable Game"
+    }
+}
+
+fn action_game_enabled_toggle() {
+    #[cfg(feature = "game")]
+    {
+        let on = crate::game::settings::is_enabled();
+        crate::game::settings::set_enabled(!on);
+        // The DisplayState reconcile in `dispatch_button` flips
+        // `enabled[SCREEN_GAME]` (and hops off the game screen if it was
+        // the active one) after this action returns.
+    }
 }
 
 fn label_boot_chime() -> &'static str {
@@ -1878,8 +1939,8 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
         kind: MenuItemKind::Action(action_game_mute_toggle),
     },
     MenuItem {
-        label: || "Disable Game",
-        kind: MenuItemKind::Action(|| {}),
+        label: label_game_enabled,
+        kind: MenuItemKind::Action(action_game_enabled_toggle),
     },
     MenuItem {
         label: || "",

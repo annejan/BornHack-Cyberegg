@@ -165,7 +165,7 @@ pub fn set_token(value: &str) {
     let _ = token.push_str(trimmed);
 
     let inserted = with_list(|list| {
-        if list.iter().any(|t| *t == token) {
+        if list.contains(&token) {
             return false;
         }
         // Drop the oldest (back) entry if we are at capacity.
@@ -255,18 +255,18 @@ where
     // Header: "Tokens: N" (distinct tokens, not wrapped lines).
     let mut header: heapless::String<16> = heapless::String::new();
     let _ = header.push_str("Tokens: ");
-    let _ = push_usize(&mut header, len);
+    push_usize(&mut header, len);
 
     // Footer: line-position indicator only when the content overflows.
     let mut footer: heapless::String<16> = heapless::String::new();
     if n_lines > VISIBLE_ROWS {
         let first = top + 1;
         let last = (top + VISIBLE_ROWS).min(n_lines);
-        let _ = push_usize(&mut footer, first);
+        push_usize(&mut footer, first);
         let _ = footer.push('-');
-        let _ = push_usize(&mut footer, last);
+        push_usize(&mut footer, last);
         let _ = footer.push_str(" / ");
-        let _ = push_usize(&mut footer, n_lines);
+        push_usize(&mut footer, n_lines);
     }
     let footer_ref = if footer.is_empty() {
         None
