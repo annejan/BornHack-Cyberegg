@@ -141,6 +141,18 @@ fn nav_skip(kind: &MenuItemKind) -> bool {
     }
 }
 
+/// Index of the first non-skippable item, if any — used to wrap Down
+/// past the bottom of a menu back to the top.
+fn first_selectable(items: &[MenuItem]) -> Option<usize> {
+    items.iter().position(|it| !nav_skip(&it.kind))
+}
+
+/// Index of the last non-skippable item, if any — used to wrap Up past
+/// the top of a menu back to the bottom.
+fn last_selectable(items: &[MenuItem]) -> Option<usize> {
+    items.iter().rposition(|it| !nav_skip(&it.kind))
+}
+
 // ── Per-screen navigation state
 // ───────────────────────────────────────────────
 
@@ -249,6 +261,11 @@ impl ScreenState {
         let items = self.current_items();
         let pos = self.current_pos();
         if pos == 0 {
+            // Wrap to the last selectable item instead of doing nothing
+            // at the top.
+            if let Some(last) = last_selectable(items) {
+                *self.current_pos_mut() = last as u8;
+            }
             return;
         }
         let mut prev = pos - 1;
@@ -257,6 +274,10 @@ impl ScreenState {
         }
         if !nav_skip(&items[prev].kind) {
             *self.current_pos_mut() = prev as u8;
+        } else if let Some(last) = last_selectable(items) {
+            // Everything above `pos` was skippable — wrap to the last
+            // selectable item instead of doing nothing.
+            *self.current_pos_mut() = last as u8;
         }
     }
 
@@ -278,6 +299,10 @@ impl ScreenState {
         }
         if next < len {
             *self.current_pos_mut() = next as u8;
+        } else if let Some(first) = first_selectable(items) {
+            // Wrap to the first selectable item instead of doing nothing
+            // at the bottom.
+            *self.current_pos_mut() = first as u8;
         }
     }
 
@@ -2750,4 +2775,49 @@ where
     Text::with_text_style("Cancel = No", Point::new(x, hint_y + 18), font, center).draw(display)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action() -> MenuItem {
+        MenuItem {
+            label: || "item",
+            kind: MenuItemKind::Action(|| {}),
+        }
+    }
+
+    fn separator() -> MenuItem {
+        MenuItem {
+            label: || "-",
+            kind: MenuItemKind::Separator,
+        }
+    }
+
+    /// `menu_up`/`menu_down` wrap around a menu boundary instead of doing
+    /// nothing there — the bug report was "pressing Up at the top of a
+    /// menu does nothing"; these two helpers are what makes the wrap
+    /// target well-defined even with skippable rows (separators, hidden
+    /// SlotInfo) mixed in.
+    #[test]
+    fn first_and_last_selectable_skip_separators() {
+        let items = [separator(), action(), action(), separator()];
+        assert_eq!(first_selectable(&items), Some(1));
+        assert_eq!(last_selectable(&items), Some(2));
+    }
+
+    #[test]
+    fn first_and_last_selectable_none_when_all_skippable() {
+        let items = [separator(), separator()];
+        assert_eq!(first_selectable(&items), None);
+        assert_eq!(last_selectable(&items), None);
+    }
+
+    #[test]
+    fn first_and_last_selectable_single_item() {
+        let items = [action()];
+        assert_eq!(first_selectable(&items), Some(0));
+        assert_eq!(last_selectable(&items), Some(0));
+    }
 }

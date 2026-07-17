@@ -536,6 +536,11 @@ pub fn dispatch(btn: ButtonId) -> bool {
                             if b.cursor < b.scroll {
                                 b.scroll = b.cursor;
                             }
+                        } else if count > 0 {
+                            // Wrap to the last conversation instead of
+                            // doing nothing at the top.
+                            b.cursor = count - 1;
+                            b.scroll = b.cursor.saturating_sub(VISIBLE_ROWS - 1);
                         }
                         false
                     }
@@ -545,6 +550,11 @@ pub fn dispatch(btn: ButtonId) -> bool {
                             if b.cursor >= b.scroll + VISIBLE_ROWS {
                                 b.scroll = b.cursor + 1 - VISIBLE_ROWS;
                             }
+                        } else if count > 0 {
+                            // Wrap to the top instead of doing nothing at
+                            // the bottom.
+                            b.cursor = 0;
+                            b.scroll = 0;
                         }
                         false
                     }

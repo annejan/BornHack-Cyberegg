@@ -433,3 +433,8 @@ Use **Up/Down** to scroll through entries, any other button to close.
   else. Use Play to zero it whenever it builds up.
 - Watch the stat bars regularly: catching problems early is much easier
   than recovering from multiple maxed stats.
+- **Scrolling menus wrap around**: pressing Up at the top of any list
+  (the action menu, Debug menu, Friends list, Battle target picker,
+  Unicorn Realm) jumps to the bottom instead of doing nothing, and Down
+  at the bottom wraps back to the top — the fastest way to reach the
+  last item is often Up once from the first row.

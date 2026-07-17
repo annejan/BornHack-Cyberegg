@@ -54,6 +54,12 @@ pub fn cursor_up() {
     let s = SELECTION.load(Ordering::Relaxed);
     if s > 0 {
         SELECTION.store(s - 1, Ordering::Relaxed);
+    } else {
+        // Wrap to the last pet instead of doing nothing at the top.
+        let max = PetKind::roster().len() as u8;
+        if max > 0 {
+            SELECTION.store(max - 1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -62,6 +68,9 @@ pub fn cursor_down() {
     let max = PetKind::roster().len() as u8;
     if s + 1 < max {
         SELECTION.store(s + 1, Ordering::Relaxed);
+    } else if max > 0 {
+        // Wrap to the top instead of doing nothing at the bottom.
+        SELECTION.store(0, Ordering::Relaxed);
     }
 }
 
@@ -143,4 +152,28 @@ where
     .draw(display)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Up at the top of the roster used to be a no-op; it should now wrap
+    /// to the last pet, and Down at the bottom should wrap back to the
+    /// first — same "wrap instead of doing nothing" fix applied across
+    /// every scrollable menu on the badge.
+    #[test]
+    fn cursor_wraps_at_both_ends() {
+        let max = PetKind::roster().len() as u8;
+        SELECTION.store(0, Ordering::Relaxed);
+
+        cursor_up();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), max - 1);
+
+        cursor_down();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 0);
+
+        // Leave global state clean for any other test touching SELECTION.
+        SELECTION.store(0, Ordering::Relaxed);
+    }
 }

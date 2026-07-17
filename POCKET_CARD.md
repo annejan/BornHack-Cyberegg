@@ -22,7 +22,7 @@ One-page badge cheat sheet. Print and tuck under the strap.
 | -------------- | -------------------------- |
 | **EXE** / Fire | select · open · confirm    |
 | **CAN**        | back · cancel · close      |
-| **Up / Down**  | move cursor within screen  |
+| **Up / Down**  | move cursor within screen — wraps top ↔ bottom |
 | **Left / Right** | switch top-level screen  |
 
 ## Top-level screens (Left / Right cycles)
