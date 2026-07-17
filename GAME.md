@@ -393,6 +393,18 @@ Opens a **Debug** menu with:
 This is a developer tool, not part of normal play — no cooldowns, no
 gating beyond having an active pet.
 
+## Forcing a screen de-ghost
+
+E-paper builds up visible ghosting over many fast partial updates. The
+badge already promotes to a full refresh automatically once enough
+pixels have changed, but there's also a hidden combo to force a clean
+de-ghost immediately, on **any** screen — not just the pet screen:
+press **Down, Down, Up, Up, Right, Left, Right, Left, Fire** (the debug
+cheat combo above, run in reverse). The panel goes solid black, then
+solid white, then redraws whatever screen was showing. This is a
+display utility, not a pet mechanic — it works with no pet active and
+regardless of which screen you're on.
+
 ## Pet Naming
 
 After hatching, you'll be prompted to name your pet using the on-screen

@@ -124,6 +124,7 @@ pub mod fw {
 }
 #[cfg(feature = "game")]
 pub mod game;
+pub mod display_flush;
 pub mod menu;
 pub mod lut_file;
 pub mod name_screen;
@@ -376,6 +377,14 @@ pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signa
 /// can simply set this to `true` on close to clear residual ghosting
 /// from its many fast updates in one full-cycle refresh.
 pub static FULL_REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// One-shot request for the display loop to run a full black → white →
+/// redraw flush cycle before its next normal draw — a deliberate,
+/// user-triggered de-ghost distinct from `FULL_REFRESH_PENDING`'s "just
+/// mark the current content dirty". Set by the hidden button sequence in
+/// [`display_flush`]; consumed (swapped back to `false`) by the
+/// display loop in `embassy.rs`.
+pub static FORCE_FLUSH_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// When true, #blinkme channel LED commands are ignored.
 pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);

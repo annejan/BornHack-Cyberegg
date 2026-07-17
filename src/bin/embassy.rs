@@ -609,6 +609,27 @@ async fn display_loop(
         // `keyboard_task`, which owns the Qwiic bus — see main().  Keeping I2C
         // off the display loop means a wedged read can't stall the display.)
 
+        // Hidden-combo de-ghost: a deliberate, user-triggered full black →
+        // white flush, run before this iteration's normal content draw
+        // below. Each half is a genuine inverting full refresh (same
+        // primitive the boot-time clear and heavy-graphic screens use),
+        // so the panel visibly settles solid black, then solid white,
+        // before the real screen content goes down. FULL_REFRESH_PENDING
+        // (already checked further down) then forces that redraw to mark
+        // every pixel dirty, so nothing here needs its own "mark all"
+        // bookkeeping.
+        if bornhack_aegg::FORCE_FLUSH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            let speed = bornhack_aegg::fw::epd::current_lut_speed();
+            display.clear(Color::Black);
+            let _ = display.reset().await;
+            let _ = display.update_tc(speed).await;
+            display.clear(Color::White);
+            let _ = display.reset().await;
+            let _ = display.update_tc(speed).await;
+            let _ = display.deep_sleep().await;
+            bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+        }
+
         display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 

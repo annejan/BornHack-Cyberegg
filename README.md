@@ -50,6 +50,14 @@ See [GAME.md](GAME.md) for full player-facing rules.
   separate from real pet health; losing costs nothing but bragging
   rights. Win/loss records sync between both badges automatically.
 
+### Display tooling
+
+- **Force screen flush** — a hidden combo (Down Down Up Up Right Left
+  Right Left Fire, the debug cheat combo run in reverse) that forces a
+  full black → white → redraw de-ghost cycle on demand, on whichever
+  screen is showing. Not game-specific — works on any screen, with no
+  pet active, since e-paper ghosting isn't a BornPets problem.
+
 ### Removed
 
 - **Sponsor slideshow** — removed entirely (boot sequence, menu items,

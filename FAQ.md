@@ -51,6 +51,14 @@ image looks *inverted* (colours swapped) and stays that way, flip to another
 screen and back to force a redraw. Persistent inversion on the red-capable
 ("B") panels was a known bug — make sure you are on current firmware.
 
+If ghosting has built up and you don't want to wait for the automatic
+full-refresh or hunt for a screen to flip through, there's a hidden combo that
+forces a clean de-ghost on demand, on whichever screen is currently showing:
+press **Down, Down, Up, Up, Right, Left, Right, Left, Fire**. The panel goes
+solid black, then solid white, then redraws the real screen — same idea as
+manually flipping screens, just immediate and without needing a second screen
+to flip to.
+
 ## How do I put the badge in DFU mode to flash it?
 
 Hold the **EXE** (Execute) button while powering the badge on. The bootloader

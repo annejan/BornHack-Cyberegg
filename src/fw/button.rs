@@ -60,18 +60,27 @@ pub async fn run_buttons(
         );
 
         if is_low {
-            // Let the game handle the button first when its screen is active.
-            #[cfg(feature = "game")]
-            let consumed = {
-                let on_game =
-                    DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
-                on_game && crate::game::input::dispatch(btn)
-            };
-            #[cfg(not(feature = "game"))]
-            let consumed = false;
+            // Hidden display-flush combo watches every press globally (not
+            // just on the game screen, since ghosting isn't game-specific)
+            // and only intercepts the triggering press on a full match —
+            // same "background watcher" contract as the game's debug-cheat
+            // sequence.
+            if crate::display_flush::feed(btn) {
+                crate::FORCE_FLUSH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+            } else {
+                // Let the game handle the button first when its screen is active.
+                #[cfg(feature = "game")]
+                let consumed = {
+                    let on_game =
+                        DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
+                    on_game && crate::game::input::dispatch(btn)
+                };
+                #[cfg(not(feature = "game"))]
+                let consumed = false;
 
-            if !consumed {
-                DISPLAY_STATE.lock(|f| f.borrow_mut().dispatch_button(btn));
+                if !consumed {
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().dispatch_button(btn));
+                }
             }
         }
 
