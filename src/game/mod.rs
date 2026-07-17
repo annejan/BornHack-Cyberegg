@@ -68,8 +68,9 @@ pub enum Toast {
     /// on cooldown.  The remaining seconds are read from
     /// `STATION_COOLDOWN_SECS` and formatted at draw time.
     StationCooldown = 13,
-    // 14 (TripleBornBonus) removed with the Triple Born mini-game — value
-    // left as a gap so persisted toast codes 15+ keep their meaning.
+    /// Took Ozempic — weight + hunger relief, distinct from Exercise.
+    /// Reuses discriminant 14 (freed when Triple Born was removed).
+    Ozempic = 14,
     Exercise = 15,
     Medicate = 16,
     DebugCheat = 17,
@@ -104,6 +105,7 @@ impl Toast {
             11 => Self::StationInspire,
             12 => Self::StationRest,
             13 => Self::StationCooldown,
+            14 => Self::Ozempic,
             15 => Self::Exercise,
             16 => Self::Medicate,
             17 => Self::DebugCheat,
@@ -135,6 +137,7 @@ impl Toast {
             Toast::StationRest => "Sleep bonus!",
             // Dynamic — handled in the renderer.
             Toast::StationCooldown => "",
+            Toast::Ozempic => "-weight -hunger",
             Toast::Exercise => "-weight",
             Toast::Medicate => "+medicated",
             Toast::DebugCheat => "cheat applied",
@@ -191,6 +194,20 @@ pub fn show_diabetes_alert() {
     crate::TOAST_SIGNAL.signal(());
 }
 
+/// Full-screen "now alcoholic" alert — the alcoholism twin of the
+/// diabetes onset takeover above, reusing `DIABETES_ALERT_MIN_VISIBLE_MS`.
+static ALCOHOLISM_ALERT_ACTIVE: AtomicBool = AtomicBool::new(false);
+static ALCOHOLISM_ALERT_STARTED_MS: AtomicU32 = AtomicU32::new(0);
+
+/// Show the full-screen "now alcoholic" alert, fired once the instant
+/// alcoholism triggers — see `lifecycle::check_alcoholism_onset`.
+pub fn show_alcoholism_alert() {
+    ALCOHOLISM_ALERT_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
+    ALCOHOLISM_ALERT_ACTIVE.store(true, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::TOAST_SIGNAL.signal(());
+}
+
 /// Low 32 bits of the current uptime in milliseconds.  Cross-platform
 /// wrapper so `mod.rs` compiles on both firmware (`embassy_time`) and
 /// simulator (`lifecycle::sim_elapsed_ms`).
@@ -232,8 +249,12 @@ pub fn show_toast(toast: Toast) {
 pub fn status_wants_full_refresh() -> bool {
     TOAST_ACTIVE.load(Ordering::Relaxed)
         || DIABETES_ALERT_ACTIVE.load(Ordering::Relaxed)
+        || ALCOHOLISM_ALERT_ACTIVE.load(Ordering::Relaxed)
         || lifecycle::display_anim() == engine::DisplayAnim::Gone
         || lifecycle::is_diabetic_unmedicated()
+        || lifecycle::is_alcoholic_untreated()
+        || lifecycle::is_overweight_warning()
+        || lifecycle::is_drunk_warning()
 }
 
 /// Show the station-cooldown toast with the remaining time formatted
@@ -315,6 +336,25 @@ where
         let elapsed = now_ms_u32().wrapping_sub(DIABETES_ALERT_STARTED_MS.load(Ordering::Relaxed));
         if elapsed >= DIABETES_ALERT_MIN_VISIBLE_MS {
             DIABETES_ALERT_ACTIVE.store(false, Ordering::Relaxed);
+        }
+        return Ok(());
+    }
+
+    // Alcoholism onset alert — same one-shot full-screen takeover as
+    // diabetes, the twin permanent condition on the drink arc.
+    if ALCOHOLISM_ALERT_ACTIVE.load(Ordering::Relaxed) {
+        Rectangle::new(Point::new(0, 0), Size::new(152, 152))
+            .into_styled(PrimitiveStyle::with_fill(WHITE))
+            .draw(display)?;
+        Text::with_text_style("ALCOHOL", Point::new(76, 56), font, centered).draw(display)?;
+        Text::with_text_style("DEPENDENCE", Point::new(76, 74), font, centered).draw(display)?;
+        Text::with_text_style("Give rehab soon", Point::new(76, 100), font_red, centered)
+            .draw(display)?;
+
+        let elapsed =
+            now_ms_u32().wrapping_sub(ALCOHOLISM_ALERT_STARTED_MS.load(Ordering::Relaxed));
+        if elapsed >= DIABETES_ALERT_MIN_VISIBLE_MS {
+            ALCOHOLISM_ALERT_ACTIVE.store(false, Ordering::Relaxed);
         }
         return Ok(());
     }
@@ -513,14 +553,14 @@ where
         }
     }
 
-    // Persistent "needs meds" banner — diabetic and medication has
-    // lapsed. Deliberately independent of the toast timer above: unlike
-    // a toast, this needs to stay visible for as long as the condition
-    // holds, not just flash briefly. Drawn on the opposite side from
-    // the toast (top-right vs top-left) so the two can't collide if
-    // both are showing at once. There's no dedicated sprite/animation
-    // for this state — see the note in `engine::to_display` for why.
-    if lifecycle::is_diabetic_unmedicated() {
+    // Persistent condition banners, stacked top-right and drawn on the
+    // opposite side from the toast (top-left) so they can't collide.
+    // Each is red and stays visible while its condition holds — unlike
+    // the flash-then-fade toast. No dedicated sprite art for these
+    // states; see the note in `engine::to_display` for why.  Active
+    // ongoing-damage banners come first, then the pre-permanence
+    // warnings that let the player course-correct before it's too late.
+    {
         use embedded_graphics::mono_font::MonoTextStyle;
         use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
         use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
@@ -528,13 +568,21 @@ where
             .baseline(Baseline::Top)
             .alignment(Alignment::Right)
             .build();
-        Text::with_text_style(
-            "NEEDS MEDS",
-            Point::new(150, SEP_TOP + 2),
-            MonoTextStyle::new(&FONT_7X13_BOLD, RED),
-            style,
-        )
-        .draw(display)?;
+        let font = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
+        let banners = [
+            (lifecycle::is_diabetic_unmedicated(), "NEEDS MEDS"),
+            (lifecycle::is_alcoholic_untreated(), "NEEDS REHAB"),
+            (lifecycle::is_overweight_warning(), "OVERWEIGHT"),
+            (lifecycle::is_drunk_warning(), "DRUNK"),
+        ];
+        let mut banner_y = SEP_TOP + 2;
+        for (active, text) in banners {
+            if active {
+                Text::with_text_style(text, Point::new(150, banner_y), font, style)
+                    .draw(display)?;
+                banner_y += 14;
+            }
+        }
     }
 
     modal::draw_modal(display)?;

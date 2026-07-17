@@ -19,6 +19,7 @@ pub const MELODIES: &[&[Tone]] = &[
     melodies::DAISY_BELL,       // 9 — HAL 9000's parting song, player-pickable
     melodies::NOKIA,            // 10 — Nokia Tune (Tárrega's Gran Vals)
     melodies::OVER_THE_HORIZON, // 11 — Samsung's "Over the Horizon" hook
+    melodies::MINIGAME_WIN,     // 12 — mini-game victory jingle (not in menu)
 ];
 
 /// Signal a melody index to the buzzer task.

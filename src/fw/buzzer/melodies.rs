@@ -35,6 +35,15 @@ pub const PET_WARN: &[Tone] = &[
     Tone::new(Note::A5, 120),
 ];
 
+/// Short victory jingle — a quick rising C-major arpeggio played when
+/// the player wins a mini-game.  System-only (not in the music menu).
+pub const MINIGAME_WIN: &[Tone] = &[
+    Tone::new(Note::C5, 90),
+    Tone::new(Note::E5, 90),
+    Tone::new(Note::G5, 90),
+    Tone::new(Note::C6, 160),
+];
+
 /// "funny ending" (composed by LK) — a brief comedic send-off played
 /// when the pet finally leaves (transitions to `Phase::Gone`).
 /// Time signature 4/4 at ♩ = 180, so one beat = 333 ms.

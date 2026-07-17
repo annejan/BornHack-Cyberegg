@@ -381,7 +381,7 @@ impl Item {
             }
             Self::Ozempic => {
                 lifecycle::ozempic();
-                super::show_toast(super::Toast::Exercise);
+                super::show_toast(super::Toast::Ozempic);
                 close();
             }
             Self::ExerciseNow => {

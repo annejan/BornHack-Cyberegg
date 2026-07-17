@@ -167,10 +167,26 @@ where
     // colouring as the bar fill so the glyph and bar read together.
     icon_heart(display, Point::new(ICON_X, weight_y), fill_color)?;
 
-    // Footnote — condensed to a single line now that a 3rd row shares
-    // the same screen; the detailed per-condition breakdown lives in
-    // GAME.md instead of trying to fit it here too.
-    let note_y = weight_y + 22;
+    // Sober level as a bar too — drunk is computed every tick but was
+    // shown nowhere, leaving the drink -> alcoholism arc impossible to
+    // strategize. 100 = sober, red when very drunk (same positive
+    // semantics as the Fit bar above).
+    let sober_y = weight_y + 19;
+    let sober_color = if stats.drunk < 25 { RED } else { crate::BLACK };
+    super::stat_bar::draw_stat_bar(
+        display,
+        "Sober",
+        stats.drunk,
+        Point::new(ROW_X, sober_y + 2),
+        Point::new(ROW_X + 40, sober_y),
+        Size::new(84, 16),
+        sober_color,
+    )?;
+    icon_bottle(display, Point::new(ICON_X, sober_y), sober_color)?;
+
+    // Footnote — condensed to a single line; the detailed per-condition
+    // breakdown lives in GAME.md instead of trying to fit it here too.
+    let note_y = sober_y + 19;
     Text::with_text_style(
         "Sustained neglect -> permanent.",
         Point::new(ROW_X, note_y),
@@ -188,7 +204,7 @@ where
     );
     Text::with_text_style(
         record.as_str(),
-        Point::new(ROW_X, note_y + 16),
+        Point::new(ROW_X, note_y + 14),
         TEXT_BOLD_BLACK,
         left,
     )
