@@ -112,6 +112,14 @@ upstream should know about these:
   Up/Down from silently moving the menu cursor underneath it, a long
   cheat-menu label plus its cooldown suffix could overflow its display
   buffer, and the wake-scheduler's cooldown list was missing Battle's.
+- **Friends detail screen's "Met"/"Last seen" never worked on real
+  hardware** — the underlying uptime clock resets on every reboot, but
+  the timestamps were saved as absolute values, so they read "0 ago"
+  for every friend indefinitely after any power cycle.
+- **Scrolling menus did nothing at the top/bottom of the list** —
+  every menu on the badge (action menus, Friends, Battle picker,
+  Unicorn Realm, Contacts, Channels, PMs, Config) now wraps Up past the
+  top to the bottom item and vice versa, instead of stopping dead.
 
 ### Full changelog
 

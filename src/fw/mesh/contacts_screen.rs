@@ -834,21 +834,21 @@ pub fn dispatch(btn: ButtonId) -> bool {
                 let n = items.len() as u8;
                 match btn {
                     ButtonId::Up => {
-                        if pos > 0 {
-                            b.mode = Mode::Popup {
-                                target,
-                                pos: pos - 1,
-                            };
-                        }
+                        b.mode = Mode::Popup {
+                            target,
+                            // Wrap to the last item instead of doing
+                            // nothing at the top.
+                            pos: if pos > 0 { pos - 1 } else { n.saturating_sub(1) },
+                        };
                         false
                     }
                     ButtonId::Down => {
-                        if pos + 1 < n {
-                            b.mode = Mode::Popup {
-                                target,
-                                pos: pos + 1,
-                            };
-                        }
+                        b.mode = Mode::Popup {
+                            target,
+                            // Wrap to the top instead of doing nothing at
+                            // the bottom.
+                            pos: if pos + 1 < n { pos + 1 } else { 0 },
+                        };
                         false
                     }
                     ButtonId::Fire | ButtonId::Execute => {
@@ -934,15 +934,19 @@ pub fn dispatch(btn: ButtonId) -> bool {
                 let n = FILTERS.len() as u8;
                 match btn {
                     ButtonId::Up => {
-                        if pos > 0 {
-                            b.mode = Mode::FilterPicker { pos: pos - 1 };
-                        }
+                        // Wrap to the last filter instead of doing nothing
+                        // at the top.
+                        b.mode = Mode::FilterPicker {
+                            pos: if pos > 0 { pos - 1 } else { n.saturating_sub(1) },
+                        };
                         false
                     }
                     ButtonId::Down => {
-                        if pos + 1 < n {
-                            b.mode = Mode::FilterPicker { pos: pos + 1 };
-                        }
+                        // Wrap to the top instead of doing nothing at the
+                        // bottom.
+                        b.mode = Mode::FilterPicker {
+                            pos: if pos + 1 < n { pos + 1 } else { 0 },
+                        };
                         false
                     }
                     ButtonId::Fire | ButtonId::Execute => {

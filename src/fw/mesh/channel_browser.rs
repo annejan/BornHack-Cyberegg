@@ -77,12 +77,23 @@ pub fn dispatch(btn: ButtonId) -> bool {
                 ButtonId::Up => {
                     if cursor > 0 {
                         b.state = BrowserState::ChannelList { cursor: cursor - 1 };
+                    } else {
+                        // Wrap to the last channel instead of doing
+                        // nothing at the top.
+                        let count = crate::CACHED_CHANNELS.lock(|c| c.borrow().len() as u8);
+                        if count > 0 {
+                            b.state = BrowserState::ChannelList { cursor: count - 1 };
+                        }
                     }
                 }
                 ButtonId::Down => {
                     let count = crate::CACHED_CHANNELS.lock(|c| c.borrow().len() as u8);
                     if cursor + 1 < count {
                         b.state = BrowserState::ChannelList { cursor: cursor + 1 };
+                    } else if count > 0 {
+                        // Wrap to the top instead of doing nothing at the
+                        // bottom.
+                        b.state = BrowserState::ChannelList { cursor: 0 };
                     }
                 }
                 ButtonId::Execute | ButtonId::Fire => {

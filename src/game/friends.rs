@@ -264,6 +264,51 @@ impl FriendsList {
         }
         list
     }
+
+    /// Rebase every stored tick field so the load survives a reboot.
+    ///
+    /// `now_tick()` is uptime-since-boot (`embassy_time::Instant`), not a
+    /// persisted wall clock — it resets to ~0 on every power cycle. But
+    /// `first_seen_tick`/`last_seen_tick`/`last_boost_tick` are saved as
+    /// absolute tick values from whatever boot session wrote them. Loaded
+    /// as-is after a reboot, every one of those stored values is larger
+    /// than the freshly-reset `now`, so every `now.saturating_sub(stored)`
+    /// display computation saturates to 0 — "Met 0d 0h ago" / "Last seen
+    /// 0d 0h ago" for every friend, forever, until enough continuous
+    /// uptime in the new session outgrows the old stored value (which can
+    /// take as long as the previous session's uptime did). This is the
+    /// same class of problem `GameState::last_update_tick` solves by
+    /// resetting itself to 0 on load — but that works for a single
+    /// delta-accumulator field; here there are several *absolute*
+    /// timestamps across every friend that all need to stay consistent
+    /// with each other and with `now`.
+    ///
+    /// Fix: find the single largest stored tick across every friend (the
+    /// most recent interaction, whichever field it's in) and shift every
+    /// tick field on every friend down by the same amount, so that
+    /// maximum lands exactly on `now` — i.e. assume no time passed while
+    /// the badge was off, exactly like the `GameState` trick assumes.
+    /// This can't recover real elapsed offline time (there's no RTC to
+    /// know it), but it keeps every "ago" value sane and the relative
+    /// ordering between friends (who you met first, who you saw most
+    /// recently) exactly preserved, instead of every friend reading "0
+    /// ago" until the new session's uptime catches up.
+    fn rebase_after_reboot(&mut self, now: u32) {
+        let max_stored = self.friends[..self.count as usize]
+            .iter()
+            .flat_map(|f| [f.first_seen_tick, f.last_seen_tick, f.last_boost_tick])
+            .max()
+            .unwrap_or(0);
+        if max_stored <= now {
+            return; // nothing to do — already consistent with `now`
+        }
+        let rebase = max_stored - now;
+        for f in self.friends[..self.count as usize].iter_mut() {
+            f.first_seen_tick = f.first_seen_tick.saturating_sub(rebase);
+            f.last_seen_tick = f.last_seen_tick.saturating_sub(rebase);
+            f.last_boost_tick = f.last_boost_tick.saturating_sub(rebase);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +337,8 @@ pub async fn init() {
     let ns = kv::namespace("friends");
     let mut buf = [0u8; FRIENDS_SAVE_SIZE];
     if let Ok(n) = ns.get("list", &mut buf).await {
-        let list = FriendsList::from_bytes(&buf[..n]);
+        let mut list = FriendsList::from_bytes(&buf[..n]);
+        list.rebase_after_reboot(super::lifecycle::now_tick());
         defmt::info!("friends: loaded {} known friends", list.count);
         unsafe {
             *FRIENDS.get() = list;
@@ -505,6 +551,58 @@ mod tests {
             wins: 0,
             losses: 0,
         }
+    }
+
+    /// Simulates loading a save written near the end of a long previous
+    /// boot session (large stored ticks) into a freshly-booted `now`
+    /// (small, since `now_tick()` is uptime-since-boot). Without rebasing,
+    /// `now.saturating_sub(stored)` would floor every friend's "ago" at 0.
+    #[test]
+    fn rebase_after_reboot_keeps_relative_order_and_matches_now() {
+        let mut list = FriendsList::new();
+        // Met [1,1] at tick 100, last saw them at 5000 (most recent
+        // interaction in the whole list, in a session that ran to ~5000
+        // ticks of uptime before saving).
+        list.push(friend_record([1, 1], 100, 5000));
+        // Met [2,2] later (tick 4000), only ever boosted/seen at first
+        // meeting since (last_seen_tick mirrors last_boost_tick here).
+        list.push(friend_record([2, 2], 4000, 4000));
+
+        // Reboot: uptime resets, only 3 ticks have elapsed in the new session.
+        list.rebase_after_reboot(3);
+
+        // The single largest stored tick (5000, [1,1]'s last_seen/boost)
+        // should land exactly on the new `now` (3).
+        let f1 = list.find_mut([1, 1]).unwrap();
+        assert_eq!(f1.last_seen_tick, 3);
+        assert_eq!(f1.last_boost_tick, 3);
+        // first_seen_tick (100) was 4900 ticks before the max (5000);
+        // after rebasing by 4997 it saturates to 0 rather than
+        // underflowing — still "a while before now", never wrapping.
+        assert_eq!(f1.first_seen_tick, 0);
+
+        // [2,2]'s tick (4000) was 1000 before the max — same 4997 shift
+        // saturates to 0 too, but the *relative order* (met later than
+        // [1,1]'s original 100 vs [2,2]'s original 4000) doesn't matter
+        // for display purposes once both are this close to `now`; the
+        // key correctness property is nothing reads as "in the future"
+        // or panics, and the most-recent contact reads as "just now".
+        let f2 = list.find_mut([2, 2]).unwrap();
+        assert_eq!(f2.first_seen_tick, 0);
+        assert_eq!(f2.last_seen_tick, 0);
+    }
+
+    #[test]
+    fn rebase_after_reboot_is_a_no_op_when_already_consistent() {
+        let mut list = FriendsList::new();
+        list.push(friend_record([1, 1], 10, 20));
+        // `now` already ahead of every stored tick (normal same-session
+        // case, no reboot happened) — nothing should change.
+        list.rebase_after_reboot(1000);
+        let f = list.find_mut([1, 1]).unwrap();
+        assert_eq!(f.first_seen_tick, 10);
+        assert_eq!(f.last_boost_tick, 20);
+        assert_eq!(f.last_seen_tick, 20);
     }
 
     #[test]

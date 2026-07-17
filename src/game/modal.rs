@@ -600,6 +600,13 @@ pub fn cursor_up() {
     let pos = MODAL_POS.load(Ordering::Relaxed);
     if pos > 0 {
         MODAL_POS.store(pos - 1, Ordering::Relaxed);
+    } else {
+        // Wrap to the last item instead of doing nothing at the top.
+        let kind = ModalKind::from_u8(MODAL_KIND.load(Ordering::Relaxed));
+        let len = kind.items().len() as u8;
+        if len > 0 {
+            MODAL_POS.store(len - 1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -612,6 +619,9 @@ pub fn cursor_down() {
     let pos = MODAL_POS.load(Ordering::Relaxed);
     if pos + 1 < len {
         MODAL_POS.store(pos + 1, Ordering::Relaxed);
+    } else if len > 0 {
+        // Wrap to the top instead of doing nothing at the bottom.
+        MODAL_POS.store(0, Ordering::Relaxed);
     }
 }
 
