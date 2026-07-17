@@ -2,6 +2,69 @@
 
 Embassy-based async firmware for the BornHack CyberÆgg badge (nRF52840).
 
+## What's different in this fork
+
+This is a private fork of the upstream CyberÆgg firmware, extended with
+a few BornPets and mesh features specific to this badge. If you're
+comparing against
+[Ranzbak/bornhack-firmware-2026](https://codeberg.org/Ranzbak/bornhack-firmware-2026),
+here's what changed:
+
+### New BornPets mechanics
+
+- **Weight & Type 2 Diabetes** — a slow, multi-day weight stat. Sustained
+  neglect (skipping Exercise) triggers permanent diabetes, managed with
+  a new **Insulin** treatment.
+- **Food choice** — Feed now offers five options (Salad/Apple/Burger/
+  Pizza/Cake) with different hunger-relief-vs-weight-gain tradeoffs.
+- **Exercise** — a new action that burns off weight.
+- **Ozempic** — a stronger, longer-cooldown weight-loss treatment, usable
+  any time (not gated on being diabetic).
+- **Drinks & Alcoholism** — a second permanent-condition track, parallel
+  to weight/diabetes: choose from Water/Cola/Beer/Wine/Whiskey; sustained
+  heavy drinking triggers permanent alcoholism, managed with **Rehab**.
+- **Health Status view** (Stats menu) — a plain-language readout of
+  Diabetic/Overweight/Alcoholic/Fit%, plus your lifetime mesh Battle
+  win/loss record.
+- **Debug cheat menu** — a hidden Konami-style button sequence
+  (Up Up Down Down Left Right Left Right Fire) opens a testing menu with
+  instant weight/diabetes/drunk/alcoholism triggers and a time-skip, so
+  the multi-day arcs can be tested in seconds.
+
+See [GAME.md](GAME.md) for full player-facing rules.
+
+### Mesh social features
+
+- **Friends** — every badge auto-joins a private `SHDW` mesh channel and
+  broadcasts a presence beacon every 15 minutes. Meeting another SHDW
+  badge for the first time (or again after a few hours apart) boosts
+  your pet's happiness. **Stats > Friends** is a clickable menu, sorted
+  most-recently-seen-first — pick a friend to see how long you've known
+  them, their cached combat stats, and your head-to-head Battle record
+  against them.
+- **Battles** — every pet has Attack/Defense/Speed/HP derived
+  automatically from its existing care stats and traits. Challenge
+  anyone on your Friends list for an instant fight, resolved locally
+  using your live stats plus their most recently broadcast combat
+  snapshot — no waiting on the other badge. Battle HP is entirely
+  separate from real pet health; losing costs nothing but bragging
+  rights. Win/loss records sync between both badges automatically.
+
+### Removed
+
+- **Sponsor slideshow** — removed entirely (boot sequence, menu items,
+  and ~64 KB of PCX assets) to free up on-badge storage for the features
+  above.
+
+### Full changelog
+
+[FEATURES.html](FEATURES.html) has a dated, detailed changelog of every
+change in this fork, including mesh protocol details and a couple of
+real bugs found and fixed along the way (duplicate mesh-packet delivery
+inflating Friends/Battle counts, in particular).
+
+---
+
 ## First use (badge holders)
 
 If you just got a badge, start here:

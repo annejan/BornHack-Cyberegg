@@ -8,6 +8,7 @@ docs
 CLAUDE.MD
 *.txt
 .rules
+MERGE_NOTES.md
 
 # Built flasher artifacts (see firmware/README.md); keep the dir, not the binaries.
 firmware/*
