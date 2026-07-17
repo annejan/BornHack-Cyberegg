@@ -119,6 +119,8 @@ upstream should know about these:
 change in this fork, including mesh protocol details and the full
 writeup of each fix above.
 
+Features, bug corrections etc. In this repository was partly written with A.I.
+
 ---
 
 ## First use (badge holders)
