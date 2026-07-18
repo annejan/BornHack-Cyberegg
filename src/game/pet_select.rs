@@ -212,7 +212,7 @@ where
     if PHASE.load(Ordering::Relaxed) == PHASE_MONEY {
         // Money list — same row layout/idiom as the pet list, just a
         // fixed 3-item roster.
-        const MONEY_LABELS: [&str; 3] = ["With money", "Without money", "Hard (US)"];
+        const MONEY_LABELS: [&str; 3] = ["With money", "Without money", "Hard mode (US)"];
         for (i, label) in MONEY_LABELS.iter().enumerate() {
             draw_row(display, i, label, i == selection)?;
         }
