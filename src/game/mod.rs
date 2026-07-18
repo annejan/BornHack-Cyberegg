@@ -26,7 +26,6 @@ pub mod health_view;
 pub mod input;
 pub mod lifecycle;
 pub mod lightsout;
-pub mod maze;
 pub mod modal;
 pub mod nav;
 pub mod nim;
@@ -39,7 +38,6 @@ pub mod stat_bar;
 pub mod station;
 pub mod tictactoe;
 pub mod traits_view;
-pub mod tripleborn;
 // ── Action feedback toast ────────────────────────────────────────────────────
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
@@ -70,9 +68,8 @@ pub enum Toast {
     /// on cooldown.  The remaining seconds are read from
     /// `STATION_COOLDOWN_SECS` and formatted at draw time.
     StationCooldown = 13,
-    /// Triple Born close-out bonus.  The score earned is read from
-    /// `TRIPLEBORN_BONUS_SCORE` and formatted at draw time.
-    TripleBornBonus = 14,
+    // 14 (TripleBornBonus) removed with the Triple Born mini-game — value
+    // left as a gap so persisted toast codes 15+ keep their meaning.
     Exercise = 15,
     Medicate = 16,
     DebugCheat = 17,
@@ -107,7 +104,6 @@ impl Toast {
             11 => Self::StationInspire,
             12 => Self::StationRest,
             13 => Self::StationCooldown,
-            14 => Self::TripleBornBonus,
             15 => Self::Exercise,
             16 => Self::Medicate,
             17 => Self::DebugCheat,
@@ -139,7 +135,6 @@ impl Toast {
             Toast::StationRest => "Sleep bonus!",
             // Dynamic — handled in the renderer.
             Toast::StationCooldown => "",
-            Toast::TripleBornBonus => "",
             Toast::Exercise => "-weight",
             Toast::Medicate => "+medicated",
             Toast::DebugCheat => "cheat applied",
@@ -168,11 +163,6 @@ static TOAST_STARTED_MS: AtomicU32 = AtomicU32::new(0);
 /// active toast is [`Toast::StationCooldown`].  Set by
 /// [`show_station_cooldown`].
 static STATION_COOLDOWN_SECS: AtomicU16 = AtomicU16::new(0);
-
-/// Triple Born close-out score, read by the renderer when the active
-/// toast is [`Toast::TripleBornBonus`].  Set by
-/// [`show_tripleborn_bonus`].
-static TRIPLEBORN_BONUS_SCORE: AtomicU16 = AtomicU16::new(0);
 
 /// Minimum wall-clock visibility for a toast.  After this elapses the
 /// toast disappears on the next display refresh.  E-paper refreshes
@@ -253,13 +243,6 @@ pub fn show_station_cooldown(secs: u16) {
     show_toast(Toast::StationCooldown);
 }
 
-/// Show the Triple Born close-out toast — formats as `"+N inspired"`
-/// with the score earned during the just-finished game.
-pub fn show_tripleborn_bonus(score: u16) {
-    TRIPLEBORN_BONUS_SCORE.store(score, Ordering::Relaxed);
-    show_toast(Toast::TripleBornBonus);
-}
-
 // ── Layout constants
 // ──────────────────────────────────────────────────────────
 
@@ -338,12 +321,6 @@ where
 
     if pet_select::is_active() {
         return pet_select::draw(display);
-    }
-    if maze::is_active() {
-        return maze::draw(display);
-    }
-    if tripleborn::is_active() {
-        return tripleborn::draw(display);
     }
     if tictactoe::is_active() {
         return tictactoe::draw(display);
@@ -509,10 +486,6 @@ where
             let s = secs % 60;
             let _ = core::fmt::Write::write_fmt(&mut dyn_buf, format_args!("wait {}:{:02}", m, s));
             dyn_buf.as_str()
-        } else if let Toast::TripleBornBonus = toast {
-            let score = TRIPLEBORN_BONUS_SCORE.load(Ordering::Relaxed);
-            let _ = core::fmt::Write::write_fmt(&mut dyn_buf, format_args!("+{} inspired", score));
-            dyn_buf.as_str()
         } else {
             toast.message()
         };
@@ -660,6 +633,9 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Sleeping => "SLEEPING",
             DisplayAnim::Exercising => "EXERCISING",
             DisplayAnim::Medicating => "MEDICATING",
+            DisplayAnim::Drinking => "DRINKING",
+            DisplayAnim::Ozempic => "OZEMPIC",
+            DisplayAnim::Rehab => "REHAB",
             DisplayAnim::Leaving { .. } => "LEAVING",
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",

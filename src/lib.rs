@@ -40,7 +40,7 @@
 //!   NFC tag, LoRa radio, BLE companion, MeshCore plumbing, FAT12 reader,
 //!   ekv-backed kv store, sponsors slideshow.  Embassy only.
 //! - `game` — virtual-pet lifecycle (hunger / inspiration / health /
-//!   tiredness), mini-games (maze, black-hole, NIM, lights-out, tic-tac-toe,
+//!   tiredness), mini-games (black-hole, NIM, lights-out, tic-tac-toe,
 //!   sprite engine), station bonuses, action-feedback toasts.  Gated by `game`.
 //! - `watch` — Casio-style digital + analog clock face, alarms with per-day
 //!   mask and weekly repeats, multi-slot alarm state.  Gated by `watch`.
@@ -135,7 +135,6 @@ pub mod qr_screen;
 pub mod signed_channel;
 pub mod text_entry;
 pub mod text_wrap;
-pub mod token;
 pub mod ui;
 #[cfg(feature = "watch")]
 pub mod watch;
@@ -442,11 +441,6 @@ pub static PM_UNREAD: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "embassy-base")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Fired whenever a new token value arrives (MeshCore or NFC), so the token
-/// screen redraws immediately rather than waiting for the next minute tick.
-#[cfg(feature = "embassy-base")]
-pub static TOKEN_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
 /// Fired when something off-screen needs the display to redraw — e.g.
 /// `game::show_toast` posting a station bonus from the NFC task.
 /// The display loop wakes on this and the active screen renderer
@@ -661,7 +655,6 @@ pub const SCREEN_MAIN: u8 = ScreenId::Main as u8;
 pub const SCREEN_PM: u8 = ScreenId::Pm as u8;
 pub const SCREEN_CHANNEL: u8 = ScreenId::Channel as u8;
 pub const SCREEN_ADVERT: u8 = ScreenId::Advert as u8;
-pub const SCREEN_TOKEN: u8 = ScreenId::Token as u8;
 pub const SCREEN_WATCH: u8 = ScreenId::Watch as u8;
 pub const SCREEN_CALENDAR: u8 = ScreenId::Calendar as u8;
 pub const SCREEN_NAME: u8 = ScreenId::Name as u8;
@@ -743,7 +736,6 @@ where
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "mesh")]
         SCREEN_ADVERT => fw::mesh::contacts_screen::draw(display, bat_prc),
-        SCREEN_TOKEN => token::draw(display),
         #[cfg(feature = "watch")]
         SCREEN_WATCH => watch::draw(display),
         #[cfg(feature = "watch")]

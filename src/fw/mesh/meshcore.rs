@@ -58,6 +58,16 @@ fn update_cached_channels(loaded: &heapless::Vec<LoadedChannel, { channels::NUM_
         let mut list = cell.borrow_mut();
         list.clear();
         for ch in loaded {
+            // Hide the private "SHDW" game channel from the on-screen channel
+            // browser — it carries only BornPets friend beacons / battle
+            // results (see `crate::game::friends` / `crate::game::battle`),
+            // never human chat, so it has no place in the user-facing list.
+            // It stays fully live for TX/RX: crypto uses `loaded_channels`,
+            // not this UI mirror. Same "present but not shown" idea as the
+            // `#blinkme` easter-egg channel, which is never a stored slot.
+            if ch.slot_idx == channels::SHDW_SLOT {
+                continue;
+            }
             let name_str = core::str::from_utf8(&ch.name)
                 .unwrap_or("?")
                 .trim_end_matches('\0');
@@ -646,11 +656,6 @@ async fn push_grp_txt(
                 None => ("", text),
             };
 
-            // Token screen: if the message text starts with "token:" (after
-            // stripping any "sender: " prefix), store the value.
-            if let Some(token_val) = msg_str.strip_prefix("token:") {
-                crate::token::set_token(token_val);
-            }
             crate::LORA_MSG_SIGNAL.signal(());
 
             // Add to the channel message ring for the on-device browser.
@@ -1330,11 +1335,6 @@ async fn try_handle_txt_msg(
         super::sounds::play(super::sounds::SoundEvent::PmReceived);
         crate::PM_SIGNAL.signal(());
         crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
-
-        // Token screen: direct messages starting with "token:" also work.
-        if let Some(token_val) = text.strip_prefix("token:") {
-            crate::token::set_token(token_val);
-        }
 
         if !crate::BLE_CONNECTED.load(core::sync::atomic::Ordering::Relaxed) {
             crate::fw::led::set_led(&crate::fw::led::LED_BLUE, crate::fw::led::LedState::Blink);

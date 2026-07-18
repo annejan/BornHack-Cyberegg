@@ -141,8 +141,6 @@ impl ModalKind {
                 Item::LightsOut,
                 Item::BlackHole,
                 Item::Nim,
-                Item::Maze,
-                Item::TripleBorn,
                 Item::BornJeweled,
                 Item::Cancel,
             ],
@@ -201,8 +199,6 @@ enum Item {
     LightsOut,
     BlackHole,
     Nim,
-    Maze,
-    TripleBorn,
     BornJeweled,
     PlayMusic,
     /// Buzzer song index passed to [`crate::fw::buzzer::play`].
@@ -243,8 +239,6 @@ impl Item {
             Self::LightsOut => "Lights Out",
             Self::BlackHole => "Black Hole",
             Self::Nim => "Nim",
-            Self::Maze => "Maze",
-            Self::TripleBorn => "Triple Born",
             Self::BornJeweled => "BornJeweled",
             Self::PlayMusic => "Play music",
             Self::Song(crate::SONG_STARTUP_INDEX) => "Startup",
@@ -308,8 +302,6 @@ impl Item {
             Self::LightsOut => stats.can_play_lightsout,
             Self::BlackHole => stats.can_play_blackhole,
             Self::Nim => stats.can_play_nim,
-            Self::Maze => stats.can_play_maze,
-            Self::TripleBorn => stats.can_play_tripleborn,
             Self::BornJeweled => stats.can_play_bornjeweled,
             Self::Hibernate => true,
             Self::WakeUp => false,
@@ -346,8 +338,6 @@ impl Item {
             Self::LightsOut => stats.cooldown_lightsout,
             Self::BlackHole => stats.cooldown_blackhole,
             Self::Nim => stats.cooldown_nim,
-            Self::Maze => stats.cooldown_maze,
-            Self::TripleBorn => stats.cooldown_tripleborn,
             Self::BornJeweled => stats.cooldown_bornjeweled,
             _ => 0,
         }
@@ -487,14 +477,6 @@ impl Item {
             }
             Self::Nim => {
                 super::nim::open();
-                close();
-            }
-            Self::Maze => {
-                super::maze::open();
-                close();
-            }
-            Self::TripleBorn => {
-                super::tripleborn::open();
                 close();
             }
             Self::BornJeweled => {

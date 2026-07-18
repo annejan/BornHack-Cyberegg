@@ -21,18 +21,17 @@ pub enum ScreenId {
     Pm = 2,
     Channel = 3,
     Advert = 4,
-    Token = 5,
-    Watch = 6,
-    Calendar = 7,
-    Name = 8,
-    Qr = 9,
+    Watch = 5,
+    Calendar = 6,
+    Name = 7,
+    Qr = 8,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 9;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -619,12 +618,6 @@ impl<const M: usize> DisplayState<M> {
             } else {
                 return;
             }
-        }
-
-        // Token screen consumes Up/Down to scroll the collected-token
-        // list. Left/Right (screen nav) and Cancel fall through.
-        if self.active_screen == crate::SCREEN_TOKEN && crate::token::dispatch(btn) {
-            return;
         }
 
         // Clock screen consumes Up/Down to toggle digital/analog face.
@@ -2228,11 +2221,6 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
-static TOKEN_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Token",
-    kind: MenuItemKind::Action(|| {}),
-}];
-
 #[cfg(feature = "watch")]
 static WATCH_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "Clock",
@@ -2309,7 +2297,6 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         ScreenState::new(&PM_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
-        ScreenState::new(&TOKEN_ITEMS),
         #[cfg(feature = "watch")]
         ScreenState::new(&WATCH_ITEMS),
         #[cfg(feature = "watch")]
@@ -2319,7 +2306,6 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
     ],
     [
         GAME_ENABLED,
-        true,
         true,
         true,
         true,

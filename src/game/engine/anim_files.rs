@@ -53,6 +53,9 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         // for every pet.
         DisplayAnim::Exercising => 0x23,
         DisplayAnim::Medicating => 0x24,
+        DisplayAnim::Drinking => 0x25,
+        DisplayAnim::Ozempic => 0x26,
+        DisplayAnim::Rehab => 0x27,
     }
 }
 

@@ -44,6 +44,12 @@ pub enum DisplayAnim {
     Sleeping,
     Exercising,
     Medicating,
+    /// Drinking a beverage (Beer / Wine / Whiskey / Water / Cola).
+    Drinking,
+    /// Receiving an Ozempic injection.
+    Ozempic,
+    /// Rehab / sobering-up treatment.
+    Rehab,
 
     // ── Group 3: leaving danger ─────────────────────────────────────
     /// Pet is about to leave.  `maxed_count` (1–4) indicates urgency.
@@ -106,13 +112,10 @@ impl GameState {
                 Action::Relax => DisplayAnim::Relaxing,
                 Action::Play => DisplayAnim::Playing,
                 Action::Exercise => DisplayAnim::Exercising,
-                // Ozempic and Rehab share the Medicating animation —
-                // all three are "receiving treatment" moments, and
-                // there's no separate sprite art for each.
-                Action::Medicate | Action::Ozempic | Action::Rehab => DisplayAnim::Medicating,
-                // Drink shares the Feeding animation — both are
-                // "consuming something" moments.
-                Action::Drink => DisplayAnim::Feeding,
+                Action::Medicate => DisplayAnim::Medicating,
+                Action::Ozempic => DisplayAnim::Ozempic,
+                Action::Rehab => DisplayAnim::Rehab,
+                Action::Drink => DisplayAnim::Drinking,
             };
         }
         if self.is_sleeping {

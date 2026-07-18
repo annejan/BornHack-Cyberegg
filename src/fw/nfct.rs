@@ -43,8 +43,13 @@ const REVERT_SECS: u64 = 10;
 enum WriteOutcome {
     /// Not a completed NDEF write (SELECT/READ, or an incomplete message).
     None,
-    /// A `token:` push, station command, or unrecognised write — reverts
-    /// to the persisted profile after [`REVERT_SECS`].
+    /// A station command — reverts to the persisted profile after
+    /// [`REVERT_SECS`].  Only constructed with the `nfc-plaintext-station`
+    /// feature; the match arm stays so the revert path compiles either way.
+    #[cfg_attr(
+        not(all(feature = "game", feature = "nfc-plaintext-station")),
+        allow(dead_code)
+    )]
     Transient,
     /// A `set:<url>` text record or a vCard record — becomes the new
     /// persisted default broadcast.
@@ -469,14 +474,10 @@ fn handle_ndef_write(ndef_buf: &mut [u8; NDEF_BUF_LEN]) -> WriteOutcome {
         return WriteOutcome::SetProfile;
     }
 
-    // Transient writes: a `token:` push, or (opt-in, unsigned) a station
-    // phrase. These do NOT persist — the broadcast reverts to the profile.
+    // Transient writes: an (opt-in, unsigned) station phrase. These do NOT
+    // persist — the broadcast reverts to the profile.
+    #[cfg(all(feature = "game", feature = "nfc-plaintext-station"))]
     if let Some(text) = crate::nfc_ndef::find_text_record(&ndef_buf[2..2 + nlen]) {
-        if text.strip_prefix(b"token:".as_slice()).is_some() {
-            try_apply_token(text);
-            return WriteOutcome::Transient;
-        }
-        #[cfg(all(feature = "game", feature = "nfc-plaintext-station"))]
         if let Some(toast) = crate::game::station::apply(text) {
             crate::game::show_toast(toast);
             return WriteOutcome::Transient;
@@ -486,17 +487,6 @@ fn handle_ndef_write(ndef_buf: &mut [u8; NDEF_BUF_LEN]) -> WriteOutcome {
     // Everything else — a URL tag, vCard, Wi-Fi config, any other record —
     // becomes the persisted broadcast profile, stored verbatim.
     WriteOutcome::SetProfile
-}
-
-/// If `text` starts with `"token:"`, forward the suffix to the token
-/// screen.  Silently no-ops on non-token text or invalid UTF-8.
-fn try_apply_token(text: &[u8]) {
-    const PREFIX: &[u8] = b"token:";
-    if let Some(value_bytes) = text.strip_prefix(PREFIX)
-        && let Ok(value) = core::str::from_utf8(value_bytes)
-    {
-        crate::token::set_token(value);
-    }
 }
 
 #[derive(Debug, Clone, defmt::Format)]

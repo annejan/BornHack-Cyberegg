@@ -204,10 +204,24 @@ impl BattleResultMsg {
     }
 }
 
-/// Broadcast a `BattleResultMsg` on the SHDW channel. No-op under builds
-/// without the `mesh` feature (e.g. the plain host `simulator` build,
-/// which still enables `game`) — mirrors `friends::local_device_id`'s
-/// embassy-base/not split.
+/// Broadcast a `BattleResultMsg` on the SHDW channel as a **zero-hop**
+/// packet — `RouteType::Direct` with an empty path (`path_len == 0`),
+/// the MeshCore `sendZeroHop` form. Standard MeshCore repeaters will
+/// **not** re-broadcast it (their relay path only forwards flood packets,
+/// and a direct packet with no next-hop hash matches no repeater), so a
+/// battle result only reaches badges within direct LoRa range and never
+/// floods the wider mesh. In-range nodes still decrypt and dispatch it
+/// normally — channel reception does not depend on the route type.
+///
+/// Trade-off: the target only syncs its side of the tally if it is in
+/// range at the moment we send; there is no mesh relay carrying the
+/// result to an out-of-range friend later. That fits a battle (two badges
+/// meeting), and the challenger's own side is always recorded locally in
+/// [`challenge`] regardless.
+///
+/// No-op under builds without the `mesh` feature (e.g. the plain host
+/// `simulator` build, which still enables `game`) — mirrors
+/// `friends::local_device_id`'s embassy-base/not split.
 #[cfg(feature = "mesh")]
 fn broadcast_result(msg: &BattleResultMsg) {
     let mut data: heapless::Vec<u8, { crate::fw::mesh::MAX_CHANNEL_DATA }> = heapless::Vec::new();
@@ -216,7 +230,10 @@ fn broadcast_result(msg: &BattleResultMsg) {
         crate::fw::mesh::TxChannelData {
             channel_idx: crate::fw::mesh::channels::SHDW_SLOT,
             data_type: PET_BATTLE_TYPE,
-            path_len: crate::fw::mesh::contacts::OUT_PATH_UNKNOWN,
+            // path_len == 0 → send_grp_data emits RouteType::Direct with an
+            // empty path (zero-hop). Not OUT_PATH_UNKNOWN (0xFF), which
+            // would select flood routing.
+            path_len: 0,
             path: heapless::Vec::new(),
             data,
         },
@@ -294,11 +311,12 @@ pub async fn on_battle_result(data: &[u8]) {
         return;
     }
 
-    // A flood broadcast can echo back to its own sender (e.g. bounced by
-    // a nearby repeater) — if we're also the challenger named in this
-    // packet, we already recorded our side synchronously in `challenge`
-    // the moment we sent it, so ignore it here rather than double-count
-    // ourselves as our own opponent.
+    // Defensive: if we're somehow the challenger named in this packet, we
+    // already recorded our side synchronously in `challenge` the moment we
+    // sent it, so ignore it here rather than double-count ourselves as our
+    // own opponent. (The result is now sent zero-hop, so a repeater echo
+    // back to the sender shouldn't happen — but the guard is cheap and
+    // keeps us correct regardless of routing.)
     if msg.challenger_id == super::friends::local_device_id() {
         return;
     }

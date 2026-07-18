@@ -154,8 +154,6 @@ pub enum MiniGame {
     LightsOut,
     BlackHole,
     Nim,
-    Maze,
-    TripleBorn,
     BornJeweled,
 }
 
@@ -246,8 +244,6 @@ pub struct GameState {
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
     pub cooldown_nim: u16,
-    pub cooldown_maze: u16,
-    pub cooldown_tripleborn: u16,
     pub cooldown_bornjeweled: u16,
 
     // Interval counters (track ticks since last interval fire).
@@ -354,8 +350,6 @@ impl GameState {
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
             cooldown_nim: 0,
-            cooldown_maze: 0,
-            cooldown_tripleborn: 0,
             cooldown_bornjeweled: 0,
 
             drained_interval_counter: 0,
@@ -916,8 +910,6 @@ impl GameState {
         self.cooldown_lightsout = self.cooldown_lightsout.saturating_sub(d);
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
         self.cooldown_nim = self.cooldown_nim.saturating_sub(d);
-        self.cooldown_maze = self.cooldown_maze.saturating_sub(d);
-        self.cooldown_tripleborn = self.cooldown_tripleborn.saturating_sub(d);
         self.cooldown_bornjeweled = self.cooldown_bornjeweled.saturating_sub(d);
     }
 
@@ -1348,8 +1340,6 @@ impl GameState {
             MiniGame::LightsOut => self.cooldown_lightsout = MINIGAME_COOLDOWN(),
             MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN(),
             MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN(),
-            MiniGame::Maze => self.cooldown_maze = MINIGAME_COOLDOWN(),
-            MiniGame::TripleBorn => self.cooldown_tripleborn = MINIGAME_COOLDOWN(),
             MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
         }
     }
@@ -1645,8 +1635,6 @@ pub struct PetStats {
     pub can_play_lightsout: bool,
     pub can_play_blackhole: bool,
     pub can_play_nim: bool,
-    pub can_play_maze: bool,
-    pub can_play_tripleborn: bool,
     pub can_play_bornjeweled: bool,
     /// Whether a mesh Battle can be started right now (cooldown-gated,
     /// same shape as the mini-game `can_play_*` flags above). Does not
@@ -1670,8 +1658,6 @@ pub struct PetStats {
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
     pub cooldown_nim: u16,
-    pub cooldown_maze: u16,
-    pub cooldown_tripleborn: u16,
     pub cooldown_bornjeweled: u16,
     pub cooldown_battle: u16,
 
@@ -1745,8 +1731,6 @@ impl GameState {
             can_play_lightsout: awake_active && action_idle && self.cooldown_lightsout == 0,
             can_play_blackhole: awake_active && action_idle && self.cooldown_blackhole == 0,
             can_play_nim: awake_active && action_idle && self.cooldown_nim == 0,
-            can_play_maze: awake_active && action_idle && self.cooldown_maze == 0,
-            can_play_tripleborn: awake_active && action_idle && self.cooldown_tripleborn == 0,
             can_play_bornjeweled: awake_active && action_idle && self.cooldown_bornjeweled == 0,
             can_battle: awake_active && action_idle && self.cooldown_battle == 0,
 
@@ -1763,8 +1747,6 @@ impl GameState {
             cooldown_lightsout: self.cooldown_lightsout,
             cooldown_blackhole: self.cooldown_blackhole,
             cooldown_nim: self.cooldown_nim,
-            cooldown_maze: self.cooldown_maze,
-            cooldown_tripleborn: self.cooldown_tripleborn,
             cooldown_bornjeweled: self.cooldown_bornjeweled,
             cooldown_battle: self.cooldown_battle,
 
@@ -2057,8 +2039,6 @@ impl GameState {
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
             cooldown_nim: 0,
-            cooldown_maze: 0,
-            cooldown_tripleborn: 0,
             cooldown_bornjeweled: 0,
             drained_interval_counter,
             miserable_interval_counter,
