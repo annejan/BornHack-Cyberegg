@@ -205,6 +205,13 @@ pub struct GameState {
     pub wins: u16,
     pub losses: u16,
 
+    // HEX currency — belongs to the current pet, resets with a new egg.
+    /// HEX balance. New egg starts at 100.
+    pub money: u32,
+    /// Chosen at pet creation, persisted. When `false` the whole money
+    /// layer is inert: no HEX display, no prices, no rewards.
+    pub money_enabled: bool,
+
     // Action state.
     pub active_action: Option<Action>,
     /// Which food is being eaten during an in-progress `Action::Feed`.
@@ -331,6 +338,9 @@ impl GameState {
 
             wins: 0,
             losses: 0,
+
+            money: 100,
+            money_enabled: true,
 
             active_action: None,
             active_food: None,
@@ -1816,6 +1826,37 @@ impl GameState {
         }
         self.cooldown_battle = BATTLE_COOLDOWN();
     }
+
+    /// Credit `delta` HEX, saturating at `u32::MAX`. Immediately flags the
+    /// state for save (see `request_save`) rather than waiting for the
+    /// next 15-minute save interval — same immediate-persist pattern as
+    /// pet name / hibernate, since a HEX balance is worth protecting from
+    /// an unlucky reboot right after being earned.
+    pub fn add_money(&mut self, delta: u32) {
+        self.money = self.money.saturating_add(delta);
+        self.request_save();
+    }
+
+    /// Debit `price` HEX if affordable. Returns `true` and flags the state
+    /// for immediate save on success; returns `false` and leaves `money`
+    /// unchanged (no save) if the balance is insufficient. Callers are
+    /// expected to have already gated the action on `can_afford()` so this
+    /// should normally succeed, but the check is repeated here so the
+    /// balance can never go negative.
+    pub fn spend_money(&mut self, price: u32) -> bool {
+        if self.money >= price {
+            self.money -= price;
+            self.request_save();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether the current balance covers `price`.
+    pub fn can_afford(&self, price: u32) -> bool {
+        self.money >= price
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1823,7 +1864,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 96;
+pub const SAVE_SIZE: usize = 101;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -1907,7 +1948,10 @@ impl GameState {
         w16!(self.wins);
         w16!(self.losses);
         w16!(self.cooldown_battle);
-        // Total: 96 bytes.
+        // HEX money (5 bytes).
+        w32!(self.money);
+        w8!(self.money_enabled as u8);
+        // Total: 101 bytes.
         b
     }
 
@@ -1994,6 +2038,8 @@ impl GameState {
         let wins = r16!();
         let losses = r16!();
         let cooldown_battle = r16!();
+        let money = r32!();
+        let money_enabled = r8!() != 0;
 
         Some(Self {
             pet_kind,
@@ -2019,6 +2065,8 @@ impl GameState {
             generation,
             wins,
             losses,
+            money,
+            money_enabled,
             active_action,
             // Not persisted — see the field doc on `active_food`.
             active_food: None,
@@ -2232,7 +2280,7 @@ mod overweight_diabetes_tests {
     use super::*;
 
     /// New fields round-trip through `to_bytes`/`from_bytes` at the new
-    /// 96-byte `SAVE_SIZE`.
+    /// 101-byte `SAVE_SIZE`.
     #[test]
     fn save_round_trip_includes_new_fields() {
         let mut state = GameState::new_egg(42, PetKind::Cat);
@@ -2243,10 +2291,12 @@ mod overweight_diabetes_tests {
         state.wins = 3;
         state.losses = 1;
         state.cooldown_battle = 77;
+        state.money = 12345;
+        state.money_enabled = false;
 
         let bytes = state.to_bytes();
         assert_eq!(bytes.len(), SAVE_SIZE);
-        assert_eq!(SAVE_SIZE, 96);
+        assert_eq!(SAVE_SIZE, 101);
 
         let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
         assert_eq!(restored.weight, 41000);
@@ -2257,6 +2307,63 @@ mod overweight_diabetes_tests {
         assert_eq!(restored.losses, 1);
         assert_eq!(restored.cooldown_battle, 77);
         assert_eq!(restored.pet_kind.id(), PetKind::Cat.id());
+        assert_eq!(restored.money, 12345);
+        assert!(!restored.money_enabled);
+    }
+
+    /// A fresh egg starts with the Stage-1 HEX default: 100 balance, money
+    /// mode enabled.
+    #[test]
+    fn new_egg_starts_with_100_hex_and_money_enabled() {
+        let state = GameState::new_egg(1, PetKind::Bartholomeus);
+        assert_eq!(state.money, 100);
+        assert!(state.money_enabled);
+    }
+
+    /// `add_money` saturates at `u32::MAX` instead of overflowing/panicking,
+    /// and every credit flags the state for an immediate save (so the new
+    /// balance survives a reboot right after being earned rather than
+    /// waiting for the next 15-minute save interval).
+    #[test]
+    fn add_money_saturates_and_flags_save() {
+        let mut state = GameState::new_egg(2, PetKind::Bartholomeus);
+        state.money = u32::MAX - 5;
+        state.add_money(100);
+        assert_eq!(state.money, u32::MAX);
+
+        state.mark_saved();
+        assert!(!state.needs_save());
+        state.add_money(1);
+        assert!(state.needs_save(), "add_money should request an immediate save");
+    }
+
+    /// Spending succeeds and debits the balance when the pet can afford it.
+    #[test]
+    fn spend_money_succeeds_when_affordable() {
+        let mut state = GameState::new_egg(3, PetKind::Bartholomeus);
+        state.money = 50;
+        assert!(state.spend_money(30));
+        assert_eq!(state.money, 20);
+    }
+
+    /// Spending fails and leaves the balance unchanged when the pet can't
+    /// afford it — money should never go negative (or wrap, in u32 terms).
+    #[test]
+    fn spend_money_fails_when_too_poor() {
+        let mut state = GameState::new_egg(4, PetKind::Bartholomeus);
+        state.money = 10;
+        assert!(!state.spend_money(30));
+        assert_eq!(state.money, 10);
+    }
+
+    /// `can_afford` reports the exact threshold: affordable at the price,
+    /// not affordable one HEX above it.
+    #[test]
+    fn can_afford_reports_threshold() {
+        let mut state = GameState::new_egg(5, PetKind::Bartholomeus);
+        state.money = 20;
+        assert!(state.can_afford(20));
+        assert!(!state.can_afford(21));
     }
 
     /// Every `Action` variant must round-trip through the persisted byte
