@@ -904,6 +904,23 @@ fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
     let _ = write!(buf, "EPD speed: {}%", v);
 }
 
+/// Read-only row: e-paper panel variant + which waveform LUT is live.
+/// e.g. `SSD1675B custom LUT` or `SSD1675A OTP LUT`.
+fn fmt_epd_panel_info(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    let panel = if crate::fw::epd::EPD_VARIANT_IS_B.load(Ordering::Relaxed) {
+        "SSD1675B"
+    } else {
+        "SSD1675A"
+    };
+    let lut = if crate::fw::epd::EPD_CUSTOM_LUT_ACTIVE.load(Ordering::Relaxed) {
+        "custom LUT"
+    } else {
+        "OTP LUT"
+    };
+    let _ = write!(buf, "{} {}", panel, lut);
+}
+
 fn action_epd_lut_speed_inc() {
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
     let new = v.saturating_add(EPD_LUT_SPEED_STEP).min(EPD_LUT_SPEED_MAX);
@@ -1823,7 +1840,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    11 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1879,6 +1896,12 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             format: fmt_epd_temp_bias,
             inc: action_epd_temp_bias_inc,
             dec: action_epd_temp_bias_dec,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: fmt_epd_panel_info,
         },
     },
     #[cfg(feature = "watch")]
