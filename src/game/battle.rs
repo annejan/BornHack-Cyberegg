@@ -56,10 +56,9 @@ pub fn derive_combat_stats(
 ) -> CombatStats {
     let care_pct = (stats.hunger as u16
         + stats.tired as u16
-        + stats.inspired as u16
         + stats.healthy as u16
         + stats.happy as u16)
-        / 5;
+        / 4;
     let fit_pct = stats.weight as u16;
 
     let mut attack = 20u16 + (curiosity_pct as u16 * 5 / 10) + (care_pct * 3 / 10);

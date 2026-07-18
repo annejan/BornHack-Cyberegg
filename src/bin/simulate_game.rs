@@ -44,10 +44,6 @@ fn optimal_act(state: &mut GameState) {
         state.heal();
         return;
     }
-    if state.drained > 32768 {
-        state.relax();
-        return;
-    }
     if state.miserable > 32768 {
         state.play();
         return;
@@ -94,10 +90,6 @@ impl Policy for PerfectNoFeed {
             state.heal();
             return;
         }
-        if state.drained > 32768 {
-            state.relax();
-            return;
-        }
         if state.miserable > 32768 {
             state.play();
         }
@@ -125,10 +117,6 @@ impl Policy for PerfectNoHeal {
         }
         if state.hunger > 32768 {
             state.feed(FoodKind::Apple);
-            return;
-        }
-        if state.drained > 32768 {
-            state.relax();
             return;
         }
         if state.miserable > 32768 {
@@ -217,10 +205,6 @@ impl Policy for NightOwlPolicy {
         }
         if state.sick > 32768 {
             state.heal();
-            return;
-        }
-        if state.drained > 32768 {
-            state.relax();
             return;
         }
         if state.miserable > 32768 {
@@ -325,7 +309,6 @@ struct SimResult {
     hunger: u16,
     tired: u16,
     miserable: u16,
-    drained: u16,
     sick: u16,
     action_count: u32,
 }
@@ -363,7 +346,6 @@ fn run_profile(policy: &dyn Policy, seed: u64, max_days: u32) -> SimResult {
         hunger: state.hunger,
         tired: state.tired,
         miserable: state.miserable,
-        drained: state.drained,
         sick: state.sick,
         action_count,
     }
@@ -402,7 +384,7 @@ fn main() {
     ];
 
     println!(
-        "{:<22} {:>4} {:>7} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7}",
+        "{:<22} {:>4} {:>7} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7}",
         "Profile",
         "Left",
         "Day",
@@ -411,12 +393,11 @@ fn main() {
         "Hunger",
         "Tired",
         "Miser",
-        "Drained",
         "Sick",
         "Attn#",
         "Attn/h"
     );
-    println!("{}", "─".repeat(110));
+    println!("{}", "─".repeat(102));
 
     for policy in &policies {
         let r = run_profile(policy.as_ref(), seed, max_days);
@@ -432,7 +413,7 @@ fn main() {
         };
 
         println!(
-            "{:<22} {:>4} {:>7} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7.2}",
+            "{:<22} {:>4} {:>7} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7} {:>6} {:>7.2}",
             r.name,
             if r.left { "YES" } else { "no" },
             day_str,
@@ -441,7 +422,6 @@ fn main() {
             r.hunger,
             r.tired,
             r.miserable,
-            r.drained,
             r.sick,
             r.action_count,
             attn_per_hour,

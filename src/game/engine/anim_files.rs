@@ -30,15 +30,12 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         DisplayAnim::CriticalSick => 0x03,
         DisplayAnim::CriticalTired => 0x04,
         DisplayAnim::CriticalHungry => 0x05,
-        DisplayAnim::CriticalDrained => 0x06,
         DisplayAnim::WarningSick => 0x07,
         DisplayAnim::WarningTired => 0x08,
         DisplayAnim::WarningHungry => 0x09,
-        DisplayAnim::WarningDrained => 0x0A,
         DisplayAnim::WarningMiserable => 0x0B,
         DisplayAnim::Feeding => 0x0C,
         DisplayAnim::Healing => 0x0D,
-        DisplayAnim::Relaxing => 0x0E,
         DisplayAnim::Playing => 0x0F,
         DisplayAnim::Sleeping => 0x10,
         DisplayAnim::Leaving { .. } => 0x11,
@@ -56,6 +53,7 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         DisplayAnim::Drinking => 0x25,
         DisplayAnim::Ozempic => 0x26,
         DisplayAnim::Rehab => 0x27,
+        DisplayAnim::OnlyPets => 0x28,
     }
 }
 
