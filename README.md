@@ -15,7 +15,7 @@ here's what changed:
 - **Weight & Type 2 Diabetes** — a slow, multi-day weight stat. Sustained
   neglect (skipping Exercise) triggers permanent diabetes, managed with
   a new **Insulin** treatment.
-- **Food choice** — Feed now offers five options (Salad/Apple/Burger/
+- **Food choice** — Feed now offers five options (Salad/Apple/Frikandel/
   Pizza/Cake) with different hunger-relief-vs-weight-gain tradeoffs.
 - **Exercise** — a new action that burns off weight.
 - **Ozempic** — a stronger, longer-cooldown weight-loss treatment, usable

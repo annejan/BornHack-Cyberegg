@@ -100,7 +100,7 @@ impl ModalKind {
             Self::Feed => &[
                 Item::FeedFood(super::engine::FoodKind::Salad),
                 Item::FeedFood(super::engine::FoodKind::Apple),
-                Item::FeedFood(super::engine::FoodKind::Burger),
+                Item::FeedFood(super::engine::FoodKind::Frikandel),
                 Item::FeedFood(super::engine::FoodKind::Pizza),
                 Item::FeedFood(super::engine::FoodKind::Cake),
                 Item::Cancel,
