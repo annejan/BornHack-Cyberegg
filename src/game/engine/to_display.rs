@@ -39,7 +39,6 @@ pub enum DisplayAnim {
     // ── Group 2: active actions (mutually exclusive) ────────────────
     Feeding,
     Healing,
-    Relaxing,
     Playing,
     Sleeping,
     Exercising,
@@ -50,6 +49,8 @@ pub enum DisplayAnim {
     Ozempic,
     /// Rehab / sobering-up treatment.
     Rehab,
+    /// "Only pets" work/hobby action.
+    OnlyPets,
 
     // ── Group 3: leaving danger ─────────────────────────────────────
     /// Pet is about to leave.  `maxed_count` (1–4) indicates urgency.
@@ -61,13 +62,11 @@ pub enum DisplayAnim {
     CriticalSick,
     CriticalTired,
     CriticalHungry,
-    CriticalDrained,
 
     // ── Group 5: warning stats (attention needed soon) ──────────────
     WarningSick,
     WarningTired,
     WarningHungry,
-    WarningDrained,
     WarningMiserable,
 
     // ── Group 6: content ────────────────────────────────────────────
@@ -81,7 +80,6 @@ pub enum DisplayAnim {
 fn count_maxed(state: &GameState) -> u8 {
     (state.hunger == STAT_MAX()) as u8
         + (state.tired == STAT_MAX()) as u8
-        + (state.drained == STAT_MAX()) as u8
         + (state.sick == STAT_MAX()) as u8
 }
 
@@ -109,13 +107,13 @@ impl GameState {
             return match action {
                 Action::Feed => DisplayAnim::Feeding,
                 Action::Heal => DisplayAnim::Healing,
-                Action::Relax => DisplayAnim::Relaxing,
                 Action::Play => DisplayAnim::Playing,
                 Action::Exercise => DisplayAnim::Exercising,
                 Action::Medicate => DisplayAnim::Medicating,
                 Action::Ozempic => DisplayAnim::Ozempic,
                 Action::Rehab => DisplayAnim::Rehab,
                 Action::Drink => DisplayAnim::Drinking,
+                Action::OnlyPets => DisplayAnim::OnlyPets,
             };
         }
         if self.is_sleeping {
@@ -139,7 +137,7 @@ impl GameState {
         // `lifecycle::is_diabetic_unmedicated()` / `game::mod` render.
 
         // ── Group 4: critical stats ─────────────────────────────────
-        // Ranked by recovery difficulty: sick > tired > hungry > drained.
+        // Ranked by recovery difficulty: sick > tired > hungry.
         if self.sick > SICK_TRIGGER_TIRED() {
             return DisplayAnim::CriticalSick;
         }
@@ -148,9 +146,6 @@ impl GameState {
         }
         if self.hunger > SICK_TRIGGER_HUNGER() {
             return DisplayAnim::CriticalHungry;
-        }
-        if self.drained > SICK_TRIGGER_DRAINED() {
-            return DisplayAnim::CriticalDrained;
         }
 
         // ── Group 5: warning stats ──────────────────────────────────
@@ -164,9 +159,6 @@ impl GameState {
         if self.hunger > WARNING_HUNGER() {
             return DisplayAnim::WarningHungry;
         }
-        if self.drained > WARNING_DRAINED() {
-            return DisplayAnim::WarningDrained;
-        }
         if self.miserable > WARNING_MISERABLE() {
             return DisplayAnim::WarningMiserable;
         }
@@ -175,7 +167,6 @@ impl GameState {
         // Happy when all stats are well below warning thresholds.
         if self.hunger < WARNING_HUNGER() / 2
             && self.tired < WARNING_TIRED() / 2
-            && self.drained < WARNING_DRAINED() / 2
             && self.sick < WARNING_SICK() / 2
             && self.miserable < WARNING_MISERABLE() / 2
         {

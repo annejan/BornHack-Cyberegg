@@ -88,13 +88,46 @@ pub enum Phase {
     Gone,
 }
 
+/// HEX earned by the "Only pets" hobby (non-broke) branch.
+pub const ONLYPETS_HOBBY_REWARD: u32 = 20;
+/// HEX earned for winning a mini-game.
+pub const MINIGAME_HEX_REWARD: u32 = 15;
+/// HEX earned for winning a mesh Battle.
+pub const BATTLE_HEX_REWARD: u32 = 20;
+/// Happiness change per Play / Only-pets completion = 30% of STAT_MAX (65535).
+pub const HAPPINESS_STEP: u16 = 19660;
+/// HEX cost of the basic Play action.
+pub const PLAY_HEX_COST: u32 = 10;
+/// HEX cost of a drug dose (Ozempic / Medicate / Rehab).
+pub const DRUG_HEX_COST: u32 = 15;
+/// HEX cost of an Aspirine (the Heal action).
+pub const ASPIRINE_HEX_COST: u32 = 1;
+/// Hard-mode multiplier on medication (Insulin / Ozempic).
+pub const MEDICATION_HARD_MULT: u32 = 3;
+/// Hard-mode multiplier on Rehab.
+pub const REHAB_HARD_MULT: u32 = 5;
+
+/// HEX cost of a medication dose (Insulin / Ozempic) in the current mode.
+pub fn medication_price(hard: bool) -> u32 {
+    DRUG_HEX_COST * if hard { MEDICATION_HARD_MULT } else { 1 }
+}
+
+/// HEX cost of Rehab in the current mode.
+pub fn rehab_price(hard: bool) -> u32 {
+    DRUG_HEX_COST * if hard { REHAB_HARD_MULT } else { 1 }
+}
+/// Below this balance the pet is "broke" — Only-pets forces the low-pay,
+/// happiness-draining work branch instead of the hobby branch.
+pub const BROKE_THRESHOLD: u32 = 20;
+/// HEX from the Only-pets BROKE (forced-work) branch.
+pub const ONLYPETS_BROKE_REWARD: u32 = 100;
+
 /// Active user action (mutually exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
 pub enum Action {
     Feed,
     Heal,
-    Relax,
     Play,
     Exercise,
     Medicate,
@@ -105,6 +138,9 @@ pub enum Action {
     /// Treatment for alcoholism — gated on `alcoholic`, mirrors
     /// `Medicate`'s relationship to diabetic.
     Rehab,
+    /// "Only pets" work/hobby action — earns HEX. Only reachable when
+    /// `money_enabled`. See `GameState::only_pets`.
+    OnlyPets,
 }
 
 impl Action {
@@ -115,17 +151,22 @@ impl Action {
     /// on the read side that only covered the first 4 variants,
     /// silently discarding an in-progress Exercise/Medicate/Ozempic/
     /// Drink/Rehab action on every reboot that landed mid-action.
+    ///
+    /// `2` is a deliberate gap — it used to be `Relax`, removed along
+    /// with the `drained` stat it existed to relieve. Left unassigned
+    /// (rather than renumbering Play onward) so old persisted bytes for
+    /// the other actions keep meaning across the removal.
     fn to_u8(self) -> u8 {
         match self {
             Action::Feed => 0,
             Action::Heal => 1,
-            Action::Relax => 2,
             Action::Play => 3,
             Action::Exercise => 4,
             Action::Medicate => 5,
             Action::Ozempic => 6,
             Action::Drink => 7,
             Action::Rehab => 8,
+            Action::OnlyPets => 9,
         }
     }
 
@@ -133,13 +174,14 @@ impl Action {
         match v {
             0 => Some(Action::Feed),
             1 => Some(Action::Heal),
-            2 => Some(Action::Relax),
+            2 => None, // formerly Relax — see `to_u8`.
             3 => Some(Action::Play),
             4 => Some(Action::Exercise),
             5 => Some(Action::Medicate),
             6 => Some(Action::Ozempic),
             7 => Some(Action::Drink),
             8 => Some(Action::Rehab),
+            9 => Some(Action::OnlyPets),
             _ => None,
         }
     }
@@ -166,7 +208,6 @@ pub struct GameState {
     // Primary stats (0 = best, STAT_MAX() = worst).
     pub hunger: u16,
     pub tired: u16,
-    pub drained: u16,
     pub sick: u16,
     pub miserable: u16,
     pub weight: u16,
@@ -205,6 +246,19 @@ pub struct GameState {
     pub wins: u16,
     pub losses: u16,
 
+    // HEX currency — belongs to the current pet, resets with a new egg.
+    /// HEX balance. New egg starts at 100.
+    pub money: u32,
+    /// Chosen at pet creation, persisted. When `false` the whole money
+    /// layer is inert: no HEX display, no prices, no rewards.
+    pub money_enabled: bool,
+    /// Chosen at pet creation, persisted. Only meaningful when
+    /// `money_enabled` is true (hard mode implies money is on) — changes
+    /// PRICE AMOUNTS only (healthy food, medication, rehab all cost
+    /// more); it never changes which actions are gated on affordability,
+    /// that's still entirely `money_enabled`'s job.
+    pub hard_mode: bool,
+
     // Action state.
     pub active_action: Option<Action>,
     /// Which food is being eaten during an in-progress `Action::Feed`.
@@ -218,6 +272,10 @@ pub struct GameState {
     pub action_ticks_remaining: u8,
     pub cooldown_feed: u16,
     pub cooldown_heal: u16,
+    /// No longer settable by anything (the `Relax` action it gated was
+    /// removed along with the `drained` stat it existed to relieve) —
+    /// kept purely so the persisted save layout doesn't shift. Always
+    /// 0 for any pet created after this change.
     pub cooldown_relax: u16,
     pub cooldown_play: u16,
     pub cooldown_exercise: u16,
@@ -245,9 +303,12 @@ pub struct GameState {
     pub cooldown_blackhole: u16,
     pub cooldown_nim: u16,
     pub cooldown_bornjeweled: u16,
+    /// Cooldown after completing "Only pets". Transient (not persisted),
+    /// same policy as the mini-game cooldowns above — rebooting mid-cooldown
+    /// just makes the action available again a little early.
+    pub cooldown_onlypets: u16,
 
     // Interval counters (track ticks since last interval fire).
-    drained_interval_counter: u32,
     miserable_interval_counter: u32,
     tired_passive_counter: u32,
 
@@ -305,7 +366,6 @@ impl GameState {
 
             hunger: 0,
             tired: 0,
-            drained: 0,
             sick: (STAT_MAX() - vitality) / 4,
             miserable: 0,
             weight: 0,
@@ -332,6 +392,10 @@ impl GameState {
             wins: 0,
             losses: 0,
 
+            money: 100,
+            money_enabled: true,
+            hard_mode: false,
+
             active_action: None,
             active_food: None,
             active_drink: None,
@@ -351,8 +415,8 @@ impl GameState {
             cooldown_blackhole: 0,
             cooldown_nim: 0,
             cooldown_bornjeweled: 0,
+            cooldown_onlypets: 0,
 
-            drained_interval_counter: 0,
             miserable_interval_counter: 0,
             tired_passive_counter: 0,
 
@@ -406,20 +470,15 @@ fn interval_fires(delta: u32, counter: u32, interval: u32) -> (u32, u32) {
     (fires, new_counter)
 }
 
-/// Count how many of the four primary stats exceed the 60% threshold.
+/// Count how many of the three primary stats exceed the 60% threshold.
 fn count_above_60(state: &GameState) -> u32 {
     let t = MISERABLE_STAT_THRESHOLD();
-    (state.hunger > t) as u32
-        + (state.tired > t) as u32
-        + (state.drained > t) as u32
-        + (state.sick > t) as u32
+    (state.hunger > t) as u32 + (state.tired > t) as u32 + (state.sick > t) as u32
 }
 
 /// Check if any stat triggers sick condition decay.
 fn sick_condition_active(state: &GameState) -> bool {
-    state.hunger > SICK_TRIGGER_HUNGER()
-        || state.tired > SICK_TRIGGER_TIRED()
-        || state.drained > SICK_TRIGGER_DRAINED()
+    state.hunger > SICK_TRIGGER_HUNGER() || state.tired > SICK_TRIGGER_TIRED()
 }
 
 /// Extra `sick` accrual for `delta` ticks while diabetic and unmedicated.
@@ -463,7 +522,6 @@ fn curiosity_modifier(curiosity: u16) -> u16 {
 fn count_maxed(state: &GameState) -> usize {
     (state.hunger == STAT_MAX()) as usize
         + (state.tired == STAT_MAX()) as usize
-        + (state.drained == STAT_MAX()) as usize
         + (state.sick == STAT_MAX()) as usize
 }
 
@@ -555,8 +613,8 @@ impl GameState {
     ///   50 %).  This is a flat cap and does *not* add to the per-stat severe
     ///   penalties.
     /// * Each primary stat above its critical threshold → an additional −20 %
-    ///   cap on Happy (= +20 % miserable per critical stat).  Up to 4 stats can
-    ///   be critical, so the severe path can push miserable to 80 %.
+    ///   cap on Happy (= +20 % miserable per critical stat).  Up to 3 stats can
+    ///   be critical, so the severe path can push miserable to 60 %.
     /// * The two rules are evaluated independently and the **higher** floor
     ///   wins (= lower Happy displayed).
     ///
@@ -568,7 +626,6 @@ impl GameState {
     fn apply_miserable_floor(&mut self) {
         let critical = (self.hunger > SICK_TRIGGER_HUNGER()) as u32
             + (self.tired > SICK_TRIGGER_TIRED()) as u32
-            + (self.drained > SICK_TRIGGER_DRAINED()) as u32
             + (self.sick > SICK_TRIGGER_TIRED()) as u32;
         let floor_severe = (critical * (STAT_MAX() as u32 / 5)).min(STAT_MAX() as u32) as u16;
         let floor_leaving = if self.phase == Phase::Leaving {
@@ -635,15 +692,6 @@ impl GameState {
                 0
             };
 
-        // Current drained interval.
-        let drained_interval = if self.cooldown_relax > 0 {
-            u32::MAX
-        } else if self.miserable >= MISERABLE_DRAIN_THRESHOLD() {
-            DRAINED_INTERVAL_MISERABLE()
-        } else {
-            DRAINED_INTERVAL()
-        };
-
         // Current miserable interval.
         let mis_interval = if self.cooldown_play > 0 {
             u32::MAX
@@ -660,12 +708,6 @@ impl GameState {
         let t60 = MISERABLE_STAT_THRESHOLD();
         m = m.min(ticks_up(self.hunger, t60, hunger_rate));
         m = m.min(ticks_up(self.tired, t60, tired_rate));
-        m = m.min(ticks_interval(
-            self.drained,
-            t60,
-            DRAINED_AMOUNT(),
-            drained_interval,
-        ));
         // Sick rate mirrors apply_awake_decay/apply_sleep_decay's sick term
         // exactly (base + condition + diabetes + alcoholism, suppressed
         // during Heal) so the boundary estimate can't undershoot the real
@@ -723,24 +765,12 @@ impl GameState {
 
         m = m.min(ticks_up(self.hunger, SICK_TRIGGER_HUNGER(), hunger_rate));
         m = m.min(ticks_up(self.tired, SICK_TRIGGER_TIRED(), tired_rate));
-        m = m.min(ticks_interval(
-            self.drained,
-            SICK_TRIGGER_DRAINED(),
-            DRAINED_AMOUNT(),
-            drained_interval,
-        ));
 
-        // ── Miserable thresholds (change hunger/tired/drained rates) ──
+        // ── Miserable thresholds (change hunger/tired rates) ──
 
         m = m.min(ticks_interval(
             self.miserable,
             MISERABLE_BOOST_THRESHOLD(),
-            MISERABLE_AMOUNT(),
-            mis_interval,
-        ));
-        m = m.min(ticks_interval(
-            self.miserable,
-            MISERABLE_DRAIN_THRESHOLD(),
             MISERABLE_AMOUNT(),
             mis_interval,
         ));
@@ -750,12 +780,6 @@ impl GameState {
         m = m.min(ticks_up(self.hunger, STAT_MAX(), hunger_rate));
         m = m.min(ticks_up(self.tired, STAT_MAX(), tired_rate));
         m = m.min(ticks_up(self.sick, STAT_MAX(), sick_rate_approx));
-        m = m.min(ticks_interval(
-            self.drained,
-            STAT_MAX(),
-            DRAINED_AMOUNT(),
-            drained_interval,
-        ));
 
         // ── Cooldown expiry (suppression ends → rate resumes) ──
 
@@ -764,9 +788,6 @@ impl GameState {
         }
         if self.cooldown_heal > 0 {
             m = m.min(self.cooldown_heal as u32);
-        }
-        if self.cooldown_relax > 0 {
-            m = m.min(self.cooldown_relax as u32);
         }
         if self.cooldown_play > 0 {
             m = m.min(self.cooldown_play as u32);
@@ -819,20 +840,14 @@ impl GameState {
                 Action::Feed => {
                     let food = self.active_food.unwrap_or(FoodKind::Apple);
                     let hunger_relief = food.scale_hunger_relief(FEED_HUNGER_RELIEF());
-                    let drained_relief = food.scale_drained_relief(FEED_DRAINED_RELIEF());
                     let weight_gain = food.scale_weight_gain(FEED_WEIGHT_GAIN());
                     self.hunger = sat_sub(self.hunger, mul_dt(hunger_relief, t as u32));
-                    self.drained = sat_sub(self.drained, mul_dt(drained_relief, t as u32));
                     // Overfeeding compounds the passive weight gain — how much
                     // depends entirely on what was eaten (see FoodKind).
                     self.weight = sat_add(self.weight, mul_dt(weight_gain, t as u32));
                 }
                 Action::Heal => {
                     self.sick = sat_sub(self.sick, mul_dt(HEAL_SICK_RELIEF(), t as u32));
-                }
-                Action::Relax => {
-                    self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF(), t as u32));
-                    self.hunger = sat_add(self.hunger, mul_dt(RELAX_HUNGER_COST(), t as u32));
                 }
                 Action::Play => {
                     let cm = curiosity_modifier(self.curiosity);
@@ -842,31 +857,26 @@ impl GameState {
                     };
                     self.hunger = sat_add(self.hunger, apply(PLAY_HUNGER_COST()));
                     self.tired = sat_add(self.tired, apply(PLAY_TIRED_COST()));
-                    self.drained = sat_add(self.drained, apply(PLAY_DRAINED_COST()));
                 }
                 Action::Exercise => {
                     self.weight = sat_sub(self.weight, mul_dt(EXERCISE_WEIGHT_RELIEF(), t as u32));
                     self.tired = sat_add(self.tired, mul_dt(EXERCISE_TIRED_COST(), t as u32));
                     self.hunger = sat_add(self.hunger, mul_dt(EXERCISE_HUNGER_COST(), t as u32));
-                    self.drained =
-                        sat_sub(self.drained, mul_dt(EXERCISE_DRAINED_RELIEF(), t as u32));
                 }
                 Action::Medicate => {}
                 Action::Ozempic => {
                     self.weight = sat_sub(self.weight, mul_dt(OZEMPIC_WEIGHT_RELIEF(), t as u32));
                     self.hunger = sat_sub(self.hunger, mul_dt(OZEMPIC_HUNGER_RELIEF(), t as u32));
-                    self.drained = sat_add(self.drained, mul_dt(OZEMPIC_DRAINED_COST(), t as u32));
                 }
                 Action::Drink => {
                     let drink = self.active_drink.unwrap_or(DrinkKind::Beer);
                     let drunk_gain = drink.scale_drunk_gain(DRINK_DRUNK_GAIN());
-                    let drained_relief = drink.scale_drained_relief(DRINK_DRAINED_RELIEF());
                     let weight_gain = drink.scale_weight_gain(DRINK_WEIGHT_GAIN());
                     self.drunk = sat_add(self.drunk, mul_dt(drunk_gain, t as u32));
-                    self.drained = sat_sub(self.drained, mul_dt(drained_relief, t as u32));
                     self.weight = sat_add(self.weight, mul_dt(weight_gain, t as u32));
                 }
                 Action::Rehab => {}
+                Action::OnlyPets => {}
             }
 
             if self.action_ticks_remaining == 0 {
@@ -874,9 +884,10 @@ impl GameState {
                 match action {
                     Action::Feed => self.cooldown_feed = FEED_COOLDOWN(),
                     Action::Heal => self.cooldown_heal = HEAL_COOLDOWN(),
-                    Action::Relax => self.cooldown_relax = RELAX_COOLDOWN(),
                     Action::Play => {
-                        self.miserable = 0; // play zeroes miserable on completion
+                        // +30% happiness (was: zero it out entirely) — see
+                        // `HAPPINESS_STEP` doc comment.
+                        self.miserable = sat_sub(self.miserable, HAPPINESS_STEP);
                         self.cooldown_play = PLAY_COOLDOWN();
                     }
                     Action::Exercise => self.cooldown_exercise = EXERCISE_COOLDOWN(),
@@ -884,6 +895,24 @@ impl GameState {
                     Action::Ozempic => self.cooldown_ozempic = OZEMPIC_COOLDOWN(),
                     Action::Drink => self.cooldown_drink = DRINK_COOLDOWN(),
                     Action::Rehab => self.cooldown_rehab = REHAB_COOLDOWN(),
+                    Action::OnlyPets => {
+                        // Only reachable when `money_enabled` (see `only_pets()`
+                        // doc comment) — balance is unchanged during the
+                        // animation, so checking it here is equivalent to
+                        // checking it at start time.
+                        if self.money_enabled {
+                            if self.money < BROKE_THRESHOLD {
+                                // Broke: forced work — big pay, but happiness drops.
+                                self.add_money(ONLYPETS_BROKE_REWARD);
+                                self.miserable = sat_add(self.miserable, HAPPINESS_STEP);
+                            } else {
+                                // Has money: hobby — small pay, happiness rises.
+                                self.add_money(ONLYPETS_HOBBY_REWARD);
+                                self.miserable = sat_sub(self.miserable, HAPPINESS_STEP);
+                            }
+                        }
+                        self.cooldown_onlypets = PLAY_COOLDOWN();
+                    }
                 }
                 self.active_action = None;
                 self.active_food = None;
@@ -911,6 +940,7 @@ impl GameState {
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
         self.cooldown_nim = self.cooldown_nim.saturating_sub(d);
         self.cooldown_bornjeweled = self.cooldown_bornjeweled.saturating_sub(d);
+        self.cooldown_onlypets = self.cooldown_onlypets.saturating_sub(d);
     }
 
     /// Apply stat decay while awake for `delta` ticks.
@@ -946,21 +976,6 @@ impl GameState {
             self.tired_passive_counter = new_counter;
             if fires > 0 {
                 self.tired = sat_sub(self.tired, mul_dt(TIRED_PASSIVE_RECOVERY(), fires));
-            }
-        }
-
-        // Drained (suppressed during relax action + cooldown).
-        if self.cooldown_relax == 0 && self.active_action != Some(Action::Relax) {
-            let interval = if self.miserable >= MISERABLE_DRAIN_THRESHOLD() {
-                DRAINED_INTERVAL_MISERABLE()
-            } else {
-                DRAINED_INTERVAL()
-            };
-            let (fires, new_counter) =
-                interval_fires(delta, self.drained_interval_counter, interval);
-            self.drained_interval_counter = new_counter;
-            if fires > 0 {
-                self.drained = sat_add(self.drained, mul_dt(DRAINED_AMOUNT(), fires));
             }
         }
 
@@ -1029,9 +1044,6 @@ impl GameState {
         if self.tired == 0 {
             self.is_sleeping = false;
         }
-
-        // Drained recovers during sleep.
-        self.drained = sat_sub(self.drained, mul_dt(DRAINED_SLEEP_RECOVERY(), delta));
 
         // Hunger still decays during sleep, and faster than awake —
         // sleeping is restorative, not free.
@@ -1157,6 +1169,11 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_feed > 0 {
             return false;
         }
+        // Affordability gate: reject the action outright when unaffordable
+        // rather than letting it proceed for free (see `spend_money`).
+        if self.money_enabled && !self.spend_money(food.hex_price(self.hard_mode)) {
+            return false; // can't afford — action rejected
+        }
         self.active_action = Some(Action::Feed);
         self.active_food = Some(food);
         self.action_ticks_remaining = FEED_DURATION();
@@ -1171,21 +1188,12 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_heal > 0 {
             return false;
         }
+        // Aspirine costs HEX; Stage 5 affordability gate (reject if broke).
+        if self.money_enabled && !self.spend_money(ASPIRINE_HEX_COST) {
+            return false;
+        }
         self.active_action = Some(Action::Heal);
         self.action_ticks_remaining = HEAL_DURATION();
-        true
-    }
-
-    /// Start the relax action.
-    pub fn relax(&mut self) -> bool {
-        if !self.is_alive() || self.is_sleeping {
-            return false;
-        }
-        if self.active_action.is_some() || self.cooldown_relax > 0 {
-            return false;
-        }
-        self.active_action = Some(Action::Relax);
-        self.action_ticks_remaining = RELAX_DURATION();
         true
     }
 
@@ -1197,7 +1205,24 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_play > 0 {
             return false;
         }
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(PLAY_HEX_COST) {
+            return false; // can't afford — action rejected
+        }
         self.active_action = Some(Action::Play);
+        self.action_ticks_remaining = PLAY_DURATION();
+        true
+    }
+
+    /// Send the pet to "Only pets" to earn HEX. Timed action like Play.
+    pub fn only_pets(&mut self) -> bool {
+        if !self.is_alive() || self.is_sleeping {
+            return false;
+        }
+        if self.active_action.is_some() || self.cooldown_onlypets > 0 {
+            return false;
+        }
+        self.active_action = Some(Action::OnlyPets);
         self.action_ticks_remaining = PLAY_DURATION();
         true
     }
@@ -1229,6 +1254,10 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_medicate > 0 {
             return false;
         }
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(medication_price(self.hard_mode)) {
+            return false; // can't afford — action rejected
+        }
         self.active_action = Some(Action::Medicate);
         self.action_ticks_remaining = MEDICATE_DURATION();
         true
@@ -1244,6 +1273,10 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_ozempic > 0 {
             return false;
         }
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(medication_price(self.hard_mode)) {
+            return false; // can't afford — action rejected
+        }
         self.active_action = Some(Action::Ozempic);
         self.action_ticks_remaining = OZEMPIC_DURATION();
         true
@@ -1257,6 +1290,10 @@ impl GameState {
         }
         if self.active_action.is_some() || self.cooldown_drink > 0 {
             return false;
+        }
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(drink.hex_price()) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Drink);
         self.active_drink = Some(drink);
@@ -1275,6 +1312,10 @@ impl GameState {
         }
         if self.active_action.is_some() || self.cooldown_rehab > 0 {
             return false;
+        }
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(rehab_price(self.hard_mode)) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Rehab);
         self.action_ticks_remaining = REHAB_DURATION();
@@ -1322,18 +1363,14 @@ impl GameState {
         true
     }
 
-    /// Award inspiration (reduce drained) as a reward for winning the
-    /// given mini-game.  Starts only that game's cooldown so other
+    /// Award the mini-game win reward: HEX (when `money_enabled`) plus the
+    /// per-game cooldown.  Starts only that game's cooldown so other
     /// mini-games stay available — encourages variety.  Also bumps
     /// hunger: playing burns calories.
     pub fn award_inspiration(&mut self, game: MiniGame) {
         if self.phase != Phase::Active {
             return;
         }
-        // Equivalent to ~2 ticks of relax relief, as a one-shot bonus.
-        // mul_dt widens to u32 and clamps, so a large configured relief value
-        // can't overflow the u16 multiply.
-        self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF(), 2));
         self.hunger = sat_add(self.hunger, MINIGAME_HUNGER_COST());
         match game {
             MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN(),
@@ -1342,17 +1379,9 @@ impl GameState {
             MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN(),
             MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
         }
-    }
-
-    /// Add a variable-magnitude bonus to inspiration (reduces
-    /// `drained` by `amount`).  No cooldown set, no hunger cost —
-    /// callers pair this with [`Self::award_inspiration`] for those.
-    /// Used by Triple Born to scale the on-close bonus by score.
-    pub fn add_drained_relief(&mut self, amount: u16) {
-        if self.phase != Phase::Active {
-            return;
+        if self.money_enabled {
+            self.add_money(MINIGAME_HEX_REWARD);
         }
-        self.drained = sat_sub(self.drained, amount);
     }
 
     /// Total hours the pet has spent in hibernation during its life.
@@ -1572,8 +1601,6 @@ pub struct PetStats {
     pub hunger: u8,
     /// How rested the pet is (100 = alert, 0 = exhausted).
     pub tired: u8,
-    /// How inspired/energized the pet is (100 = energized, 0 = burnt out).
-    pub inspired: u8,
     /// How healthy the pet is (100 = healthy, 0 = critically ill).
     pub healthy: u8,
     /// How happy the pet is (100 = happy, 0 = miserable).
@@ -1608,6 +1635,16 @@ pub struct PetStats {
     pub wins: u16,
     pub losses: u16,
 
+    /// Current HEX balance. Only meaningful (displayed/priced) when
+    /// `money_enabled`.
+    pub money: u32,
+    /// Whether the money layer is active for this pet — gates HEX display,
+    /// pricing, and menu affordability checks.
+    pub money_enabled: bool,
+    /// Whether Hard (US) prices are in effect. Only meaningful when
+    /// `money_enabled` is true — see `GameState::hard_mode`.
+    pub hard_mode: bool,
+
     /// Currently active action (if any).
     pub active_action: Option<Action>,
     /// Ticks remaining on the active action.
@@ -1616,8 +1653,11 @@ pub struct PetStats {
     /// Action availability (true = can be started right now).
     pub can_feed: bool,
     pub can_heal: bool,
-    pub can_relax: bool,
     pub can_play: bool,
+    /// "Only pets" — same in-progress-action/cooldown gating as Play.
+    /// Only ever surfaced in the menu when `money_enabled`, but this flag
+    /// itself doesn't know about money — the menu gates visibility.
+    pub can_only_pets: bool,
     pub can_exercise: bool,
     /// Only true once `diabetic` is set — administering medication to a
     /// non-diabetic pet is a no-op.
@@ -1647,8 +1687,8 @@ pub struct PetStats {
     /// show the exact remaining time on a disabled menu row.
     pub cooldown_feed: u16,
     pub cooldown_heal: u16,
-    pub cooldown_relax: u16,
     pub cooldown_play: u16,
+    pub cooldown_onlypets: u16,
     pub cooldown_exercise: u16,
     pub cooldown_medicate: u16,
     pub cooldown_ozempic: u16,
@@ -1692,7 +1732,6 @@ impl GameState {
         PetStats {
             hunger: to_display_pct(self.hunger),
             tired: to_display_pct(self.tired),
-            inspired: to_display_pct(self.drained),
             healthy: to_display_pct(self.sick),
             happy: to_display_pct(self.miserable),
             weight: to_display_pct(self.weight),
@@ -1710,13 +1749,17 @@ impl GameState {
             wins: self.wins,
             losses: self.losses,
 
+            money: self.money,
+            money_enabled: self.money_enabled,
+            hard_mode: self.hard_mode,
+
             active_action: self.active_action,
             action_ticks_remaining: self.action_ticks_remaining,
 
             can_feed: awake_active && action_idle && self.cooldown_feed == 0,
             can_heal: awake_active && action_idle && self.cooldown_heal == 0,
-            can_relax: awake_active && action_idle && self.cooldown_relax == 0,
             can_play: awake_active && action_idle && self.cooldown_play == 0,
+            can_only_pets: awake_active && action_idle && self.cooldown_onlypets == 0,
             can_exercise: awake_active && action_idle && self.cooldown_exercise == 0,
             can_medicate: awake_active
                 && action_idle
@@ -1736,8 +1779,8 @@ impl GameState {
 
             cooldown_feed: self.cooldown_feed,
             cooldown_heal: self.cooldown_heal,
-            cooldown_relax: self.cooldown_relax,
             cooldown_play: self.cooldown_play,
+            cooldown_onlypets: self.cooldown_onlypets,
             cooldown_exercise: self.cooldown_exercise,
             cooldown_medicate: self.cooldown_medicate,
             cooldown_ozempic: self.cooldown_ozempic,
@@ -1815,6 +1858,40 @@ impl GameState {
             self.losses = self.losses.saturating_add(1);
         }
         self.cooldown_battle = BATTLE_COOLDOWN();
+        if won && self.money_enabled {
+            self.add_money(BATTLE_HEX_REWARD);
+        }
+    }
+
+    /// Credit `delta` HEX, saturating at `u32::MAX`. Immediately flags the
+    /// state for save (see `request_save`) rather than waiting for the
+    /// next 15-minute save interval — same immediate-persist pattern as
+    /// pet name / hibernate, since a HEX balance is worth protecting from
+    /// an unlucky reboot right after being earned.
+    pub fn add_money(&mut self, delta: u32) {
+        self.money = self.money.saturating_add(delta);
+        self.request_save();
+    }
+
+    /// Debit `price` HEX if affordable. Returns `true` and flags the state
+    /// for immediate save on success; returns `false` and leaves `money`
+    /// unchanged (no save) if the balance is insufficient. Callers are
+    /// expected to have already gated the action on `can_afford()` so this
+    /// should normally succeed, but the check is repeated here so the
+    /// balance can never go negative.
+    pub fn spend_money(&mut self, price: u32) -> bool {
+        if self.money >= price {
+            self.money -= price;
+            self.request_save();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether the current balance covers `price`.
+    pub fn can_afford(&self, price: u32) -> bool {
+        self.money >= price
     }
 }
 
@@ -1822,15 +1899,26 @@ impl GameState {
 // Serialization — manual, no serde, fixed-size
 // ---------------------------------------------------------------------------
 
-/// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 96;
+/// Format version stamped into byte 0 of every save. Bump this whenever
+/// the field layout below changes so an old-layout blob from a prior
+/// firmware fails the guard in `from_bytes` (→ clean fresh egg) instead
+/// of being silently reinterpreted with the new offsets. v1 was the
+/// original unversioned 96-byte layout; v2 adds this byte + HEX money.
+pub const SAVE_FORMAT_VERSION: u8 = 2;
+
+/// Serialized size of GameState in bytes (1 version byte + 96 fields).
+pub const SAVE_SIZE: usize = 97;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
     #[allow(unused_assignments)]
     pub fn to_bytes(&self) -> [u8; SAVE_SIZE] {
         let mut b = [0u8; SAVE_SIZE];
-        let mut i = 0;
+        // Byte 0 = format version so a differently-laid-out save written by
+        // another firmware is rejected by from_bytes instead of silently
+        // misparsed with these offsets. Fields start at index 1.
+        b[0] = SAVE_FORMAT_VERSION;
+        let mut i = 1;
 
         macro_rules! w16 {
             ($v:expr) => {
@@ -1851,10 +1939,9 @@ impl GameState {
             };
         }
 
-        // Stats (10 bytes).
+        // Stats (8 bytes).
         w16!(self.hunger);
         w16!(self.tired);
-        w16!(self.drained);
         w16!(self.sick);
         w16!(self.miserable);
         // Weight (2 bytes).
@@ -1885,8 +1972,7 @@ impl GameState {
         w16!(self.cooldown_ozempic);
         w16!(self.cooldown_drink);
         w16!(self.cooldown_rehab);
-        // Interval counters (12 bytes).
-        w32!(self.drained_interval_counter);
+        // Interval counters (8 bytes).
         w32!(self.miserable_interval_counter);
         w32!(self.tired_passive_counter);
         // Overweight/drunk duration counters (8 bytes).
@@ -1907,7 +1993,12 @@ impl GameState {
         w16!(self.wins);
         w16!(self.losses);
         w16!(self.cooldown_battle);
-        // Total: 96 bytes.
+        // HEX money (5 bytes).
+        w32!(self.money);
+        w8!(self.money_enabled as u8);
+        // Hard mode (1 byte).
+        w8!(self.hard_mode as u8);
+        // Total: 97 bytes (1 version + 96 fields).
         b
     }
 
@@ -1915,14 +2006,16 @@ impl GameState {
     /// Returns `None` if the buffer is too short.
     #[allow(unused_assignments)]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        // Only accept current fixed-size saves. Pre-pet_kind (65-byte) saves
-        // are intentionally ignored — there is no fielded old firmware to
-        // migrate from, so a short/legacy blob is treated as "no save" and the
-        // player starts fresh rather than loading a half-parsed state.
-        if b.len() != SAVE_SIZE {
+        // Accept only current-version, current-size saves. Any other blob —
+        // a pre-pet_kind (65-byte) save, or a same-size but differently-laid-
+        // out save from another firmware (e.g. the pre-money 96-byte layout
+        // that dropped `drained`) — fails the version+length guard and is
+        // treated as "no save" so the player starts fresh, rather than being
+        // silently reinterpreted with the wrong field offsets.
+        if b.len() != SAVE_SIZE || b[0] != SAVE_FORMAT_VERSION {
             return None;
         }
-        let mut i = 0;
+        let mut i = 1;
 
         macro_rules! r16 {
             () => {{
@@ -1948,7 +2041,6 @@ impl GameState {
 
         let hunger = r16!();
         let tired = r16!();
-        let drained = r16!();
         let sick = r16!();
         let miserable = r16!();
         let weight = r16!();
@@ -1979,7 +2071,6 @@ impl GameState {
         let cooldown_ozempic = r16!();
         let cooldown_drink = r16!();
         let cooldown_rehab = r16!();
-        let drained_interval_counter = r32!();
         let miserable_interval_counter = r32!();
         let tired_passive_counter = r32!();
         let overweight_ticks = r32!();
@@ -1994,12 +2085,14 @@ impl GameState {
         let wins = r16!();
         let losses = r16!();
         let cooldown_battle = r16!();
+        let money = r32!();
+        let money_enabled = r8!() != 0;
+        let hard_mode = r8!() != 0;
 
         Some(Self {
             pet_kind,
             hunger,
             tired,
-            drained,
             sick,
             miserable,
             weight,
@@ -2019,6 +2112,9 @@ impl GameState {
             generation,
             wins,
             losses,
+            money,
+            money_enabled,
+            hard_mode,
             active_action,
             // Not persisted — see the field doc on `active_food`.
             active_food: None,
@@ -2040,7 +2136,8 @@ impl GameState {
             cooldown_blackhole: 0,
             cooldown_nim: 0,
             cooldown_bornjeweled: 0,
-            drained_interval_counter,
+            // Not persisted — see the field doc on `cooldown_onlypets`.
+            cooldown_onlypets: 0,
             miserable_interval_counter,
             tired_passive_counter,
             is_sleeping,
@@ -2231,8 +2328,8 @@ impl PetRealm {
 mod overweight_diabetes_tests {
     use super::*;
 
-    /// New fields round-trip through `to_bytes`/`from_bytes` at the new
-    /// 96-byte `SAVE_SIZE`.
+    /// New fields round-trip through `to_bytes`/`from_bytes` at the
+    /// versioned 97-byte `SAVE_SIZE` (1 version byte + 96 fields).
     #[test]
     fn save_round_trip_includes_new_fields() {
         let mut state = GameState::new_egg(42, PetKind::Cat);
@@ -2243,10 +2340,14 @@ mod overweight_diabetes_tests {
         state.wins = 3;
         state.losses = 1;
         state.cooldown_battle = 77;
+        state.money = 12345;
+        state.money_enabled = false;
+        state.hard_mode = true;
 
         let bytes = state.to_bytes();
         assert_eq!(bytes.len(), SAVE_SIZE);
-        assert_eq!(SAVE_SIZE, 96);
+        assert_eq!(SAVE_SIZE, 97);
+        assert_eq!(bytes[0], SAVE_FORMAT_VERSION);
 
         let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
         assert_eq!(restored.weight, 41000);
@@ -2257,30 +2358,109 @@ mod overweight_diabetes_tests {
         assert_eq!(restored.losses, 1);
         assert_eq!(restored.cooldown_battle, 77);
         assert_eq!(restored.pet_kind.id(), PetKind::Cat.id());
+        assert_eq!(restored.money, 12345);
+        assert!(!restored.money_enabled);
+        assert!(restored.hard_mode);
+    }
+
+    /// A save blob with a different layout/version is rejected (→ fresh egg)
+    /// rather than silently misparsed. Regression guard for the pre-money
+    /// 96-byte layout (which dropped `drained` and kept SAVE_SIZE at 96)
+    /// being reinterpreted with the new field offsets and corrupting the pet.
+    #[test]
+    fn old_or_wrong_version_save_is_rejected() {
+        // A valid current save round-trips.
+        let good = GameState::new_egg(7, PetKind::Slug).to_bytes();
+        assert!(GameState::from_bytes(&good).is_some());
+
+        // Old-layout blob one byte short of the versioned size — rejected on length.
+        let old = [0xABu8; SAVE_SIZE - 1];
+        assert!(GameState::from_bytes(&old).is_none());
+
+        // Right size but wrong version byte — rejected on version.
+        let mut wrong_ver = good;
+        wrong_ver[0] = SAVE_FORMAT_VERSION.wrapping_add(1);
+        assert!(GameState::from_bytes(&wrong_ver).is_none());
+    }
+
+    /// A fresh egg starts with the Stage-1 HEX default: 100 balance, money
+    /// mode enabled.
+    #[test]
+    fn new_egg_starts_with_100_hex_and_money_enabled() {
+        let state = GameState::new_egg(1, PetKind::Bartholomeus);
+        assert_eq!(state.money, 100);
+        assert!(state.money_enabled);
+    }
+
+    /// `add_money` saturates at `u32::MAX` instead of overflowing/panicking,
+    /// and every credit flags the state for an immediate save (so the new
+    /// balance survives a reboot right after being earned rather than
+    /// waiting for the next 15-minute save interval).
+    #[test]
+    fn add_money_saturates_and_flags_save() {
+        let mut state = GameState::new_egg(2, PetKind::Bartholomeus);
+        state.money = u32::MAX - 5;
+        state.add_money(100);
+        assert_eq!(state.money, u32::MAX);
+
+        state.mark_saved();
+        assert!(!state.needs_save());
+        state.add_money(1);
+        assert!(state.needs_save(), "add_money should request an immediate save");
+    }
+
+    /// Spending succeeds and debits the balance when the pet can afford it.
+    #[test]
+    fn spend_money_succeeds_when_affordable() {
+        let mut state = GameState::new_egg(3, PetKind::Bartholomeus);
+        state.money = 50;
+        assert!(state.spend_money(30));
+        assert_eq!(state.money, 20);
+    }
+
+    /// Spending fails and leaves the balance unchanged when the pet can't
+    /// afford it — money should never go negative (or wrap, in u32 terms).
+    #[test]
+    fn spend_money_fails_when_too_poor() {
+        let mut state = GameState::new_egg(4, PetKind::Bartholomeus);
+        state.money = 10;
+        assert!(!state.spend_money(30));
+        assert_eq!(state.money, 10);
+    }
+
+    /// `can_afford` reports the exact threshold: affordable at the price,
+    /// not affordable one HEX above it.
+    #[test]
+    fn can_afford_reports_threshold() {
+        let mut state = GameState::new_egg(5, PetKind::Bartholomeus);
+        state.money = 20;
+        assert!(state.can_afford(20));
+        assert!(!state.can_afford(21));
     }
 
     /// Every `Action` variant must round-trip through the persisted byte
     /// exactly. Regression test for a real bug: `to_bytes` wrote the
     /// discriminant via a bare `as u8` cast, but `from_bytes`'s
-    /// hand-written match only recognized Feed/Heal/Relax/Play (0-3) —
-    /// Exercise/Medicate/Ozempic/Drink/Rehab (4-8) all silently came
-    /// back as `None`, discarding an in-progress action (and, for
-    /// Drink specifically, dropping `active_drink` context too, so the
-    /// remainder of the action would have applied under the wrong
-    /// drink's multipliers had the match not dropped the action
-    /// entirely first).
+    /// hand-written match only recognized the first four discriminants
+    /// (0-3, at the time Feed/Heal/Relax/Play) — Exercise/Medicate/
+    /// Ozempic/Drink/Rehab (4-8) all silently came back as `None`,
+    /// discarding an in-progress action (and, for Drink specifically,
+    /// dropping `active_drink` context too, so the remainder of the
+    /// action would have applied under the wrong drink's multipliers
+    /// had the match not dropped the action entirely first). `2`
+    /// (formerly `Relax`) is now a deliberate gap — see `Action::to_u8`.
     #[test]
     fn every_action_round_trips_through_save() {
         let all = [
             Action::Feed,
             Action::Heal,
-            Action::Relax,
             Action::Play,
             Action::Exercise,
             Action::Medicate,
             Action::Ozempic,
             Action::Drink,
             Action::Rehab,
+            Action::OnlyPets,
         ];
         for action in all {
             let mut state = GameState::new_egg(5, PetKind::Bartholomeus);
@@ -2514,7 +2694,6 @@ mod overweight_diabetes_tests {
         // one this test's estimate is exercising.
         state.hunger = 0;
         state.tired = 0;
-        state.drained = 0;
         state.cooldown_feed = 0;
         state.cooldown_relax = 0;
         state.cooldown_play = 0;
@@ -2545,5 +2724,413 @@ mod overweight_diabetes_tests {
             wake <= 1000 + 42,
             "next_wake_tick ({wake}) should wake no later than the battle cooldown expiring at 1042"
         );
+    }
+
+    // ── Stage 2: "user can make money" ──────────────────────────────────
+
+    /// Winning a mini-game credits `MINIGAME_HEX_REWARD` HEX when money
+    /// mode is on, and grants nothing (but still runs the existing
+    /// cooldown/hunger-cost path) when money mode is off.
+    #[test]
+    fn minigame_win_awards_hex_when_money_enabled() {
+        let mut state = GameState::new_egg(30, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money = 0;
+        state.money_enabled = true;
+
+        state.award_inspiration(MiniGame::Nim);
+        assert_eq!(state.money, MINIGAME_HEX_REWARD);
+
+        state.money = 0;
+        state.money_enabled = false;
+        state.cooldown_nim = 0;
+        state.award_inspiration(MiniGame::Nim);
+        assert_eq!(state.money, 0, "money off should grant no HEX");
+    }
+
+    /// A mesh Battle win credits `BATTLE_HEX_REWARD` HEX; a loss grants
+    /// nothing. With money mode off, even a win grants nothing.
+    #[test]
+    fn battle_win_awards_hex_winner_only() {
+        let mut state = GameState::new_egg(31, PetKind::Bartholomeus);
+        state.money_enabled = true;
+        state.money = 0;
+
+        state.record_battle(true);
+        assert_eq!(state.money, BATTLE_HEX_REWARD);
+
+        state.money = 0;
+        state.record_battle(false);
+        assert_eq!(state.money, 0, "a loss should not award HEX");
+
+        state.money = 0;
+        state.money_enabled = false;
+        state.record_battle(true);
+        assert_eq!(state.money, 0, "money off should grant no HEX even on a win");
+    }
+
+    /// `only_pets()` starts the action like `play()`; a second call while
+    /// the action is still in progress is rejected.
+    #[test]
+    fn only_pets_starts_action() {
+        let mut state = GameState::new_egg(32, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+
+        assert!(state.only_pets());
+        assert_eq!(state.active_action, Some(Action::OnlyPets));
+        assert!(!state.only_pets(), "action already in progress");
+    }
+
+    /// Driving the Only-pets action to completion (via the same public
+    /// `update()` path real time would use — mirrors how Feed/Drink
+    /// completion is exercised elsewhere in this test module), starting
+    /// above `BROKE_THRESHOLD`, awards the "hobby" branch: +HEX and a
+    /// happiness bump, plus its own cooldown.
+    #[test]
+    fn only_pets_hobby_completion_awards_hex_and_happiness() {
+        let mut state = GameState::new_egg(33, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 50; // >= BROKE_THRESHOLD, so this exercises the hobby branch.
+        state.miserable = STAT_MAX();
+
+        assert!(state.only_pets());
+        state.update(state.last_update_tick + PLAY_DURATION() as u32);
+
+        assert_eq!(state.money, 50 + ONLYPETS_HOBBY_REWARD);
+        assert_eq!(state.miserable, STAT_MAX() - HAPPINESS_STEP);
+        assert!(state.cooldown_onlypets > 0);
+        assert_eq!(state.active_action, None);
+    }
+
+    /// Stage 5: below `BROKE_THRESHOLD`, Only-pets completion forces the
+    /// "broke" branch instead — big pay, but happiness *drops* rather than
+    /// rises.
+    #[test]
+    fn only_pets_broke_branch_pays_100_and_drops_happiness() {
+        let mut state = GameState::new_egg(34, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 5; // < BROKE_THRESHOLD
+        state.miserable = 1000;
+
+        assert!(state.only_pets());
+        state.update(state.last_update_tick + PLAY_DURATION() as u32);
+
+        assert_eq!(state.money, 5 + ONLYPETS_BROKE_REWARD);
+        assert_eq!(state.miserable, 1000 + HAPPINESS_STEP);
+        assert!(state.cooldown_onlypets > 0);
+        assert_eq!(state.active_action, None);
+    }
+
+    // ── Stage 3: "things cost money" ────────────────────────────────────
+
+    /// Feeding charges by the food's health tier — healthy (Salad) costs
+    /// more than unhealthy (Burger), mirroring `FoodKind::hex_price`.
+    #[test]
+    fn feed_charges_by_food_health() {
+        let mut state = GameState::new_egg(40, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 85, "healthy food (Salad) should cost 15 HEX");
+
+        // Fresh egg so the cooldown from the first feed doesn't reject this one.
+        let mut state = GameState::new_egg(41, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Frikandel));
+        assert_eq!(state.money, 90, "unhealthy food (Frikandel) should cost 10 HEX");
+    }
+
+    /// Drinking charges by the drink's health tier — healthy (Water) costs
+    /// more than unhealthy (Cola), mirroring `DrinkKind::hex_price`.
+    #[test]
+    fn drink_charges_by_health() {
+        let mut state = GameState::new_egg(42, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.drink(DrinkKind::Water));
+        assert_eq!(state.money, 85, "healthy drink (Water) should cost 15 HEX");
+
+        let mut state = GameState::new_egg(43, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.drink(DrinkKind::Cola));
+        assert_eq!(state.money, 90, "unhealthy drink (Cola) should cost 10 HEX");
+    }
+
+    /// The basic Play action costs a flat `PLAY_HEX_COST` (10 HEX).
+    #[test]
+    fn play_costs_10() {
+        let mut state = GameState::new_egg(44, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.play());
+        assert_eq!(state.money, 90);
+    }
+
+    /// Aspirine (the Heal action) costs a flat `ASPIRINE_HEX_COST` (1 HEX),
+    /// and is rejected when the pet can't afford it.
+    #[test]
+    fn aspirine_costs_1_hex() {
+        let mut state = GameState::new_egg(44, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        assert!(state.heal());
+        assert_eq!(state.money, 99);
+
+        // Broke (0 HEX): heal is rejected, no charge, no action started.
+        let mut broke = GameState::new_egg(45, PetKind::Bartholomeus);
+        broke.update(HATCHING_TICKS() as u32);
+        broke.money_enabled = true;
+        broke.money = 0;
+        assert!(!broke.heal());
+        assert_eq!(broke.money, 0);
+        assert_eq!(broke.active_action, None);
+    }
+
+    /// Each drug action (Ozempic, Medicate, Rehab) costs a flat
+    /// `DRUG_HEX_COST` (15 HEX). Medicate/Rehab are gated on
+    /// diabetic/alcoholic respectively, so those flags are set first.
+    #[test]
+    fn drug_costs_15() {
+        let mut state = GameState::new_egg(45, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        assert!(state.ozempic());
+        assert_eq!(state.money, 85, "ozempic should cost 15 HEX");
+
+        let mut state = GameState::new_egg(46, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        state.diabetic = true;
+        assert!(state.medicate());
+        assert_eq!(state.money, 85, "medicate should cost 15 HEX");
+
+        let mut state = GameState::new_egg(47, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        state.alcoholic = true;
+        assert!(state.rehab());
+        assert_eq!(state.money, 85, "rehab should cost 15 HEX");
+    }
+
+    /// With `money_enabled = false`, priced actions proceed but charge
+    /// nothing at all — the whole money layer stays inert.
+    #[test]
+    fn actions_free_when_money_disabled() {
+        let mut state = GameState::new_egg(48, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = false;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 100, "feed should not charge when money is off");
+
+        let mut state = GameState::new_egg(49, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = false;
+        state.money = 100;
+
+        assert!(state.play());
+        assert_eq!(state.money, 100, "play should not charge when money is off");
+    }
+
+    /// Stage 5 reverses the Stage-3 best-effort contract: an unaffordable
+    /// action is now REJECTED outright rather than proceeding for free —
+    /// `feed()` returns false, the balance is untouched, and no action starts.
+    #[test]
+    fn broke_action_is_now_rejected() {
+        let mut state = GameState::new_egg(50, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 5;
+
+        assert!(!state.feed(FoodKind::Salad), "unaffordable action should be rejected");
+        assert_eq!(state.money, 5, "a rejected charge should not touch the balance");
+        assert_eq!(state.active_action, None);
+    }
+
+    /// A rejected action (already busy) must never charge — the charge
+    /// line sits after the guard checks, so a second `feed()` call while
+    /// one is in progress returns false and leaves `money` unchanged.
+    #[test]
+    fn rejected_action_does_not_charge() {
+        let mut state = GameState::new_egg(51, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        state.money = 100; // reset after the first (accepted) charge
+
+        assert!(!state.feed(FoodKind::Frikandel), "feed should be rejected while busy");
+        assert_eq!(state.money, 100, "a rejected action must not charge");
+    }
+
+    // ── Stage 5: "broke" branch + affordability gating ─────────────────
+
+    /// An unaffordable priced action (Salad costs 15, balance is 5) is
+    /// rejected: `feed()` returns false, the balance is untouched, and no
+    /// action starts.
+    #[test]
+    fn unaffordable_action_is_rejected() {
+        let mut state = GameState::new_egg(60, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 5;
+
+        assert!(!state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 5);
+        assert_eq!(state.active_action, None);
+    }
+
+    /// An affordable priced action charges its price and starts normally.
+    #[test]
+    fn affordable_action_charges_and_starts() {
+        let mut state = GameState::new_egg(61, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 85);
+        assert_eq!(state.active_action, Some(Action::Feed));
+    }
+
+    /// With `money_enabled = false`, the affordability gate never applies —
+    /// the action proceeds free even at 0 balance.
+    #[test]
+    fn money_disabled_ignores_affordability() {
+        let mut state = GameState::new_egg(62, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = false;
+        state.money = 0;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 0);
+    }
+
+    /// Only-pets is the escape hatch when broke and must never be gated on
+    /// affordability — it starts even at `money == 0`.
+    #[test]
+    fn only_pets_never_gated_when_broke() {
+        let mut state = GameState::new_egg(63, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 0;
+
+        assert!(state.only_pets());
+    }
+
+    // ── Hard (US) mode: pricier healthy food / medication / rehab ──────
+
+    /// In Hard mode, healthy food (Salad) costs 20 HEX instead of the
+    /// normal 15. Normal (non-hard) mode is unaffected — regression check.
+    #[test]
+    fn hard_mode_healthy_food_costs_20() {
+        let mut state = GameState::new_egg(70, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 80, "hard-mode healthy food should cost 20 HEX");
+
+        let mut normal = GameState::new_egg(71, PetKind::Bartholomeus);
+        normal.update(HATCHING_TICKS() as u32);
+        normal.money_enabled = true;
+        normal.hard_mode = false;
+        normal.money = 100;
+
+        assert!(normal.feed(FoodKind::Salad));
+        assert_eq!(normal.money, 85, "normal-mode healthy food should still cost 15 HEX");
+    }
+
+    /// In Hard mode, medication (Ozempic / Insulin) costs 45 HEX — 3x the
+    /// normal 15. Normal mode is unaffected.
+    #[test]
+    fn hard_mode_medication_costs_45() {
+        let mut state = GameState::new_egg(72, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.ozempic());
+        assert_eq!(state.money, 55, "hard-mode ozempic should cost 45 HEX");
+
+        let mut normal = GameState::new_egg(73, PetKind::Bartholomeus);
+        normal.update(HATCHING_TICKS() as u32);
+        normal.money_enabled = true;
+        normal.hard_mode = false;
+        normal.money = 100;
+
+        assert!(normal.ozempic());
+        assert_eq!(normal.money, 85, "normal-mode ozempic should still cost 15 HEX");
+    }
+
+    /// In Hard mode, Rehab costs 75 HEX — 5x the normal 15. Normal mode
+    /// is unaffected.
+    #[test]
+    fn hard_mode_rehab_costs_75() {
+        let mut state = GameState::new_egg(74, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.alcoholic = true;
+        state.money = 100;
+
+        assert!(state.rehab());
+        assert_eq!(state.money, 25, "hard-mode rehab should cost 75 HEX");
+
+        let mut normal = GameState::new_egg(75, PetKind::Bartholomeus);
+        normal.update(HATCHING_TICKS() as u32);
+        normal.money_enabled = true;
+        normal.hard_mode = false;
+        normal.alcoholic = true;
+        normal.money = 100;
+
+        assert!(normal.rehab());
+        assert_eq!(normal.money, 85, "normal-mode rehab should still cost 15 HEX");
+    }
+
+    /// Hard mode only raises healthy food / medication / rehab — unhealthy
+    /// food and the flat Play cost are untouched.
+    #[test]
+    fn hard_mode_unhealthy_food_and_play_unchanged() {
+        let mut state = GameState::new_egg(76, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Frikandel));
+        assert_eq!(state.money, 90, "hard mode should not touch unhealthy food price");
+
+        let mut state = GameState::new_egg(77, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.play());
+        assert_eq!(state.money, 90, "hard mode should not touch the flat Play price");
     }
 }

@@ -133,17 +133,34 @@ impl ModalKind {
                 Item::DrinkChoice(super::engine::DrinkKind::Whiskey),
                 Item::Cancel,
             ],
-            Self::Play => &[
-                Item::Battle,
-                Item::PlayNow,
-                Item::PlayMusic,
-                Item::TicTacToe,
-                Item::LightsOut,
-                Item::BlackHole,
-                Item::Nim,
-                Item::BornJeweled,
-                Item::Cancel,
-            ],
+            Self::Play => {
+                if super::lifecycle::money_enabled() {
+                    &[
+                        Item::Battle,
+                        Item::PlayNow,
+                        Item::OnlyPets,
+                        Item::PlayMusic,
+                        Item::TicTacToe,
+                        Item::LightsOut,
+                        Item::BlackHole,
+                        Item::Nim,
+                        Item::BornJeweled,
+                        Item::Cancel,
+                    ]
+                } else {
+                    &[
+                        Item::Battle,
+                        Item::PlayNow,
+                        Item::PlayMusic,
+                        Item::TicTacToe,
+                        Item::LightsOut,
+                        Item::BlackHole,
+                        Item::Nim,
+                        Item::BornJeweled,
+                        Item::Cancel,
+                    ]
+                }
+            }
             Self::Music => &[
                 Item::Song(crate::SONG_STARTUP_INDEX),
                 Item::Song(crate::SONG_RICKROLL_INDEX),
@@ -156,7 +173,7 @@ impl ModalKind {
                 Item::Song(crate::SONG_OVER_THE_HORIZON_INDEX),
                 Item::Cancel,
             ],
-            Self::Rest => &[Item::Sleep, Item::Relax, Item::Cancel],
+            Self::Rest => &[Item::Sleep, Item::Cancel],
             Self::None => &[],
         }
     }
@@ -193,8 +210,8 @@ enum Item {
     DrinkChoice(super::engine::DrinkKind),
     Rehab,
     Sleep,
-    Relax,
     PlayNow,
+    OnlyPets,
     TicTacToe,
     LightsOut,
     BlackHole,
@@ -217,7 +234,7 @@ impl Item {
             Self::Friends => "Friends",
             Self::Battle => "Battle",
             Self::FeedFood(food) => food.label(),
-            Self::GiveMedicine => "Give medicine",
+            Self::GiveMedicine => "Aspirine",
             Self::GiveMedication => "Insulin",
             Self::Ozempic => "Ozempic",
             Self::ExerciseNow => "Exercise now",
@@ -233,8 +250,8 @@ impl Item {
             Self::DrinkChoice(drink) => drink.label(),
             Self::Rehab => "Rehab",
             Self::Sleep => "Sleep",
-            Self::Relax => "Relax",
             Self::PlayNow => "Play now",
+            Self::OnlyPets => "Only pets",
             Self::TicTacToe => "Tic Tac Toe",
             Self::LightsOut => "Lights Out",
             Self::BlackHole => "Black Hole",
@@ -253,6 +270,25 @@ impl Item {
             Self::Song(_) => "?",
             Self::Hibernate => "Hibernate",
             Self::WakeUp => "Defrost",
+        }
+    }
+
+    /// HEX price of this item in the current mode, if it costs money.
+    /// Shown as a " NNH" suffix in the menu (only when money mode is
+    /// on). Only-pets earns HEX rather than costing it, so it has no
+    /// price. Takes `stats` so Hard (US) mode can report the actual
+    /// effective price rather than the normal-mode base.
+    fn hex_price(self, stats: &super::engine::PetStats) -> Option<u32> {
+        match self {
+            Self::FeedFood(food) => Some(food.hex_price(stats.hard_mode)),
+            Self::DrinkChoice(drink) => Some(drink.hex_price()),
+            Self::GiveMedicine => Some(super::engine::ASPIRINE_HEX_COST),
+            Self::PlayNow => Some(super::engine::PLAY_HEX_COST),
+            Self::GiveMedication | Self::Ozempic => {
+                Some(super::engine::medication_price(stats.hard_mode))
+            }
+            Self::Rehab => Some(super::engine::rehab_price(stats.hard_mode)),
+            _ => None,
         }
     }
 
@@ -287,17 +323,41 @@ impl Item {
             | Self::CheatForceAlcoholic
             | Self::CheatClearAlcoholism
             | Self::CheatResetBattleRecord => true,
-            Self::DrinkChoice(_) => stats.can_drink,
-            Self::Rehab => stats.can_rehab,
+            Self::DrinkChoice(drink) => {
+                stats.can_drink && (!stats.money_enabled || stats.money >= drink.hex_price())
+            }
+            Self::Rehab => {
+                stats.can_rehab
+                    && (!stats.money_enabled
+                        || stats.money >= super::engine::rehab_price(stats.hard_mode))
+            }
             Self::Battle => stats.can_battle,
-            Self::FeedFood(_) => stats.can_feed,
-            Self::GiveMedicine => stats.can_heal,
-            Self::GiveMedication => stats.can_medicate,
-            Self::Ozempic => stats.can_ozempic,
+            Self::FeedFood(food) => {
+                stats.can_feed
+                    && (!stats.money_enabled || stats.money >= food.hex_price(stats.hard_mode))
+            }
+            Self::GiveMedicine => {
+                stats.can_heal
+                    && (!stats.money_enabled || stats.money >= super::engine::ASPIRINE_HEX_COST)
+            }
+            Self::GiveMedication => {
+                stats.can_medicate
+                    && (!stats.money_enabled
+                        || stats.money >= super::engine::medication_price(stats.hard_mode))
+            }
+            Self::Ozempic => {
+                stats.can_ozempic
+                    && (!stats.money_enabled
+                        || stats.money >= super::engine::medication_price(stats.hard_mode))
+            }
             Self::ExerciseNow => stats.can_exercise,
             Self::Sleep => stats.can_sleep,
-            Self::Relax => stats.can_relax,
-            Self::PlayNow => stats.can_play,
+            Self::PlayNow => {
+                stats.can_play
+                    && (!stats.money_enabled || stats.money >= super::engine::PLAY_HEX_COST)
+            }
+            // Never gated — the escape hatch when broke.
+            Self::OnlyPets => stats.can_only_pets,
             Self::TicTacToe => stats.can_play_tictactoe,
             Self::LightsOut => stats.can_play_lightsout,
             Self::BlackHole => stats.can_play_blackhole,
@@ -332,8 +392,10 @@ impl Item {
             Self::Rehab => action_remaining(Action::Rehab).max(stats.cooldown_rehab),
             Self::ExerciseNow => action_remaining(Action::Exercise).max(stats.cooldown_exercise),
             Self::Battle => stats.cooldown_battle,
-            Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
             Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
+            Self::OnlyPets => {
+                action_remaining(Action::OnlyPets).max(stats.cooldown_onlypets)
+            }
             Self::TicTacToe => stats.cooldown_tictactoe,
             Self::LightsOut => stats.cooldown_lightsout,
             Self::BlackHole => stats.cooldown_blackhole,
@@ -453,14 +515,14 @@ impl Item {
                 super::show_toast(super::Toast::Sleep);
                 close();
             }
-            Self::Relax => {
-                lifecycle::relax();
-                super::show_toast(super::Toast::Relax);
-                close();
-            }
             Self::PlayNow => {
                 lifecycle::play();
                 super::show_toast(super::Toast::Play);
+                close();
+            }
+            Self::OnlyPets => {
+                lifecycle::only_pets();
+                super::show_toast(super::Toast::OnlyPets);
                 close();
             }
             Self::TicTacToe => {
@@ -741,13 +803,22 @@ where
         // Build display text: append " (Ns)" with the remaining
         // cooldown seconds when the item has a known cooldown source,
         // " (wait)" for anything else that's just disabled.
-        // 32 covers the longest label ("Reset battle record"/"Trigger
-        // alcoholism", 19 bytes) plus the longest cooldown suffix
-        // (" (65535s)", 9 bytes) with room to spare — heapless::push_str
+        // 40 covers the longest label ("Reset battle record"/"Trigger
+        // alcoholism", 19 bytes) plus an optional price suffix (" 15H",
+        // 4 bytes) plus the longest cooldown suffix (" (65535s)", 9
+        // bytes) with room to spare — heapless::push_str
         // silently no-ops past capacity instead of truncating, so this
         // must comfortably exceed the worst case, not just the common one.
-        let mut display_label: heapless::String<32> = heapless::String::new();
+        let mut display_label: heapless::String<40> = heapless::String::new();
         let _ = display_label.push_str(item.label());
+        // Price suffix (" NNH") for priced items, only in money mode.
+        if let Some(s) = stats.as_ref()
+            && let Some(price) = item.hex_price(s)
+            && s.money_enabled
+        {
+            let _ =
+                core::fmt::Write::write_fmt(&mut display_label, format_args!(" {price}H"));
+        }
         if !available {
             let suffix = stats
                 .as_ref()
@@ -934,17 +1005,16 @@ where
     ui::draw_title_bar(display, "Pet Stats", Point::new(inner_x, inner_y), inner_w)?;
 
     // Stat bars.
-    let bars: [(&str, u8); 6] = [
+    let bars: [(&str, u8); 5] = [
         ("Hunger", stats.hunger),
         ("Rested", stats.tired),
-        ("Inspired", stats.inspired),
         ("Healthy", stats.healthy),
         ("Happy", stats.happy),
         ("Fit", stats.weight),
     ];
 
     // Layout: label at left margin, bar to the right of the longest
-    // label ("Inspired" = 8 chars × 7 px = 56 px from `label_x`).
+    // label ("Healthy" = 7 chars × 7 px = 49 px from `label_x`).
     let label_x = inner_x + 4;
     let bar_x = label_x + 60; // 4 px clearance after the longest label
 
