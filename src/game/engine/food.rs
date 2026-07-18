@@ -14,7 +14,7 @@
 pub enum FoodKind {
     Salad,
     Apple,
-    Burger,
+    Frikandel,
     Pizza,
     Cake,
 }
@@ -23,7 +23,7 @@ impl FoodKind {
     pub const ALL: [FoodKind; 5] = [
         FoodKind::Salad,
         FoodKind::Apple,
-        FoodKind::Burger,
+        FoodKind::Frikandel,
         FoodKind::Pizza,
         FoodKind::Cake,
     ];
@@ -32,7 +32,7 @@ impl FoodKind {
         match self {
             FoodKind::Salad => "Salad",
             FoodKind::Apple => "Apple",
-            FoodKind::Burger => "Burger",
+            FoodKind::Frikandel => "Frikandel spec",
             FoodKind::Pizza => "Pizza",
             FoodKind::Cake => "Cake",
         }
@@ -44,7 +44,10 @@ impl FoodKind {
         match self {
             FoodKind::Salad => (70, 30, 100),
             FoodKind::Apple => (100, 100, 100),
-            FoodKind::Burger => (150, 250, 50),
+            // Frikandel speciaal — deep-fried, mayo/curry/onions. Greasy:
+            // fills you up fast and piles on weight (a touch more than a
+            // plain burger's old 250 to earn the "speciaal").
+            FoodKind::Frikandel => (155, 275, 45),
             FoodKind::Pizza => (170, 300, 80),
             FoodKind::Cake => (60, 350, 200),
         }

@@ -228,6 +228,8 @@ pub const ALARM_INDEX: usize = 8;
 pub const SONG_DAISY_BELL_INDEX: u8 = 9;
 pub const SONG_NOKIA_INDEX: u8 = 10;
 pub const SONG_OVER_THE_HORIZON_INDEX: u8 = 11;
+/// Mini-game victory jingle — system-only, not exposed in the music menu.
+pub const MINIGAME_WIN_INDEX: usize = 12;
 
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: on,
 /// matching MeshCore 1.15.0 (upstream commit `ff5aad71`).  Boot path

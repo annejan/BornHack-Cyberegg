@@ -53,23 +53,25 @@ const PP_MAX: usize = 8;
 /// lifecycle anims), plus 0x23/0x24 (Exercising/Medicating — picked
 /// starting at 0x20 to land clear of 0x15-0x1F, which
 /// `assets/to-badge/MANIFEST.TXT` reserves for other, currently-unbuilt
-/// features).  37 entries covers up to 0x24 inclusive.  This bound is
-/// checked on both the write side (`init`, scanning the FAT12 catalog
-/// at boot) and the read side (`count_anim_frames`) — an anim id at or
-/// past this value is silently never catalogued, which is exactly what
-/// happened before this was bumped: Exercising/Medicating had real,
-/// correctly-formatted sprite files on flash, but the catalog couldn't
-/// see far enough to notice them, so the game fell back to the
-/// no-artwork debug-text path as if the files didn't exist at all.
+/// features).  40 entries covers up to 0x27 inclusive (Drinking 0x25,
+/// Ozempic 0x26, Rehab 0x27).  This bound is checked on both the write
+/// side (`init`, scanning the FAT12 catalog at boot) and the read side
+/// (`count_anim_frames`) — an anim id at or past this value is silently
+/// never catalogued, which is exactly what happened twice before this
+/// was bumped: first Exercising/Medicating (0x23/0x24), then the drink
+/// actions (0x25-0x27), had real correctly-formatted sprite files on
+/// flash but the catalog couldn't see far enough to notice them, so the
+/// game fell back to the no-artwork debug-text path as if they were
+/// missing.  Keep this at least one past the highest `anim_id`.
 #[cfg(feature = "embassy-base")]
-const AA_MAX: usize = 37;
+const AA_MAX: usize = 40;
 /// Maximum frame index per animation (bit position in the u16 presence cell).
 /// No animation exceeds a handful of frames; 16 is ample.
 #[cfg(feature = "embassy-base")]
 const FF_MAX: u8 = 16;
 
-// AtomicU16 (not U32): 8×21×2 B holds the table at its original footprint so
-// the RAM-tight debug build doesn't overflow the stack into adjacent statics.
+// AtomicU16 (not U32): 8×40×2 B keeps the table small so the RAM-tight
+// debug build doesn't overflow the stack into adjacent statics.
 #[cfg(feature = "embassy-base")]
 static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
     [const { [const { core::sync::atomic::AtomicU16::new(0) }; AA_MAX] }; PP_MAX];

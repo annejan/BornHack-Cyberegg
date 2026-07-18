@@ -281,6 +281,7 @@ pub fn cycle() -> Option<PetStats> {
     let stats = state.stats(tick);
     check_severity_transition(state);
     check_diabetes_onset(state);
+    check_alcoholism_onset(state);
     Some(stats)
 }
 
@@ -293,6 +294,31 @@ pub fn cycle() -> Option<PetStats> {
 pub fn is_diabetic_unmedicated() -> bool {
     let state = unsafe { (*GAME.get()).as_ref() };
     state.is_some_and(|s| s.diabetic && s.cooldown_medicate == 0)
+}
+
+/// Alcoholic and the rehab-protection window has lapsed — drives the
+/// persistent "NEEDS REHAB" banner, the twin of
+/// [`is_diabetic_unmedicated`].
+pub fn is_alcoholic_untreated() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    state.is_some_and(|s| s.alcoholic && s.cooldown_rehab == 0)
+}
+
+/// Weight has crossed the warning band but the pet is not yet diabetic —
+/// drives the pre-permanence "OVERWEIGHT" banner so the multi-day slide
+/// toward diabetes is visible and winnable rather than a silent surprise.
+pub fn is_overweight_warning() -> bool {
+    use super::engine::thresholds::WARNING_WEIGHT;
+    let state = unsafe { (*GAME.get()).as_ref() };
+    state.is_some_and(|s| !s.diabetic && s.weight > WARNING_WEIGHT())
+}
+
+/// Drunkenness has crossed the warning band but the pet is not yet
+/// alcoholic — the drink-arc twin of [`is_overweight_warning`].
+pub fn is_drunk_warning() -> bool {
+    use super::engine::thresholds::WARNING_DRUNK;
+    let state = unsafe { (*GAME.get()).as_ref() };
+    state.is_some_and(|s| !s.alcoholic && s.drunk > WARNING_DRUNK())
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +352,7 @@ static LAST_SEVERITY: AtomicU8 = AtomicU8::new(Severity::Uninit as u8);
 /// one-shot onset alert (buzzer + toast) fires exactly once, the instant
 /// `diabetic` flips false → true — not on every cycle it stays true.
 static WAS_DIABETIC: AtomicBool = AtomicBool::new(false);
+static WAS_ALCOHOLIC: AtomicBool = AtomicBool::new(false);
 
 /// Set when the in-memory Unicorn Realm buffer has been mutated (a pet pushed)
 /// and needs persisting on the next save cycle, but the record was NOT derived
@@ -422,6 +449,23 @@ fn check_diabetes_onset(state: &super::engine::GameState) {
         // Full-screen takeover, not just a toast — this is a rare,
         // one-time event worth making unmissable.
         super::show_diabetes_alert();
+    }
+}
+
+/// One-shot alert (buzzer + full-screen takeover) the instant the pet
+/// becomes alcoholic — the twin of [`check_diabetes_onset`]. Alcoholism
+/// mirrors diabetes in the engine (permanent flag + coupled sick
+/// penalty) but previously landed with no announcement at all.
+fn check_alcoholism_onset(state: &super::engine::GameState) {
+    let now = state.alcoholic;
+    let prev = WAS_ALCOHOLIC.swap(now, Ordering::Relaxed);
+    if now && !prev {
+        let muted = crate::GAME_MUTE.load(Ordering::Relaxed);
+        if !muted {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::buzzer::play(crate::PET_WARN_INDEX);
+        }
+        super::show_alcoholism_alert();
     }
 }
 
@@ -619,6 +663,12 @@ pub fn award_inspiration(game: super::engine::MiniGame) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
         s.award_inspiration(game);
+        // Celebratory jingle on a mini-game win — the main
+        // active-engagement reward previously had no audio, only a toast.
+        #[cfg(feature = "embassy-base")]
+        if !crate::GAME_MUTE.load(Ordering::Relaxed) {
+            crate::fw::buzzer::play(crate::MINIGAME_WIN_INDEX);
+        }
     }
 }
 
