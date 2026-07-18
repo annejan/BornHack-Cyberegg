@@ -10,12 +10,18 @@ keep it happy, and play mini-games to earn rewards.
 When you first navigate to the game screen, you'll see the start screen.
 Press **Fire** to begin — you'll be asked to choose your pet:
 
-- **Snail** — the original CyberÆgg companion
+- **Bartholomeus** — the original CyberÆgg companion (a snail, formerly
+  named "Snail")
 - **Cat** — a feline friend
+- **Slug** — a third built-in companion
+- **Panda** — ships pre-installed via the same `PETS.CFG` mechanism
+  described under [Custom pets](USER_GAMES.md#custom-pets-petscfg) —
+  fully playable, not a placeholder
 
-Use **Up/Down** to highlight your choice and **Fire** to confirm. A
-1-minute egg hatching countdown begins with an animation — once it
-completes, your pet is born and you'll be asked to give it a name!
+Use **Up/Down** to highlight your choice (wraps from the last pet back
+to the first) and **Fire** to confirm. A 1-minute egg hatching countdown
+begins with an animation — once it completes, your pet is born and
+you'll be asked to give it a name!
 
 Your game is automatically saved to flash. If the badge resets or loses
 power, your pet will be right where you left it.

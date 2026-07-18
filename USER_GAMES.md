@@ -4,11 +4,11 @@ The **Game** screen runs BornPets — a virtual pet inspired by Tamagotchi — p
 
 ## BornPets
 
-Hatch a snail or a cat, then keep it fed, healthy, rested and entertained.
+Hatch a pet, then keep it fed, healthy, rested and entertained.
 
 ### Hatching
 
-The very first time you open Game you see the hatchery. Push **EXE / Fire** to start. Pick **Snail** or **Cat**, then wait about a minute for the egg to hatch. After hatching you name your pet — up to 12 characters via the on-screen keyboard. The save persists across reboots.
+The very first time you open Game you see the hatchery. Push **EXE / Fire** to start. Pick your pet — **Bartholomeus** (a snail), **Cat**, **Slug**, or **Panda** — then wait about a minute for the egg to hatch. After hatching you name your pet — up to 12 characters via the on-screen keyboard. The save persists across reboots.
 
 ### Stats (the four things to watch)
 
@@ -113,15 +113,20 @@ reflashing — a manifest file plus sprite files on the badge's USB drive.
 A pet is a pure cosmetic skin: stats, decay, traits and animations all
 behave identically; a new pet only needs art.
 
+This is also how **Panda** — the fourth hatchery option — is shipped:
+it's a `PETS.CFG` pet at prefix `5` installed by default, not a
+hardcoded built-in. If you write your own `PETS.CFG`, prefix `5`
+already means Panda unless you rename or overwrite it; use `6` or `7`
+for a pet of your own alongside it.
+
 ### The manifest
 
 Create `PETS.CFG` in the root of the `CYBR<4 hex>` drive, one
 `PREFIX=NAME` per line (`#` starts a comment):
 
 ```
-# rename a built-in, add two new pets
+# rename a built-in, add a new pet at the one free slot (5 is Panda by default)
 0=Bartho
-5=Dragon
 6=Ghost
 ```
 
@@ -130,8 +135,9 @@ The prefix (decimal) picks the sprite slot:
 | Prefix  | Meaning                                              |
 | ------- | ---------------------------------------------------- |
 | `0` `1` `2` | The built-ins (Bartholomeus, Cat, Slug) — listing one just **renames** it |
-| `3` `4` | Reserved (sponsor slides, menu icons) — ignored      |
-| `5` `6` `7` | **New pets** — appear in the hatchery roster     |
+| `3` `4` | Reserved (menu icons, ex-sponsor slideshow) — ignored |
+| `5`     | **Panda** by default — a `PETS.CFG` pet like any other, so listing it renames it same as a built-in |
+| `6` `7` | **New pets** — appear in the hatchery roster         |
 | `8`+    | Out of range — ignored                               |
 
 Names are ASCII only, max 16 characters (longer is truncated, a

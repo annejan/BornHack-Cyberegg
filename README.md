@@ -792,25 +792,31 @@ Each JSON5 file contributes a separate `PP` prefix range:
 | `bornpets-bartholomeus.json5` | `00xx` | Bartholomeus pet animations (formerly "Snail") + shared icons / placeholders |
 | `bornpets-sponsors-cat.json5` | `01xx` | Cat pet animations |
 | `bornpets-sponsors-slug.json5` | `02xx` | Slug pet animations |
-| `sponsors.json5` | `03xx` | First-boot sponsor slideshow images |
 | `bornpets-menu-icons.json5` | `04xx` | On-screen menu icons (top + bottom rows, normal + selected) |
+
+**Panda** (prefix `05xx`) isn't in this pipeline — it has no `bornpets-panda.json5` source. Its PCX files were produced directly (see `scripts/fix_badge_pcx.py` / `scripts/png_to_badge_pcx.py` under [`scripts/README.md`](scripts/README.md)) and installed via [`assets/to-badge/PETS.CFG`](assets/to-badge/PETS.CFG) rather than a hardcoded `PetKind` — see "Adding a new pet" below.
 
 After generating, copy all `.PCX` files from `assets/to-badge/` to the badge's USB drive.
 
-#### Changing or adding assets
+#### Adding a new pet
 
-The firmware maps animation states to filenames in code. If you add new animations, change frame counts, reorder assets, or add a new pet kind, the following source files must be updated to match:
+Pets are a runtime roster (see [`pet_registry.rs`](src/game/pet_registry.rs)), not a hardcoded list — adding one needs **no code changes**, just assets:
+
+1. Draw the animation frames and export them as `PPAAFF.PCX` (prefix `PP` = `05`, `06`, or `07` — see [USER_GAMES.md](USER_GAMES.md#custom-pets-petscfg) for the full prefix table and animation-ID list; `00`–`02` are taken by the three built-ins). At minimum ship Idle (`PP0100.PCX`) — frame counts are auto-discovered from the FAT directory catalogue at boot, so nothing needs updating in code for a new animation length either.
+2. Add a `PREFIX=NAME` line to `assets/to-badge/PETS.CFG` (create the file if it doesn't exist).
+3. Copy the new PCX files and `PETS.CFG` to the badge's USB drive and reboot.
+
+That's the whole mechanism Panda uses. It only becomes a firmware code change if you need behavior beyond a cosmetic skin (stats, decay, traits, and animations are identical across every pet by design).
+
+#### Changing existing assets
 
 | What changed               | File to update                                                                       |
 | -------------------------- | ------------------------------------------------------------------------------------ |
-| Frame counts per animation | [`anim_files.rs`](src/game/engine/anim_files.rs) — `SNAIL_FRAMES`, `CAT_FRAMES`      |
-| New pet kind               | [`mod.rs`](src/game/engine/mod.rs) — `PetKind` enum + frame table in `anim_files.rs` |
 | Animation ID assignment    | [`anim_files.rs`](src/game/engine/anim_files.rs) — `anim_id()` function              |
-| Sponsor slide filenames    | [`sponsors.rs`](src/fw/sponsors.rs) — `sponsor_filename()` and `MAX_SPONSORS`        |
 | Start screen filename      | [`anim_files.rs`](src/game/engine/anim_files.rs) — `start_screen_filename()`         |
 | Menu icons (top/bottom row)| [`anim_files.rs`](src/game/engine/anim_files.rs) — `menu_icon_filename()`, `MENU_ICON_COUNT` |
 
-The filename convention is `PPAAFF.PCX` where `PP` = pet prefix (hex), `AA` = animation ID (hex), `FF` = frame number (hex). This is encoded in `anim_files.rs::build_filename()`.
+The filename convention is `PPAAFF.PCX` where `PP` = pet prefix (hex), `AA` = animation ID (hex), `FF` = frame number (hex). This is encoded in `anim_files.rs::build_filename()`. Frame counts are never hardcoded — `anim_files::frame_count()` counts the contiguous run of frame files present in the runtime catalogue (FAT12 directory in firmware, `assets/to-badge/` on the simulator), for every pet including custom ones.
 
 ### Game Architecture
 
