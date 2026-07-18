@@ -280,6 +280,7 @@ impl Item {
         match self {
             Self::FeedFood(food) => Some(food.hex_price()),
             Self::DrinkChoice(drink) => Some(drink.hex_price()),
+            Self::GiveMedicine => Some(super::engine::ASPIRINE_HEX_COST),
             Self::PlayNow => Some(super::engine::PLAY_HEX_COST),
             Self::GiveMedication | Self::Ozempic | Self::Rehab => {
                 Some(super::engine::DRUG_HEX_COST)
@@ -330,7 +331,10 @@ impl Item {
             Self::FeedFood(food) => {
                 stats.can_feed && (!stats.money_enabled || stats.money >= food.hex_price())
             }
-            Self::GiveMedicine => stats.can_heal,
+            Self::GiveMedicine => {
+                stats.can_heal
+                    && (!stats.money_enabled || stats.money >= super::engine::ASPIRINE_HEX_COST)
+            }
             Self::GiveMedication => {
                 stats.can_medicate
                     && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)

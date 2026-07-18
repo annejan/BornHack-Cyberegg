@@ -100,6 +100,8 @@ pub const HAPPINESS_STEP: u16 = 19660;
 pub const PLAY_HEX_COST: u32 = 10;
 /// HEX cost of a drug dose (Ozempic / Medicate / Rehab).
 pub const DRUG_HEX_COST: u32 = 15;
+/// HEX cost of an Aspirine (the Heal action).
+pub const ASPIRINE_HEX_COST: u32 = 1;
 /// Below this balance the pet is "broke" — Only-pets forces the low-pay,
 /// happiness-draining work branch instead of the hobby branch.
 pub const BROKE_THRESHOLD: u32 = 20;
@@ -1163,6 +1165,10 @@ impl GameState {
             return false;
         }
         if self.active_action.is_some() || self.cooldown_heal > 0 {
+            return false;
+        }
+        // Aspirine costs HEX; Stage 5 affordability gate (reject if broke).
+        if self.money_enabled && !self.spend_money(ASPIRINE_HEX_COST) {
             return false;
         }
         self.active_action = Some(Action::Heal);
@@ -2808,6 +2814,27 @@ mod overweight_diabetes_tests {
 
         assert!(state.play());
         assert_eq!(state.money, 90);
+    }
+
+    /// Aspirine (the Heal action) costs a flat `ASPIRINE_HEX_COST` (1 HEX),
+    /// and is rejected when the pet can't afford it.
+    #[test]
+    fn aspirine_costs_1_hex() {
+        let mut state = GameState::new_egg(44, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        assert!(state.heal());
+        assert_eq!(state.money, 99);
+
+        // Broke (0 HEX): heal is rejected, no charge, no action started.
+        let mut broke = GameState::new_egg(45, PetKind::Bartholomeus);
+        broke.update(HATCHING_TICKS() as u32);
+        broke.money_enabled = true;
+        broke.money = 0;
+        assert!(!broke.heal());
+        assert_eq!(broke.money, 0);
+        assert_eq!(broke.active_action, None);
     }
 
     /// Each drug action (Ozempic, Medicate, Rehab) costs a flat
