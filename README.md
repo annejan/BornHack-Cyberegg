@@ -404,8 +404,10 @@ cargo install flip-link
 cargo install probe-rs-tools
 
 # udev rules for SWD debug probes (J-Link, ST-Link, CMSIS-DAP, etc.)
+# and the Cyber Ægg Bootloader
 curl -o /tmp/69-probe-rs.rules https://probe.rs/files/69-probe-rs.rules
 sudo cp /tmp/69-probe-rs.rules /etc/udev/rules.d/
+echo 'ATTRS{idVendor}=="1915", ATTRS{idProduct}=="521f", MODE="660", GROUP="plugdev", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/69-cyberaegg.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
