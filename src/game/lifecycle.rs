@@ -725,6 +725,25 @@ pub fn pet_generation() -> u16 {
     }
 }
 
+/// Get the current HEX balance (defaults to 0 if no game).
+pub fn money() -> u32 {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.money,
+        None => 0,
+    }
+}
+
+/// Whether HEX money mode is enabled for the current pet (defaults to
+/// false if no game).
+pub fn money_enabled() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.money_enabled,
+        None => false,
+    }
+}
+
 pub(super) fn with_state(f: impl FnOnce(&mut GameState) -> bool) -> bool {
     let state = unsafe { (*GAME.get()).as_mut() };
     match state {

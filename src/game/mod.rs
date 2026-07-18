@@ -345,6 +345,22 @@ where
         crate::draw_battery_icon(display, 128, 2, pct)?;
     }
 
+    // HEX balance — top-right, just below the battery icon at (128, 2).
+    // Hidden entirely when money mode is disabled for this pet.
+    if lifecycle::money_enabled() {
+        let right_style = TextStyleBuilder::new()
+            .baseline(Baseline::Top)
+            .alignment(Alignment::Right)
+            .build();
+        let mut money_buf: heapless::String<12> = heapless::String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut money_buf,
+            format_args!("{} HEX", lifecycle::money()),
+        );
+        Text::with_text_style(money_buf.as_str(), Point::new(150, 16), font, right_style)
+            .draw(display)?;
+    }
+
     // Sim-only sprite blit: in firmware the async `render()` blits sprites
     // from FAT12 between display refreshes; the simulator has no flash, so
     // we resolve PCX assets directly from `assets/to-badge/` here.  Drawn
