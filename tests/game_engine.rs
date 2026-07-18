@@ -71,17 +71,16 @@ impl Policy for AttentivePolicy {
             return;
         }
 
-        // Priority: feed > heal > relax > play.
+        // Priority: feed > heal > play.
+        // NOTE: `relax`/`drained` were removed in Stage 4 (redundant
+        // "inspired" axis) — this policy previously also relaxed above
+        // 32768 `drained` between the heal and play checks.
         if state.hunger > 32768 {
             state.feed(FoodKind::Apple);
             return;
         }
         if state.sick > 32768 {
             state.heal();
-            return;
-        }
-        if state.drained > 32768 {
-            state.relax();
             return;
         }
         if state.miserable > 32768 {
@@ -141,10 +140,6 @@ impl Policy for NightOwlPolicy {
         }
         if state.sick > 32768 {
             state.heal();
-            return;
-        }
-        if state.drained > 32768 {
-            state.relax();
             return;
         }
         if state.miserable > 32768 {
@@ -258,16 +253,21 @@ fn feed_reduces_hunger() {
     assert!(state.hunger < h_before, "feed should reduce hunger");
 }
 
+/// Play now reduces `miserable` by a flat 30% of range (`HAPPINESS_STEP` =
+/// 19660) on completion, rather than zeroing it outright (Stage 4 change).
 #[test]
-fn play_zeroes_miserable() {
+fn play_reduces_miserable_by_happiness_step() {
+    use bornhack_aegg::game::engine::HAPPINESS_STEP;
+
     let mut state = GameState::new_egg(42, PetKind::Bartholomeus);
     state.update(HATCHING_TICKS() as u32);
     state.miserable = 30000; // artificially set high
     assert!(state.play());
     state.update(state.last_update_tick + PLAY_DURATION() as u32);
     assert_eq!(
-        state.miserable, 0,
-        "play should zero miserable on completion"
+        state.miserable,
+        30000 - HAPPINESS_STEP,
+        "play should reduce miserable by HAPPINESS_STEP, not zero it"
     );
 }
 
@@ -313,7 +313,7 @@ fn perfect_player_pet_survives_long() {
     // Exercise/Ozempic in this policy's repertoire — push weight past
     // OVERWEIGHT_TRIGGER and trigger permanent diabetes within days, which
     // then drives `sick` up continuously for the rest of the run. A perfect
-    // feed/heal/relax/play policy that never manages weight now tops out
+    // feed/heal/play policy that never manages weight now tops out
     // around 6.3 days for this seed (verified deterministic); 30 days is no
     // longer achievable without also exercising/using Ozempic, which this
     // policy intentionally doesn't do. Keeping a meaningful bar well above
@@ -361,19 +361,17 @@ fn diagnostic_attentive_hourly_dump() {
 
         if tick >= last_print + ticks_per_hour || state.phase == Phase::Gone {
             eprintln!(
-                "t={:6} ({:5.1}h) H={:5} T={:5} D={:5} S={:5} M={:5} phase={:?} sleep={} cd=[{},{},{},{}]",
+                "t={:6} ({:5.1}h) H={:5} T={:5} S={:5} M={:5} phase={:?} sleep={} cd=[{},{},{}]",
                 tick,
                 tick as f64 / ticks_per_hour as f64,
                 state.hunger,
                 state.tired,
-                state.drained,
                 state.sick,
                 state.miserable,
                 state.phase,
                 state.is_sleeping,
                 state.cooldown_feed,
                 state.cooldown_heal,
-                state.cooldown_relax,
                 state.cooldown_play,
             );
             last_print = tick;
@@ -435,16 +433,18 @@ fn different_seeds_produce_different_results() {
 fn leaving_triggers_on_maxed_stats() {
     let mut state = GameState::new_egg(42, PetKind::Bartholomeus);
     state.update(HATCHING_TICKS() as u32);
-    // Force all stats to max.
+    // Force all remaining "maxed" stats to max. NOTE: `drained` was removed
+    // in Stage 4, so `count_maxed` now covers 3 stats (hunger/tired/sick)
+    // instead of 4 — this still exercises the same leaving/gone path via
+    // `LEAVING_THRESHOLDS()[maxed.min(4)]`, just at maxed=3 instead of 4.
     state.hunger = STAT_MAX();
     state.tired = STAT_MAX();
-    state.drained = STAT_MAX();
     state.sick = STAT_MAX();
-    // Advance well past the 4-maxed threshold (720 ticks = 2 hours).
+    // Advance well past the 3-maxed threshold (1800 ticks = 5 hours).
     state.update(state.last_update_tick + 2000);
     assert!(
         state.phase == Phase::Gone || state.phase == Phase::Leaving,
-        "pet should be leaving or gone with 4 maxed stats, got {:?} countdown={}",
+        "pet should be leaving or gone with 3 maxed stats, got {:?} countdown={}",
         state.phase,
         state.leaving_countdown,
     );
