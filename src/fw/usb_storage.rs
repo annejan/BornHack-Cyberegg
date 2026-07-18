@@ -142,15 +142,20 @@ pub async fn run(usbd: Peri<'_, peripherals::USBD>) {
     config.max_power = 100; // 100 mA
     config.max_packet_size_0 = 64;
 
-    static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
-    static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+    // Sized with fail-loud headroom: this fixed single-interface MSC device
+    // assembles a 32-byte config descriptor (config + interface + 2 bulk EPs)
+    // and a 12-byte BOS (root + USB 2.0 Extension; no MS-OS caps — msos is
+    // empty).  embassy-usb's DescriptorWriter panics at build() on overflow,
+    // so a too-small buffer fails loudly rather than corrupting.
+    static CONFIG_DESC: StaticCell<[u8; 64]> = StaticCell::new();
+    static BOS_DESC: StaticCell<[u8; 32]> = StaticCell::new();
     static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 
     let mut builder = Builder::new(
         driver,
         config,
-        CONFIG_DESC.init([0; 256]),
-        BOS_DESC.init([0; 256]),
+        CONFIG_DESC.init([0; 64]),
+        BOS_DESC.init([0; 32]),
         &mut [], // no msos descriptors
         CONTROL_BUF.init([0; 64]),
     );

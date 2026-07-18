@@ -79,6 +79,12 @@ pub struct MetaScan {
     speed: Option<u8>,
 }
 
+impl Default for MetaScan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetaScan {
     pub const fn new() -> Self {
         Self {
@@ -94,7 +100,11 @@ impl MetaScan {
         if key.eq_ignore_ascii_case(b"variant") {
             self.variant = Some(parse_variant(val)?);
         } else if key.eq_ignore_ascii_case(b"speed") {
-            self.speed = Some(parse_dec(val).and_then(u8_in_range).ok_or(LutCfgError::BadSpeed)?);
+            self.speed = Some(
+                parse_dec(val)
+                    .and_then(u8_in_range)
+                    .ok_or(LutCfgError::BadSpeed)?,
+            );
         }
         Ok(())
     }
@@ -273,7 +283,7 @@ fn parse_variant(val: &[u8]) -> Result<LutVariant, LutCfgError> {
 
 /// Decode ASCII hex `src` into `dst`, requiring exactly `dst.len()` bytes.
 fn decode_exact(src: &[u8], dst: &mut [u8]) -> Result<(), LutCfgError> {
-    if src.len() % 2 != 0 {
+    if !src.len().is_multiple_of(2) {
         return Err(LutCfgError::BadHex);
     }
     if src.len() / 2 != dst.len() {
@@ -352,7 +362,11 @@ mod tests {
     // bands apart in assertions.
     fn hex_tagged(tag: u8) -> std::string::String {
         let mut s = format!("{:02x}", tag);
-        s.push_str(&(1..LUT_UNIT_LEN).map(|_| "00").collect::<std::string::String>());
+        s.push_str(
+            &(1..LUT_UNIT_LEN)
+                .map(|_| "00")
+                .collect::<std::string::String>(),
+        );
         s
     }
 
@@ -457,11 +471,18 @@ mod tests {
 
     #[test]
     fn validate_matches_parse() {
-        let good = format!("variant=A\nband_lut={}\nband_lut_03={}\n", hex_tagged(1), hex_tagged(2));
+        let good = format!(
+            "variant=A\nband_lut={}\nband_lut_03={}\n",
+            hex_tagged(1),
+            hex_tagged(2)
+        );
         assert!(validate_bands(good.as_bytes()).is_ok());
         // Bad hex, wrong length, and bad index all caught without writing.
         let bad_hex = format!("variant=A\nband_lut={}\n", "zz".repeat(LUT_UNIT_LEN));
-        assert_eq!(validate_bands(bad_hex.as_bytes()).unwrap_err(), LutCfgError::BadHex);
+        assert_eq!(
+            validate_bands(bad_hex.as_bytes()).unwrap_err(),
+            LutCfgError::BadHex
+        );
         assert_eq!(
             validate_bands(b"variant=A\nband_lut=0011\n").unwrap_err(),
             LutCfgError::WrongLen
@@ -518,7 +539,10 @@ mod tests {
     fn streamed_equals_slice_parse() {
         // A file bigger than the stream window: base + all 16 overrides
         // (~3.7 KB), streamed through a 512-byte window in 128-byte reads.
-        let mut cfg = format!("# big\nvariant=B\nspeed=90\nband_lut={}\n", hex_tagged(0xEE));
+        let mut cfg = format!(
+            "# big\nvariant=B\nspeed=90\nband_lut={}\n",
+            hex_tagged(0xEE)
+        );
         for i in 0..NUM_BANDS {
             cfg.push_str(&format!("band_lut_{:02}={}\n", i, hex_tagged(i as u8)));
         }
@@ -554,11 +578,17 @@ mod tests {
 
     #[test]
     fn streamed_base_fill_at_finish() {
-        let cfg = format!("variant=A\nband_lut={}\nband_lut_05={}\n", hex_tagged(0xBB), hex_tagged(0x55));
+        let cfg = format!(
+            "variant=A\nband_lut={}\nband_lut_05={}\n",
+            hex_tagged(0xBB),
+            hex_tagged(0x55)
+        );
         let (mut bands, _) = empty_bands();
         let mut apply = BandScan::apply(&mut bands);
         // Tiny window/chunk to force many carry-overs mid-line.
-        stream_chunked(cfg.as_bytes(), 256, 7, &mut |line: &[u8]| apply.feed_line(line));
+        stream_chunked(cfg.as_bytes(), 256, 7, &mut |line: &[u8]| {
+            apply.feed_line(line)
+        });
         let set = apply.finish();
         assert!(set.iter().all(|&s| s));
         assert_eq!(bands[5][0], 0x55);

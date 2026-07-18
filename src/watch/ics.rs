@@ -201,7 +201,7 @@ fn parse_datetime(value: &[u8]) -> Option<ParsedDateTime> {
     // Validate the day against the actual month length (incl. leap years) so a
     // malformed date like 0230 / 0431 is rejected instead of producing a
     // phantom one-shot alarm that can never fire or auto-disable.
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,

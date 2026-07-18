@@ -1,4 +1,4 @@
-use defmt::{todo, *};
+use defmt::*;
 use defmt_rtt as _;
 use embassy_nrf as _;
 use embassy_nrf::nfct::{Config as NfcConfig, NfcId, NfcT};
