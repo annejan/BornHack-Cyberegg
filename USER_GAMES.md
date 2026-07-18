@@ -173,7 +173,7 @@ single plane, RLE, fixed palette 0 = black / 1 = red / 2 = white /
 With three free prefixes (`5`–`7`) the roster tops out at the three
 built-ins plus three custom pets.
 
-## The seven mini-games
+## The five mini-games
 
 Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has its own cooldown (limit on how often you can play it for stat reduction). **CAN** always exits any mini-game.
 
@@ -182,9 +182,7 @@ Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has i
 | **Tic-Tac-Toe** | Draw or beat the computer's X-vs-O              | Difficulty: Normal (computer slips 35%) or Impossible (never slips) |
 | **Lights Out**  | Toggle squares on a 5×5 grid until all are off  | Toggling a cell flips its 4 neighbours too. All seeds are solvable. |
 | **Nim**         | Force the computer to take the last stick       | Four rows of 1 / 3 / 5 / 7 sticks. Two-phase input: pick row, then count. |
-| **Maze**        | Reach any border exit                           | 18×18 maze, visited cells stay shaded. |
 | **Black Hole**  | Lower adjacent-sum than the AI                 | 21-cell pyramid, both players place numbers 1..10 in alternating turns. |
-| **Triple Born** | Triple Town reskin                              | 6×6 board. Merge three of a kind → next tier. **EXE** swaps the falling piece with the stash. |
 | **BornJeweled** | Match-3 with a move limit                       | 6×6 board, 30 moves. Shapes only — no colour pairs, fully accessible. |
 
 All games share these controls inside play:
@@ -196,7 +194,3 @@ All games share these controls inside play:
 | CAN            | quit back to the Play menu                   |
 
 Each win reduces the "drained" stat without raising "hunger" — they're free entertainment.
-
-## Tokens
-
-The **Tokens** screen collects tokens you receive via NFC taps or over the mesh (channel or direct message). Every distinct token is kept in a scrollable list — up to 16 — that stays until you reboot the badge; duplicates are ignored. Long tokens wrap onto several lines (continuation lines are indented) so the whole value is readable. Use **Up/Down** to scroll; **Left/Right** switch screens as usual. See [USER_NFC.md](USER_NFC.md) for how to earn them.

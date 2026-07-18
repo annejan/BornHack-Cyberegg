@@ -27,7 +27,7 @@ One-page badge cheat sheet. Print and tuck under the strap.
 
 ## Top-level screens (Left / Right cycles)
 
-`Game → Main → PMs → Channel → Adverts → Tokens → Clock → Calendar → Name → My QR`
+`Game → Main → PMs → Channel → Adverts → Clock → Calendar → Name → My QR`
 
 ## LED meanings
 

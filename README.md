@@ -273,8 +273,7 @@ see **[NFC_README.md](NFC_README.md)**.
 
 The NFC tag also serves a plaintext, user-settable NDEF broadcast profile
 for phone-side tag readers — a vanity URL, vCard, Wi-Fi record, or any
-NDEF message you write to it, defaulting to `https://badge.team/docs/badges/bornhack-2026/`. Writing
-a `token:` record instead collects a token on the Tokens screen. See
+NDEF message you write to it, defaulting to `https://badge.team/docs/badges/bornhack-2026/`. See
 [NFC_README.md](NFC_README.md) §5.
 
 ## MeshCore Companion Protocol
