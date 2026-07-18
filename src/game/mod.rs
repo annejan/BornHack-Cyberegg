@@ -346,7 +346,7 @@ where
     }
 
     // HEX balance — top-right, below the battery icon + menu icon row
-    // (y=36 clears the icons; y=16 overlapped them).
+    // (y=30 clears the icons; y=16 overlapped them).
     // Hidden entirely when money mode is disabled for this pet.
     if lifecycle::money_enabled() {
         let right_style = TextStyleBuilder::new()
@@ -358,7 +358,7 @@ where
             &mut money_buf,
             format_args!("{} HEX", lifecycle::money()),
         );
-        Text::with_text_style(money_buf.as_str(), Point::new(150, 16), font, right_style)
+        Text::with_text_style(money_buf.as_str(), Point::new(150, 30), font, right_style)
             .draw(display)?;
     }
 
