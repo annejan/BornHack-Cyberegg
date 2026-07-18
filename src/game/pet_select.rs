@@ -32,8 +32,12 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// ("Without money") or 2 ("Hard (US)").
 static SELECTION: AtomicU8 = AtomicU8::new(0);
 
-/// Number of rows in the money phase — see `MONEY_LABELS`.
-const MONEY_OPTION_COUNT: u8 = 3;
+/// Money-phase option labels. Module scope so the cursor bound below
+/// derives from the list — add a label here and the wrap-around count
+/// follows automatically instead of silently drifting out of sync.
+const MONEY_LABELS: [&str; 3] = ["With money", "Without money", "Hard mode (US)"];
+/// Number of rows in the money phase — derived from `MONEY_LABELS`.
+const MONEY_OPTION_COUNT: u8 = MONEY_LABELS.len() as u8;
 
 /// What to do after selection: 0 = new game, 1 = new generation.
 static MODE: AtomicU8 = AtomicU8::new(0);
@@ -210,9 +214,8 @@ where
         };
 
     if PHASE.load(Ordering::Relaxed) == PHASE_MONEY {
-        // Money list — same row layout/idiom as the pet list, just a
-        // fixed 3-item roster.
-        const MONEY_LABELS: [&str; 3] = ["With money", "Without money", "Hard mode (US)"];
+        // Money list — same row layout/idiom as the pet list, over the
+        // module-level MONEY_LABELS so it can't drift from MONEY_OPTION_COUNT.
         for (i, label) in MONEY_LABELS.iter().enumerate() {
             draw_row(display, i, label, i == selection)?;
         }

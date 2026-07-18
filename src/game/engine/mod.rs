@@ -1899,15 +1899,26 @@ impl GameState {
 // Serialization — manual, no serde, fixed-size
 // ---------------------------------------------------------------------------
 
-/// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 96;
+/// Format version stamped into byte 0 of every save. Bump this whenever
+/// the field layout below changes so an old-layout blob from a prior
+/// firmware fails the guard in `from_bytes` (→ clean fresh egg) instead
+/// of being silently reinterpreted with the new offsets. v1 was the
+/// original unversioned 96-byte layout; v2 adds this byte + HEX money.
+pub const SAVE_FORMAT_VERSION: u8 = 2;
+
+/// Serialized size of GameState in bytes (1 version byte + 96 fields).
+pub const SAVE_SIZE: usize = 97;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
     #[allow(unused_assignments)]
     pub fn to_bytes(&self) -> [u8; SAVE_SIZE] {
         let mut b = [0u8; SAVE_SIZE];
-        let mut i = 0;
+        // Byte 0 = format version so a differently-laid-out save written by
+        // another firmware is rejected by from_bytes instead of silently
+        // misparsed with these offsets. Fields start at index 1.
+        b[0] = SAVE_FORMAT_VERSION;
+        let mut i = 1;
 
         macro_rules! w16 {
             ($v:expr) => {
@@ -1987,7 +1998,7 @@ impl GameState {
         w8!(self.money_enabled as u8);
         // Hard mode (1 byte).
         w8!(self.hard_mode as u8);
-        // Total: 96 bytes.
+        // Total: 97 bytes (1 version + 96 fields).
         b
     }
 
@@ -1995,14 +2006,16 @@ impl GameState {
     /// Returns `None` if the buffer is too short.
     #[allow(unused_assignments)]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        // Only accept current fixed-size saves. Pre-pet_kind (65-byte) saves
-        // are intentionally ignored — there is no fielded old firmware to
-        // migrate from, so a short/legacy blob is treated as "no save" and the
-        // player starts fresh rather than loading a half-parsed state.
-        if b.len() != SAVE_SIZE {
+        // Accept only current-version, current-size saves. Any other blob —
+        // a pre-pet_kind (65-byte) save, or a same-size but differently-laid-
+        // out save from another firmware (e.g. the pre-money 96-byte layout
+        // that dropped `drained`) — fails the version+length guard and is
+        // treated as "no save" so the player starts fresh, rather than being
+        // silently reinterpreted with the wrong field offsets.
+        if b.len() != SAVE_SIZE || b[0] != SAVE_FORMAT_VERSION {
             return None;
         }
-        let mut i = 0;
+        let mut i = 1;
 
         macro_rules! r16 {
             () => {{
@@ -2315,8 +2328,8 @@ impl PetRealm {
 mod overweight_diabetes_tests {
     use super::*;
 
-    /// New fields round-trip through `to_bytes`/`from_bytes` at the new
-    /// 96-byte `SAVE_SIZE` (95 + the new `hard_mode` byte).
+    /// New fields round-trip through `to_bytes`/`from_bytes` at the
+    /// versioned 97-byte `SAVE_SIZE` (1 version byte + 96 fields).
     #[test]
     fn save_round_trip_includes_new_fields() {
         let mut state = GameState::new_egg(42, PetKind::Cat);
@@ -2333,7 +2346,8 @@ mod overweight_diabetes_tests {
 
         let bytes = state.to_bytes();
         assert_eq!(bytes.len(), SAVE_SIZE);
-        assert_eq!(SAVE_SIZE, 96);
+        assert_eq!(SAVE_SIZE, 97);
+        assert_eq!(bytes[0], SAVE_FORMAT_VERSION);
 
         let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
         assert_eq!(restored.weight, 41000);
@@ -2347,6 +2361,26 @@ mod overweight_diabetes_tests {
         assert_eq!(restored.money, 12345);
         assert!(!restored.money_enabled);
         assert!(restored.hard_mode);
+    }
+
+    /// A save blob with a different layout/version is rejected (→ fresh egg)
+    /// rather than silently misparsed. Regression guard for the pre-money
+    /// 96-byte layout (which dropped `drained` and kept SAVE_SIZE at 96)
+    /// being reinterpreted with the new field offsets and corrupting the pet.
+    #[test]
+    fn old_or_wrong_version_save_is_rejected() {
+        // A valid current save round-trips.
+        let good = GameState::new_egg(7, PetKind::Slug).to_bytes();
+        assert!(GameState::from_bytes(&good).is_some());
+
+        // Old-layout blob one byte short of the versioned size — rejected on length.
+        let old = [0xABu8; SAVE_SIZE - 1];
+        assert!(GameState::from_bytes(&old).is_none());
+
+        // Right size but wrong version byte — rejected on version.
+        let mut wrong_ver = good;
+        wrong_ver[0] = SAVE_FORMAT_VERSION.wrapping_add(1);
+        assert!(GameState::from_bytes(&wrong_ver).is_none());
     }
 
     /// A fresh egg starts with the Stage-1 HEX default: 100 balance, money
