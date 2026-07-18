@@ -70,7 +70,7 @@ the mesh (see
 | ------------ | ---------------- | ---------------------------------------------------------------- |
 | **Feed**     | Salad            | Healthiest — less filling, barely any weight gain               |
 |              | Apple             | Baseline hunger relief and weight gain                          |
-|              | Burger           | Filling, but a real weight hit                                  |
+|              | Frikandel spec   | Deep-fried and greasy — very filling, a real weight hit         |
 |              | Pizza            | Very filling — but the biggest weight gain short of dessert      |
 |              | Cake             | Barely touches hunger, big mood boost, worst weight gain by far |
 | **Heal**     | Give medicine    | Reduces sick                                                     |
@@ -141,7 +141,7 @@ Playing music does **not** use the play action cooldown.
 Weight is a slow, multi-day stat — it isn't something you need to manage
 hour-to-hour like hunger. It drifts up gradually over time, and *what*
 you feed matters a lot: Salad barely moves it, Apple is the baseline,
-Burger and Pizza add real weight, and Cake is the worst offender by far
+Frikandel speciaal and Pizza add real weight, and Cake is the worst offender by far
 (great mood boost, terrible for the waistline). Use the **Exercise** icon
 (top row) whenever you notice the Fit bar dropping to bring weight back
 down.

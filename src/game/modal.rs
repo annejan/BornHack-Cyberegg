@@ -100,7 +100,7 @@ impl ModalKind {
             Self::Feed => &[
                 Item::FeedFood(super::engine::FoodKind::Salad),
                 Item::FeedFood(super::engine::FoodKind::Apple),
-                Item::FeedFood(super::engine::FoodKind::Burger),
+                Item::FeedFood(super::engine::FoodKind::Frikandel),
                 Item::FeedFood(super::engine::FoodKind::Pizza),
                 Item::FeedFood(super::engine::FoodKind::Cake),
                 Item::Cancel,
@@ -381,7 +381,7 @@ impl Item {
             }
             Self::Ozempic => {
                 lifecycle::ozempic();
-                super::show_toast(super::Toast::Exercise);
+                super::show_toast(super::Toast::Ozempic);
                 close();
             }
             Self::ExerciseNow => {

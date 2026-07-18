@@ -15,7 +15,7 @@ here's what changed:
 - **Weight & Type 2 Diabetes** — a slow, multi-day weight stat. Sustained
   neglect (skipping Exercise) triggers permanent diabetes, managed with
   a new **Insulin** treatment.
-- **Food choice** — Feed now offers five options (Salad/Apple/Burger/
+- **Food choice** — Feed now offers five options (Salad/Apple/Frikandel/
   Pizza/Cake) with different hunger-relief-vs-weight-gain tradeoffs.
 - **Exercise** — a new action that burns off weight.
 - **Ozempic** — a stronger, longer-cooldown weight-loss treatment, usable
@@ -524,12 +524,18 @@ sudo apt install build-essential gcc-arm-none-eabi libsdl2-dev dfu-util libudev-
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
 
+# flip-link — the firmware's linker (see .cargo/config.toml); without it the
+# build fails with "linker `flip-link` not found"
+cargo install flip-link
+
 # probe-rs
 cargo install probe-rs-tools
 
 # udev rules for SWD debug probes (J-Link, ST-Link, CMSIS-DAP, etc.)
+# and the Cyber Ægg Bootloader
 curl -o /tmp/69-probe-rs.rules https://probe.rs/files/69-probe-rs.rules
 sudo cp /tmp/69-probe-rs.rules /etc/udev/rules.d/
+echo 'ATTRS{idVendor}=="1915", ATTRS{idProduct}=="521f", MODE="660", GROUP="plugdev", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/69-cyberaegg.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
@@ -539,6 +545,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo pacman -S base-devel arm-none-eabi-gcc sdl2 dfu-util
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
+cargo install flip-link      # the firmware's linker — build fails without it
 cargo install probe-rs-tools
 ```
 
@@ -554,6 +561,10 @@ brew install arm-none-eabi-binutils sdl2 dfu-util
 # Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
+
+# flip-link — the firmware's linker (see .cargo/config.toml); without it the
+# build fails with "linker `flip-link` not found"
+cargo install flip-link
 
 # probe-rs
 cargo install probe-rs-tools
@@ -575,6 +586,12 @@ Install the following:
    ```
 
 1. **ARM toolchain**: download the GNU Arm Embedded Toolchain from <https://developer.arm.com/downloads/-/gnu-rm> and add it to your PATH.
+
+1. **flip-link** — the firmware's linker (`.cargo/config.toml`); the build fails with `linker 'flip-link' not found` without it:
+
+   ```powershell
+   cargo install flip-link
+   ```
 
 1. **probe-rs**:
 

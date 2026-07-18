@@ -609,6 +609,7 @@ pub async fn init_epd<'a>(
     // Detect the panel variant from a probed entry — needed both for the
     // custom-LUT validation below and for `patch_no_invert` later.
     let variant = detect_variant_from_otp(&lut_table[LUT_TABLE_SIZE / 2]);
+    EPD_VARIANT_IS_B.store(matches!(variant, DisplayVariant::Ssd1675B), Ordering::Relaxed);
 
     // Optionally replace OTP-probed bands with a user-supplied custom LUT
     // (LUT.CFG on the USB-MSC FAT partition), applied here BEFORE the
@@ -624,6 +625,7 @@ pub async fn init_epd<'a>(
         defmt::info!("EPD: Fire held at boot — forcing OTP LUT, ignoring LUT.CFG");
         [false; LUT_TABLE_SIZE]
     };
+    EPD_CUSTOM_LUT_ACTIVE.store(custom_bands.iter().any(|&b| b), Ordering::Relaxed);
 
     // Build the SPI bus.
     let mut cfg = Config::default();
@@ -767,6 +769,16 @@ pub const EPD_LUT_SPEED_MIN: u8 = 30;
 /// writes here and fires [`EPD_LUT_SPEED_DIRTY`]. `load_persisted_lut_speed`
 /// also writes here at boot (without firing the signal).
 pub static EPD_LUT_SPEED: AtomicU8 = AtomicU8::new(100);
+
+/// Panel variant detected from OTP at boot: `true` = SSD1675B, `false` =
+/// SSD1675A. Stashed here so the Settings "Screen" info row can read it —
+/// the `DisplayVariant` otherwise lives only on the `EpdGfx` inside the
+/// display loop, unreachable from a menu formatter.
+pub static EPD_VARIANT_IS_B: AtomicBool = AtomicBool::new(false);
+
+/// `true` when a custom `LUT.CFG` waveform was accepted and applied at boot
+/// (≥1 band came from the file); `false` = OTP / built-in default waveform.
+pub static EPD_CUSTOM_LUT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Fired when [`EPD_LUT_SPEED`] is updated from the menu — drives the
 /// persister loop in [`epd_lut_speed_persist_loop`].
