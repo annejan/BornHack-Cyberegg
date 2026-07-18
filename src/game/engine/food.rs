@@ -67,4 +67,28 @@ impl FoodKind {
         let (_, _, pct) = self.multipliers();
         ((base as u32 * pct) / 100).min(u16::MAX as u32) as u16
     }
+
+    /// HEX price to feed this food. Healthy costs more than junk.
+    pub fn hex_price(self) -> u32 {
+        match self {
+            FoodKind::Salad | FoodKind::Apple => 15,
+            FoodKind::Burger | FoodKind::Pizza | FoodKind::Cake => 10,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Healthy foods (Salad, Apple) cost 15 HEX; unhealthy ones (Burger,
+    /// Pizza, Cake) cost 10 — junk food is the cheap trap.
+    #[test]
+    fn hex_price_matches_health_tier() {
+        assert_eq!(FoodKind::Salad.hex_price(), 15);
+        assert_eq!(FoodKind::Apple.hex_price(), 15);
+        assert_eq!(FoodKind::Burger.hex_price(), 10);
+        assert_eq!(FoodKind::Pizza.hex_price(), 10);
+        assert_eq!(FoodKind::Cake.hex_price(), 10);
+    }
 }

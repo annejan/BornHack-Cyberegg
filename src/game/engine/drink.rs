@@ -71,11 +71,30 @@ impl DrinkKind {
         let (_, _, pct) = self.multipliers();
         ((base as u32 * pct) / 100).min(u16::MAX as u32) as u16
     }
+
+    /// HEX price to buy this drink. Only Water is "healthy" (pricier).
+    pub fn hex_price(self) -> u32 {
+        match self {
+            DrinkKind::Water => 15,
+            DrinkKind::Cola | DrinkKind::Beer | DrinkKind::Wine | DrinkKind::Whiskey => 10,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Water (the only "healthy" drink) costs 15 HEX; every other drink
+    /// (non-alcoholic Cola included) costs 10.
+    #[test]
+    fn hex_price_matches_health_tier() {
+        assert_eq!(DrinkKind::Water.hex_price(), 15);
+        assert_eq!(DrinkKind::Cola.hex_price(), 10);
+        assert_eq!(DrinkKind::Beer.hex_price(), 10);
+        assert_eq!(DrinkKind::Wine.hex_price(), 10);
+        assert_eq!(DrinkKind::Whiskey.hex_price(), 10);
+    }
 
     #[test]
     fn only_water_and_cola_are_non_alcoholic() {
