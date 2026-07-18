@@ -12,6 +12,9 @@ deps beyond stdlib.
 | `copy_assets.py`      | Production (MSC)   | Detects a `CYBR*` USB-MSC volume, copies the sprite bundle     |
 | `99-cyberaegg.rules`  | one-time install   | udev rules so DFU + USB-MSC + SWD work without sudo            |
 | `strip_ics.py`        | dev                | Trims `ALARMS.ICS` calendar exports to fit the 4 KiB read buffer |
+| `png_to_badge_pcx.py` | dev (assets)       | PNG → badge PCX (152×152, 2bpp, black/red/white), scale-to-fit    |
+| `fix_badge_pcx.py`    | dev (assets)       | Re-packs a wrong-depth PCX (4bpp/8bpp, incl. ones Pillow can't open) to badge 2bpp, **preserving dimensions** |
+| `check_badge_pcx.py`  | dev (assets)       | Validates a directory of `PPAAFF.PCX` against the badge decoder rules |
 
 ---
 
