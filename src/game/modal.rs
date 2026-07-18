@@ -173,7 +173,7 @@ impl ModalKind {
                 Item::Song(crate::SONG_OVER_THE_HORIZON_INDEX),
                 Item::Cancel,
             ],
-            Self::Rest => &[Item::Sleep, Item::Relax, Item::Cancel],
+            Self::Rest => &[Item::Sleep, Item::Cancel],
             Self::None => &[],
         }
     }
@@ -210,7 +210,6 @@ enum Item {
     DrinkChoice(super::engine::DrinkKind),
     Rehab,
     Sleep,
-    Relax,
     PlayNow,
     OnlyPets,
     TicTacToe,
@@ -251,7 +250,6 @@ impl Item {
             Self::DrinkChoice(drink) => drink.label(),
             Self::Rehab => "Rehab",
             Self::Sleep => "Sleep",
-            Self::Relax => "Relax",
             Self::PlayNow => "Play now",
             Self::OnlyPets => "Only pets",
             Self::TicTacToe => "Tic Tac Toe",
@@ -315,7 +313,6 @@ impl Item {
             Self::Ozempic => stats.can_ozempic,
             Self::ExerciseNow => stats.can_exercise,
             Self::Sleep => stats.can_sleep,
-            Self::Relax => stats.can_relax,
             Self::PlayNow => stats.can_play,
             Self::OnlyPets => stats.can_only_pets,
             Self::TicTacToe => stats.can_play_tictactoe,
@@ -352,7 +349,6 @@ impl Item {
             Self::Rehab => action_remaining(Action::Rehab).max(stats.cooldown_rehab),
             Self::ExerciseNow => action_remaining(Action::Exercise).max(stats.cooldown_exercise),
             Self::Battle => stats.cooldown_battle,
-            Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
             Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
             Self::OnlyPets => {
                 action_remaining(Action::OnlyPets).max(stats.cooldown_onlypets)
@@ -474,11 +470,6 @@ impl Item {
             Self::Sleep => {
                 lifecycle::sleep();
                 super::show_toast(super::Toast::Sleep);
-                close();
-            }
-            Self::Relax => {
-                lifecycle::relax();
-                super::show_toast(super::Toast::Relax);
                 close();
             }
             Self::PlayNow => {
@@ -962,17 +953,16 @@ where
     ui::draw_title_bar(display, "Pet Stats", Point::new(inner_x, inner_y), inner_w)?;
 
     // Stat bars.
-    let bars: [(&str, u8); 6] = [
+    let bars: [(&str, u8); 5] = [
         ("Hunger", stats.hunger),
         ("Rested", stats.tired),
-        ("Inspired", stats.inspired),
         ("Healthy", stats.healthy),
         ("Happy", stats.happy),
         ("Fit", stats.weight),
     ];
 
     // Layout: label at left margin, bar to the right of the longest
-    // label ("Inspired" = 8 chars × 7 px = 56 px from `label_x`).
+    // label ("Healthy" = 7 chars × 7 px = 49 px from `label_x`).
     let label_x = inner_x + 4;
     let bar_x = label_x + 60; // 4 px clearance after the longest label
 
