@@ -604,7 +604,14 @@ where
             (lifecycle::is_overweight_warning(), "OVERWEIGHT"),
             (lifecycle::is_drunk_warning(), "DRUNK"),
         ];
-        let mut banner_y = SEP_TOP + 2;
+        // When money mode is on, the HAX balance sits at y=33 (~13px tall)
+        // in the same top-right corner, so start the banner stack below it
+        // to avoid overlapping the balance readout.
+        let mut banner_y = if lifecycle::money_enabled() {
+            47
+        } else {
+            SEP_TOP + 2
+        };
         for (active, text) in banners {
             if active {
                 Text::with_text_style(text, Point::new(150, banner_y), font, style)
@@ -640,7 +647,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         if lifecycle::take_naming_pending() {
             let seed = lifecycle::now_tick();
             let default = lifecycle::random_default_name(seed);
-            crate::text_entry::begin(default.as_bytes(), 12, on_pet_named, "Name your Pet");
+            crate::text_entry::begin(default.as_bytes(), 12, on_pet_named, "Name your Pet", true);
         }
     }
 
