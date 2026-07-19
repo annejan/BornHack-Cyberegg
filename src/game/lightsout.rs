@@ -295,12 +295,14 @@ where
         Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered).draw(display)?;
     } else if unsolvable {
         Text::with_text_style(
-            "Unsolvable — Fire to exit",
-            Point::new(76, 134),
+            // Two short centered lines — the single string overflowed 152px.
+            "Unsolvable",
+            Point::new(76, 127),
             font,
             centered,
         )
         .draw(display)?;
+        Text::with_text_style("Fire to exit", Point::new(76, 141), font, centered).draw(display)?;
     } else {
         let mut buf: heapless::String<24> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Moves: {}", moves));
