@@ -728,6 +728,21 @@ where
         return game::friends_view::draw(display);
     }
 
+    // Battle animation: full-screen two-stage result takeover. On firmware the
+    // embassy display loop drives this (timed stages + refreshes); the simulator
+    // has no such loop, so it renders the current frame here. Takes priority over
+    // the battle result card below.
+    #[cfg(all(feature = "game", feature = "simulator", not(feature = "embassy-base")))]
+    if game::battle_anim_active() {
+        if game::battle_anim_stage() == game::BattleStage::Done {
+            game::clear_battle_anim();
+        } else {
+            display.clear(WHITE)?;
+            game::battle_view::draw_anim_sim(display);
+            return Ok(());
+        }
+    }
+
     // Battle: full-screen friend picker + result report.
     #[cfg(feature = "game")]
     if game::battle_view::is_active() {

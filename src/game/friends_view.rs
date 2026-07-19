@@ -92,7 +92,9 @@ pub fn handle_input(btn: ButtonId) {
     match btn {
         ButtonId::Up => cursor_up(),
         ButtonId::Down => cursor_down(),
-        ButtonId::Fire => {
+        // Fire or Execute opens the detail view — accept both so Execute
+        // doesn't silently close the list instead of confirming.
+        ButtonId::Fire | ButtonId::Execute => {
             if super::friends::count() > 0 {
                 STATE.store(STATE_DETAIL, Ordering::Relaxed);
             }

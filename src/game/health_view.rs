@@ -188,7 +188,8 @@ where
     // breakdown lives in GAME.md instead of trying to fit it here too.
     let note_y = sober_y + 19;
     Text::with_text_style(
-        "Sustained neglect -> permanent.",
+        // Short enough to fit the 152px panel — the full string clipped.
+        "Neglect -> permanent",
         Point::new(ROW_X, note_y),
         TEXT_BOLD_BLACK,
         left,

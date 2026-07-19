@@ -640,13 +640,42 @@ async fn display_loop(
 
         // Hidden-combo de-ghost: a deliberate, user-triggered full black →
         // white flush, run before this iteration's normal content draw
-        // below. FULL_REFRESH_PENDING (already checked further down) then
-        // forces that redraw to mark every pixel dirty, so nothing here
-        // needs its own "mark all" bookkeeping. This double-refresh is
-        // genuinely slow (two full OTP passes) — acceptable for a
-        // deliberate, occasional manual combo, but see
-        // `EPD_DEGHOST_ON_MENU` below for the automatic case, which uses
-        // a single-pass alternative instead for exactly that reason.
+        // below. Each half is a genuine inverting full refresh (same
+        // primitive the boot-time clear and heavy-graphic screens use),
+        // so the panel visibly settles solid black, then solid white,
+        // before the real screen content goes down. FULL_REFRESH_PENDING
+        // (already checked further down) then forces that redraw to mark
+        // every pixel dirty, so nothing here needs its own "mark all"
+        // bookkeeping.
+        // ── Battle animation takeover ──────────────────────────────────
+        // A resolved battle (local challenge or an incoming mesh result) plays
+        // a full-screen two-stage animation — 5 s per stage — over whatever
+        // screen is active. Each stage is one e-paper refresh.
+        #[cfg(feature = "game")]
+        if bornhack_aegg::game::battle_anim_active() {
+            let anim_speed = bornhack_aegg::fw::epd::current_lut_speed();
+            // Drive the two stages EXPLICITLY, holding each ~5 s after its
+            // refresh completes. Deriving the stage from wall-clock elapsed
+            // would skip the result frame: a single e-paper refresh takes
+            // several seconds, so by the time the standing frame + 5 s hold
+            // finish, the elapsed clock has already passed the result window.
+            for stage in [
+                bornhack_aegg::game::BattleStage::Standing,
+                bornhack_aegg::game::BattleStage::Result,
+            ] {
+                display.clear(Color::White);
+                let _ = display.reset().await;
+                bornhack_aegg::game::battle_view::render_anim(display, stage).await;
+                let _ = display.update_tc(anim_speed).await;
+                let _ = display.deep_sleep().await;
+                Timer::after_millis(5_000).await;
+            }
+            bornhack_aegg::game::clear_battle_anim();
+            // Force a clean full redraw of the screen we interrupted.
+            bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+            continue;
+        }
+
         if bornhack_aegg::FORCE_FLUSH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
             // Hold a boost vote across the full-panel de-ghost drive
             // (high-current), then run the extracted helper.

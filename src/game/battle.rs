@@ -174,31 +174,69 @@ pub struct BattleResultMsg {
     pub challenger_won: bool,
     pub challenger_hp_pct: u8,
     pub target_hp_pct: u8,
+    /// Challenger's pet species (sprite `PP` prefix), or [`KIND_UNKNOWN`] when
+    /// decoded from a legacy `MIN_SIZE` packet that predates this field.
+    pub challenger_kind: u8,
+    /// Target's pet species, or [`KIND_UNKNOWN`] (see above).
+    pub target_kind: u8,
 }
 
-const RESULT_SIZE: usize = 7; // 2 + 2 + 1 + 1 + 1
+/// Legacy wire layout: `2 + 2 + 1 + 1 + 1`. Still accepted on decode so a badge
+/// running the older firmware can battle a new one (see module docs / spec).
+const MIN_SIZE: usize = 7;
+/// Current wire layout: legacy + `challenger_kind + target_kind`.
+const FULL_SIZE: usize = 9;
+
+/// Sentinel species used when a legacy packet carries no `kind` bytes. Not a
+/// real pet id — the receiver resolves it via the friend record or the generic
+/// placeholder pet (see [`resolve_kind`]).
+pub const KIND_UNKNOWN: u8 = 0xFF;
+
+/// Resolve a combatant's sprite species: use `kind` when it's a real value,
+/// else fall back to the stored friend record for `device_id`, else the first
+/// firmware pet (Bartholomeus). There is no generic placeholder — every drawn
+/// species is a real pet.
+pub fn resolve_kind(kind: u8, device_id: [u8; 2]) -> u8 {
+    if kind != KIND_UNKNOWN {
+        return kind;
+    }
+    super::friends::pet_kind_of(device_id).unwrap_or(super::engine::PetKind::Bartholomeus.id())
+}
 
 impl BattleResultMsg {
-    pub fn to_bytes(&self) -> [u8; RESULT_SIZE] {
-        let mut buf = [0u8; RESULT_SIZE];
+    pub fn to_bytes(&self) -> [u8; FULL_SIZE] {
+        let mut buf = [0u8; FULL_SIZE];
         buf[0..2].copy_from_slice(&self.challenger_id);
         buf[2..4].copy_from_slice(&self.target_id);
         buf[4] = self.challenger_won as u8;
         buf[5] = self.challenger_hp_pct;
         buf[6] = self.target_hp_pct;
+        buf[7] = self.challenger_kind;
+        buf[8] = self.target_kind;
         buf
     }
 
+    /// Decode a result. Accepts both the current `FULL_SIZE` layout and the
+    /// legacy `MIN_SIZE` one; the species fields come back as [`KIND_UNKNOWN`]
+    /// when the packet is too short to carry them (trailing bytes beyond what
+    /// we read are ignored, matching how the old parser tolerated extra data).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
-        if buf.len() < RESULT_SIZE {
+        if buf.len() < MIN_SIZE {
             return None;
         }
+        let (challenger_kind, target_kind) = if buf.len() >= FULL_SIZE {
+            (buf[7], buf[8])
+        } else {
+            (KIND_UNKNOWN, KIND_UNKNOWN)
+        };
         Some(Self {
             challenger_id: [buf[0], buf[1]],
             target_id: [buf[2], buf[3]],
             challenger_won: buf[4] != 0,
             challenger_hp_pct: buf[5],
             target_hp_pct: buf[6],
+            challenger_kind,
+            target_kind,
         })
     }
 }
@@ -279,13 +317,26 @@ pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
     super::lifecycle::record_battle(outcome.challenger_won);
     super::friends::record_battle_vs(friend.device_id, outcome.challenger_won);
 
+    let my_kind = super::lifecycle::pet_kind().id();
+
     broadcast_result(&BattleResultMsg {
         challenger_id: super::friends::local_device_id(),
         target_id: friend.device_id,
         challenger_won: outcome.challenger_won,
         challenger_hp_pct: outcome.challenger_hp_pct,
         target_hp_pct: outcome.target_hp_pct,
+        challenger_kind: my_kind,
+        target_kind: friend.pet_kind,
     });
+
+    // Play the battle animation locally: our pet (left) vs the friend (right).
+    super::show_battle_anim(
+        my_kind,
+        friend.pet_kind,
+        outcome.challenger_won,
+        outcome.challenger_hp_pct,
+        outcome.target_hp_pct,
+    );
 
     Some(outcome)
 }
@@ -329,11 +380,21 @@ pub async fn on_battle_result(data: &[u8]) {
     let we_won = !msg.challenger_won;
     super::lifecycle::record_battle(we_won);
     super::friends::record_battle_vs(msg.challenger_id, we_won);
-    super::show_toast(if we_won {
-        super::Toast::BattleWon
-    } else {
-        super::Toast::BattleLost
-    });
+
+    // Replay the battle as a full-screen animation instead of a toast: our pet
+    // (left) vs the challenger (right, mirrored). The challenger's species comes
+    // from the packet when present, else the stored friend record, else the
+    // generic placeholder pet (see `resolve_kind`).
+    let own_kind = super::lifecycle::pet_kind().id();
+    let opp_kind = resolve_kind(msg.challenger_kind, msg.challenger_id);
+    // From our side the HP swaps: our pet's HP is the packet's target HP.
+    super::show_battle_anim(
+        own_kind,
+        opp_kind,
+        we_won,
+        msg.target_hp_pct,
+        msg.challenger_hp_pct,
+    );
 }
 
 #[cfg(test)]
@@ -348,6 +409,62 @@ mod tests {
         let mut state = GameState::new_egg(1, PetKind::Cat);
         state.phase = Phase::Active;
         state.stats(0)
+    }
+
+    #[test]
+    fn result_msg_full_round_trip_preserves_species() {
+        let msg = BattleResultMsg {
+            challenger_id: [0xAB, 0xCD],
+            target_id: [0x12, 0x34],
+            challenger_won: true,
+            challenger_hp_pct: 80,
+            target_hp_pct: 0,
+            challenger_kind: 5,
+            target_kind: 1,
+        };
+        let bytes = msg.to_bytes();
+        assert_eq!(bytes.len(), FULL_SIZE);
+        let back = BattleResultMsg::from_bytes(&bytes).unwrap();
+        assert_eq!(back.challenger_id, [0xAB, 0xCD]);
+        assert_eq!(back.target_id, [0x12, 0x34]);
+        assert!(back.challenger_won);
+        assert_eq!(back.challenger_hp_pct, 80);
+        assert_eq!(back.target_hp_pct, 0);
+        assert_eq!(back.challenger_kind, 5);
+        assert_eq!(back.target_kind, 1);
+    }
+
+    #[test]
+    fn result_msg_legacy_decode_marks_species_unknown() {
+        // A 7-byte packet from the old firmware must still decode, with the
+        // species reported as unknown so the receiver falls back.
+        let legacy = [0xAB, 0xCD, 0x12, 0x34, 1, 80, 0];
+        let back = BattleResultMsg::from_bytes(&legacy).unwrap();
+        assert_eq!(back.challenger_kind, KIND_UNKNOWN);
+        assert_eq!(back.target_kind, KIND_UNKNOWN);
+        assert!(back.challenger_won);
+        // Too short → rejected.
+        assert!(BattleResultMsg::from_bytes(&legacy[..MIN_SIZE - 1]).is_none());
+    }
+
+    #[test]
+    fn new_receiver_ignores_extra_trailing_bytes() {
+        // Forward-compat: a longer future packet still decodes the fields we know.
+        let mut buf = BattleResultMsg {
+            challenger_id: [1, 2],
+            target_id: [3, 4],
+            challenger_won: false,
+            challenger_hp_pct: 10,
+            target_hp_pct: 90,
+            challenger_kind: 2,
+            target_kind: 0,
+        }
+        .to_bytes()
+        .to_vec();
+        buf.push(0x99); // hypothetical future field
+        let back = BattleResultMsg::from_bytes(&buf).unwrap();
+        assert_eq!(back.target_kind, 0);
+        assert_eq!(back.challenger_kind, 2);
     }
 
     #[test]
@@ -450,6 +567,8 @@ mod tests {
             challenger_won: true,
             challenger_hp_pct: 80,
             target_hp_pct: 0,
+            challenger_kind: 0,
+            target_kind: 0,
         };
         let bytes = msg.to_bytes();
         let restored = BattleResultMsg::from_bytes(&bytes).unwrap();
