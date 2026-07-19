@@ -218,6 +218,80 @@ pub fn show_alcoholism_alert() {
     crate::TOAST_SIGNAL.signal(());
 }
 
+// ── Battle animation takeover ────────────────────────────────────────────────
+//
+// A full-screen two-stage battle result (see the battle-animation spec). Unlike
+// the alerts above it takes over the *whole* display regardless of the active
+// screen, so the main display loop checks `battle_anim_active()` before drawing
+// its normal screen. Two stages of `BATTLE_STAGE_MS` each: standing, then the
+// won/lost poses.
+
+/// Duration of one battle-animation stage.
+const BATTLE_STAGE_MS: u32 = 5_000;
+/// Total animation length — both stages back to back.
+const BATTLE_TOTAL_MS: u32 = 2 * BATTLE_STAGE_MS;
+
+static BATTLE_ANIM_ACTIVE: AtomicBool = AtomicBool::new(false);
+static BATTLE_ANIM_STARTED_MS: AtomicU32 = AtomicU32::new(0);
+/// Packed context: byte0 = own pet kind, byte1 = opponent kind, bit16 =
+/// viewer-won. Set once by [`show_battle_anim`], read by the renderer.
+static BATTLE_ANIM_CTX: AtomicU32 = AtomicU32::new(0);
+
+/// Which stage of the battle animation to draw.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BattleStage {
+    /// Both pets standing.
+    Standing,
+    /// Winner/loser poses + banner.
+    Result,
+    /// Animation finished — the takeover should end.
+    Done,
+}
+
+/// Pure mapping from elapsed milliseconds to the current [`BattleStage`].
+pub fn battle_stage_from_elapsed(ms: u32) -> BattleStage {
+    if ms < BATTLE_STAGE_MS {
+        BattleStage::Standing
+    } else if ms < BATTLE_TOTAL_MS {
+        BattleStage::Result
+    } else {
+        BattleStage::Done
+    }
+}
+
+/// Start the full-screen battle animation. `own_kind` is drawn on the left,
+/// `opp_kind` on the right (mirrored); `viewer_won` picks the stage-2 poses.
+pub fn show_battle_anim(own_kind: u8, opp_kind: u8, viewer_won: bool) {
+    let ctx = own_kind as u32 | ((opp_kind as u32) << 8) | ((viewer_won as u32) << 16);
+    BATTLE_ANIM_CTX.store(ctx, Ordering::Relaxed);
+    BATTLE_ANIM_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
+    BATTLE_ANIM_ACTIVE.store(true, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::TOAST_SIGNAL.signal(());
+}
+
+/// True while the battle-animation takeover should own the display.
+pub fn battle_anim_active() -> bool {
+    BATTLE_ANIM_ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Current stage from the elapsed time since [`show_battle_anim`].
+pub fn battle_anim_stage() -> BattleStage {
+    let elapsed = now_ms_u32().wrapping_sub(BATTLE_ANIM_STARTED_MS.load(Ordering::Relaxed));
+    battle_stage_from_elapsed(elapsed)
+}
+
+/// Unpacked animation context: `(own_kind, opp_kind, viewer_won)`.
+pub fn battle_anim_ctx() -> (u8, u8, bool) {
+    let c = BATTLE_ANIM_CTX.load(Ordering::Relaxed);
+    (c as u8, (c >> 8) as u8, (c >> 16) & 1 != 0)
+}
+
+/// End the battle-animation takeover (called once the stage reaches `Done`).
+pub fn clear_battle_anim() {
+    BATTLE_ANIM_ACTIVE.store(false, Ordering::Relaxed);
+}
+
 /// Low 32 bits of the current uptime in milliseconds.  Cross-platform
 /// wrapper so `mod.rs` compiles on both firmware (`embassy_time`) and
 /// simulator (`lifecycle::sim_elapsed_ms`).
@@ -433,7 +507,7 @@ where
         static ANIM_START_MS: AtomicU64 = AtomicU64::new(0);
 
         if !lifecycle::is_started() {
-            sprite_loader::blit_pcx_sim(display, &anim_files::start_screen_filename(), 0, 0);
+            sprite_loader::blit_pcx_sim(display, &anim_files::start_screen_filename(), 0, 0, false);
         } else {
             let kind = lifecycle::pet_kind();
             let anim = lifecycle::display_anim();
@@ -455,7 +529,7 @@ where
                     (raw % count as u32) as u8
                 };
                 let name = anim_files::anim_filename(kind, anim, frame);
-                sprite_loader::blit_pcx_sim(display, &name, 0, PET_AREA_TOP as i32);
+                sprite_loader::blit_pcx_sim(display, &name, 0, PET_AREA_TOP as i32, false);
             }
         }
     }
@@ -520,7 +594,7 @@ where
         let cx = ICON_CX[col as usize];
         let selected = nav.row == row_kind && nav.col == col;
         let name = engine::anim_files::menu_icon_filename(slot, selected);
-        sprite_loader::blit_pcx_sim(display, &name, cx - 13, cy - 13);
+        sprite_loader::blit_pcx_sim(display, &name, cx - 13, cy - 13, false);
     }
 
     Rectangle::new(Point::new(0, SEP_TOP), Size::new(152, 1))
@@ -659,7 +733,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         // Start screen: full 152×152 graphic at origin.
         let start_name = anim_files::start_screen_filename();
         if let Ok(file) = fat12::find_file(&start_name).await {
-            sprite_loader::blit_file(display, &file, 0, 0).await;
+            sprite_loader::blit_file(display, &file, 0, 0, false).await;
             has_sprite = true;
         }
     } else {
@@ -670,7 +744,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         if frame_count > 0 {
             let name = anim_files::anim_filename(kind, anim, sprite_frame);
             if let Ok(file) = fat12::find_file(&name).await {
-                sprite_loader::blit_file(display, &file, 0, PET_AREA_TOP as i32).await;
+                sprite_loader::blit_file(display, &file, 0, PET_AREA_TOP as i32, false).await;
                 has_sprite = true;
             }
         }
@@ -694,7 +768,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             let selected = nav.row == row_kind && nav.col == col;
             let name = anim_files::menu_icon_filename(slot, selected);
             if let Ok(file) = fat12::find_file(&name).await {
-                sprite_loader::blit_file(display, &file, cx - 13, cy - 13).await;
+                sprite_loader::blit_file(display, &file, cx - 13, cy - 13, false).await;
             }
         }
     }
@@ -754,4 +828,19 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
 #[cfg(feature = "embassy-base")]
 fn on_pet_named(name: &[u8]) {
     lifecycle::set_pet_name(name);
+}
+
+#[cfg(test)]
+mod battle_anim_tests {
+    use super::{BattleStage, battle_stage_from_elapsed};
+
+    #[test]
+    fn stage_boundaries() {
+        assert_eq!(battle_stage_from_elapsed(0), BattleStage::Standing);
+        assert_eq!(battle_stage_from_elapsed(4_999), BattleStage::Standing);
+        assert_eq!(battle_stage_from_elapsed(5_000), BattleStage::Result);
+        assert_eq!(battle_stage_from_elapsed(9_999), BattleStage::Result);
+        assert_eq!(battle_stage_from_elapsed(10_000), BattleStage::Done);
+        assert_eq!(battle_stage_from_elapsed(u32::MAX), BattleStage::Done);
+    }
 }

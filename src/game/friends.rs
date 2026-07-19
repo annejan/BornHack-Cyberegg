@@ -385,6 +385,15 @@ pub fn get(index: usize) -> Option<FriendRecord> {
     }
 }
 
+/// The stored pet species (sprite `PP` prefix) of a known friend, or `None`
+/// if we've never received a beacon from `device_id`. Used by the battle
+/// animation to draw the opponent when a legacy result packet omits the kind.
+pub fn pet_kind_of(device_id: [u8; 2]) -> Option<u8> {
+    let list = unsafe { &*FRIENDS.get() };
+    list.find_index(device_id)
+        .map(|i| list.friends[i].pet_kind)
+}
+
 /// Record a mesh Battle result against a specific friend — the
 /// head-to-head tally shown in the Friends detail screen. No-op if
 /// `device_id` isn't a known friend (e.g. a battle result arrived

@@ -627,6 +627,29 @@ async fn display_loop(
         // (already checked further down) then forces that redraw to mark
         // every pixel dirty, so nothing here needs its own "mark all"
         // bookkeeping.
+        // ── Battle animation takeover ──────────────────────────────────
+        // A resolved battle (local challenge or an incoming mesh result) plays
+        // a full-screen two-stage animation — 5 s per stage — over whatever
+        // screen is active. Each stage is one e-paper refresh.
+        #[cfg(feature = "game")]
+        if bornhack_aegg::game::battle_anim_active() {
+            let anim_speed = bornhack_aegg::fw::epd::current_lut_speed();
+            while bornhack_aegg::game::battle_anim_stage()
+                != bornhack_aegg::game::BattleStage::Done
+            {
+                display.clear(Color::White);
+                let _ = display.reset().await;
+                bornhack_aegg::game::battle_view::render_anim(display).await;
+                let _ = display.update_tc(anim_speed).await;
+                let _ = display.deep_sleep().await;
+                Timer::after_millis(5_000).await;
+            }
+            bornhack_aegg::game::clear_battle_anim();
+            // Force a clean full redraw of the screen we interrupted.
+            bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+            continue;
+        }
+
         if bornhack_aegg::FORCE_FLUSH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
             let speed = bornhack_aegg::fw::epd::current_lut_speed();
             let _deghost_boost = bornhack_aegg::fw::power::boost(

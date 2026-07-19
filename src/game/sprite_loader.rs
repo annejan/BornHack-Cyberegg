@@ -324,7 +324,11 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 /// framebuffers.  No size limit: file can exceed any on-device buffer.
 /// Clips to display bounds.  Transparent pixels (index 3) are skipped.
 #[cfg(feature = "embassy-base")]
-pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, y: i32) {
+/// Blit a PCX sprite from FAT12 at `(x, y)`. When `mirror` is true the image is
+/// drawn horizontally flipped (right-facing) — the source is read normally and
+/// only the destination column is reversed, so transparency is preserved. Used
+/// for the right-hand combatant in the battle animation.
+pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, y: i32, mirror: bool) {
     let file_size = file.size as usize;
     if file_size < PCX_HEADER_SIZE {
         defmt::warn!("sprite: PCX too small ({}B)", file_size);
@@ -420,7 +424,7 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
         let disp_row_off = screen_y as usize * DISP_ROW_STRIDE;
 
         for pixel in 0..pcx_w {
-            let screen_x = x + pixel;
+            let screen_x = x + if mirror { pcx_w - 1 - pixel } else { pixel };
             if screen_x < 0 || screen_x >= DISP_WIDTH as i32 {
                 continue;
             }
@@ -492,7 +496,7 @@ fn fat_name_to_dotted(name: &[u8; 11]) -> std::string::String {
 /// Used by the simulator binary; the embedded firmware uses
 /// `blit_file` which streams from FAT12 instead.
 #[cfg(feature = "simulator")]
-pub fn blit_pcx_sim<D>(display: &mut D, name: &[u8; 11], x: i32, y: i32)
+pub fn blit_pcx_sim<D>(display: &mut D, name: &[u8; 11], x: i32, y: i32, mirror: bool)
 where
     D: embedded_graphics::draw_target::DrawTarget<Color = crate::TriColor>,
 {
@@ -525,7 +529,7 @@ where
 
         let screen_y = y + pcx_row;
         for pixel_x in 0..pcx_w {
-            let screen_x = x + pixel_x;
+            let screen_x = x + if mirror { pcx_w - 1 - pixel_x } else { pixel_x };
             let byte_idx = pixel_x as usize / 4;
             let shift = 6 - (pixel_x as usize % 4) * 2;
             let val = (line[byte_idx] >> shift) & 0x03;

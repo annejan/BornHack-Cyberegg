@@ -95,6 +95,102 @@ fn now_ms() -> u32 {
 static RESULT_SHOWN_MS: AtomicU32 = AtomicU32::new(0);
 const RESULT_DISMISS_GUARD_MS: u32 = 600;
 
+// ── Battle animation ─────────────────────────────────────────────────────────
+//
+// Full-screen two-stage result (see the battle-animation spec). Own pet on the
+// left (art as-is), opponent on the right (same art mirrored in software). The
+// takeover flag + timing live in `game::mod` (`battle_anim_*`); this module
+// only renders a frame for the current stage.
+
+use super::BattleStage;
+use super::engine::anim_files::{BATTLE_AA_LOST, BATTLE_AA_STAND, BATTLE_AA_WON, battle_filename};
+
+/// Left pet origin (own pet).
+const ANIM_LEFT_X: i32 = 4;
+/// Right pet origin (opponent, mirrored).
+const ANIM_RIGHT_X: i32 = 84;
+/// Top of both pet sprites.
+const ANIM_PET_Y: i32 = 34;
+
+/// Pick the pose animation code for one combatant. Stage 1 is always standing;
+/// stage 2 gives the viewer's own pet the won/lost pose and the opponent the
+/// opposite. `is_own` selects which side; `viewer_won` is from the viewer's
+/// perspective.
+fn pose_aa(stage: BattleStage, viewer_won: bool, is_own: bool) -> u8 {
+    match stage {
+        BattleStage::Standing => BATTLE_AA_STAND,
+        BattleStage::Result => {
+            let won = if is_own { viewer_won } else { !viewer_won };
+            if won { BATTLE_AA_WON } else { BATTLE_AA_LOST }
+        }
+        // Not drawn — the takeover ends at Done.
+        BattleStage::Done => BATTLE_AA_STAND,
+    }
+}
+
+/// Draw the stage-2 win/lose banner (red, centred near the bottom).
+fn draw_anim_banner<D>(display: &mut D, viewer_won: bool) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use embedded_graphics::mono_font::MonoTextStyle;
+    use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
+
+    let text = if viewer_won { "YOU WON!" } else { "YOU LOST" };
+    let ts = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    // White strip behind the banner so it reads over either pet.
+    Rectangle::new(Point::new(0, 122), Size::new(152, 22))
+        .into_styled(PrimitiveStyle::with_fill(WHITE))
+        .draw(display)?;
+    let style = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
+    Text::with_text_style(text, Point::new(76, 133), style, ts).draw(display)?;
+    Ok(())
+}
+
+/// Firmware render of the current battle-animation frame. Blits both pets from
+/// FAT12 (own left, opponent right-mirrored) and the stage-2 banner. The caller
+/// clears the display and drives the refresh.
+#[cfg(feature = "embassy-base")]
+pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>) {
+    use crate::fw::fat12;
+
+    let (own_kind, opp_kind, viewer_won) = super::battle_anim_ctx();
+    let stage = super::battle_anim_stage();
+
+    let own_name = battle_filename(own_kind, pose_aa(stage, viewer_won, true));
+    if let Ok(file) = fat12::find_file(&own_name).await {
+        super::sprite_loader::blit_file(display, &file, ANIM_LEFT_X, ANIM_PET_Y, false).await;
+    }
+    let opp_name = battle_filename(opp_kind, pose_aa(stage, viewer_won, false));
+    if let Ok(file) = fat12::find_file(&opp_name).await {
+        super::sprite_loader::blit_file(display, &file, ANIM_RIGHT_X, ANIM_PET_Y, true).await;
+    }
+    if stage == BattleStage::Result {
+        let _ = draw_anim_banner(display, viewer_won);
+    }
+}
+
+/// Simulator render of the current battle-animation frame (host build).
+#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+pub fn draw_anim_sim<D>(display: &mut D)
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let (own_kind, opp_kind, viewer_won) = super::battle_anim_ctx();
+    let stage = super::battle_anim_stage();
+
+    let own_name = battle_filename(own_kind, pose_aa(stage, viewer_won, true));
+    super::sprite_loader::blit_pcx_sim(display, &own_name, ANIM_LEFT_X, ANIM_PET_Y, false);
+    let opp_name = battle_filename(opp_kind, pose_aa(stage, viewer_won, false));
+    super::sprite_loader::blit_pcx_sim(display, &opp_name, ANIM_RIGHT_X, ANIM_PET_Y, true);
+    if stage == BattleStage::Result {
+        let _ = draw_anim_banner(display, viewer_won);
+    }
+}
+
 pub fn open() {
     STATE.store(STATE_PICKING, Ordering::Relaxed);
     CURSOR.store(0, Ordering::Relaxed);
@@ -383,4 +479,22 @@ where
         .draw(display)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod anim_tests {
+    use super::*;
+
+    #[test]
+    fn pose_selection() {
+        // Stage 1: both standing regardless of outcome/side.
+        assert_eq!(pose_aa(BattleStage::Standing, true, true), BATTLE_AA_STAND);
+        assert_eq!(pose_aa(BattleStage::Standing, false, false), BATTLE_AA_STAND);
+        // Stage 2, viewer won: own pet WON, opponent LOST.
+        assert_eq!(pose_aa(BattleStage::Result, true, true), BATTLE_AA_WON);
+        assert_eq!(pose_aa(BattleStage::Result, true, false), BATTLE_AA_LOST);
+        // Stage 2, viewer lost: own pet LOST, opponent WON.
+        assert_eq!(pose_aa(BattleStage::Result, false, true), BATTLE_AA_LOST);
+        assert_eq!(pose_aa(BattleStage::Result, false, false), BATTLE_AA_WON);
+    }
 }

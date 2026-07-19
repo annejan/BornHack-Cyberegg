@@ -94,6 +94,33 @@ pub fn start_screen_filename() -> [u8; 11] {
     *b"000000  PCX"
 }
 
+/// Battle-pose animation codes (single frame `00` each). See the
+/// battle-animation spec — only left-facing art exists; the right combatant is
+/// the same file mirrored in software.
+pub const BATTLE_AA_STAND: u8 = 0x20;
+pub const BATTLE_AA_WON: u8 = 0x21;
+pub const BATTLE_AA_LOST: u8 = 0x22;
+
+/// Build the FAT12 filename for a battle pose: `"PPAA00  PCX"`. `pp` is a raw
+/// species prefix (may be the generic-unknown placeholder) and `aa` one of the
+/// `BATTLE_AA_*` codes. Bypasses the `PetKind`/`DisplayAnim` mapping because
+/// battle poses are fixed single frames addressed by raw prefix.
+pub fn battle_filename(pp: u8, aa: u8) -> [u8; 11] {
+    [
+        HEX[(pp >> 4) as usize],
+        HEX[(pp & 0xF) as usize],
+        HEX[(aa >> 4) as usize],
+        HEX[(aa & 0xF) as usize],
+        b'0',
+        b'0',
+        b' ',
+        b' ',
+        b'P',
+        b'C',
+        b'X',
+    ]
+}
+
 /// Eight menu icons live under prefix `0x04`, one sequence per icon:
 ///
 /// | slot | sequence | name           | row, col   |
