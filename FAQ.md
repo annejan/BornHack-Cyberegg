@@ -59,6 +59,14 @@ solid black, then solid white, then redraws the real screen — same idea as
 manually flipping screens, just immediate and without needing a second screen
 to flip to.
 
+If ghosting is a recurring problem on your particular panel rather than a
+one-off, there's also a persistent setting for it: **Settings → De-ghost
+menus**. Turned on, every menu, text box, and mini-game close automatically
+runs that same black → white de-ghost cycle, not just the game's normal
+"redraw whatever changed" refresh. It's off by default — the extra full-panel
+cycling is slower and flashes every time a menu opens or closes, which most
+badges don't need.
+
 ## How do I put the badge in DFU mode to flash it?
 
 Hold the **EXE** (Execute) button while powering the badge on. The bootloader

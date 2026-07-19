@@ -1001,6 +1001,31 @@ fn action_epd_temp_bias_dec() {
     }
 }
 
+// ── EPD de-ghost-on-menu toggle ───────────────────────────────────────────
+//
+// Opt-in: also runs a full black -> white de-ghost flush (the same one
+// the hidden force-flush combo uses) whenever a menu, text box, or
+// mini-game close already marks the screen dirty via
+// FULL_REFRESH_PENDING. Off by default — it's slower and visibly
+// flashes on every menu open/close — for badges seeing noticeably bad
+// ghosting. See `fw::epd::EPD_DEGHOST_ON_MENU`'s doc comment for
+// exactly which screens that covers.
+
+fn label_epd_deghost_on_menu() -> &'static str {
+    if crate::fw::epd::EPD_DEGHOST_ON_MENU.load(Ordering::Relaxed) {
+        "De-ghost menus: On"
+    } else {
+        "De-ghost menus: Off"
+    }
+}
+
+fn action_epd_deghost_on_menu() {
+    let cur = crate::fw::epd::EPD_DEGHOST_ON_MENU.load(Ordering::Relaxed);
+    crate::fw::epd::EPD_DEGHOST_ON_MENU.store(!cur, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::fw::epd::EPD_DEGHOST_ON_MENU_DIRTY.signal(());
+}
+
 // ── Advert scheduling ──────────────────────────────────────────────────────
 
 fn label_advert_enabled() -> &'static str {
@@ -1858,7 +1883,7 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
 ];
 
 const SETTINGS_ITEMS_LEN: usize =
-    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+    13 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1915,6 +1940,10 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             inc: action_epd_temp_bias_inc,
             dec: action_epd_temp_bias_dec,
         },
+    },
+    MenuItem {
+        label: label_epd_deghost_on_menu,
+        kind: MenuItemKind::Action(action_epd_deghost_on_menu),
     },
     MenuItem {
         label: || "",

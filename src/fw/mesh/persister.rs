@@ -19,7 +19,7 @@
 //! reserve the async state of *every* handler's write concurrently
 //! (~15 KiB of `.bss`).  Settings are user-driven and change one at a
 //! time, so serial dispatch costs nothing in practice and reclaims that
-//! RAM. The two EPD persist loops stay joined alongside (different
+//! RAM. The three EPD persist loops stay joined alongside (different
 //! module, small).
 
 use embassy_futures::join::join;
@@ -54,7 +54,10 @@ pub async fn run() -> ! {
         settings_dispatch_loop(),
         join(
             crate::fw::epd::epd_lut_speed_persist_loop(),
-            crate::fw::epd::epd_temp_bias_persist_loop(),
+            join(
+                crate::fw::epd::epd_temp_bias_persist_loop(),
+                crate::fw::epd::epd_deghost_on_menu_persist_loop(),
+            ),
         ),
     )
     .await;

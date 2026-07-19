@@ -188,6 +188,7 @@ async fn main(spawner: Spawner) {
     {
         bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
         bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
+        bornhack_aegg::fw::epd::load_persisted_deghost_on_menu().await;
     }
     // A `speed=` in LUT.CFG (a calibration bundle) takes precedence over
     // the persisted value — apply it last.
@@ -576,6 +577,25 @@ static KBD_REDRAW: embassy_sync::signal::Signal<
     (),
 > = embassy_sync::signal::Signal::new();
 
+/// Full black → white de-ghost pass, run before the caller's normal
+/// content draw. Each half is a genuine inverting `update_tc` full
+/// refresh (same primitive the boot-time clear and heavy-graphic
+/// screens use), so the panel visibly settles solid black, then solid
+/// white, before the real screen content goes down next. Shared by the
+/// hidden force-flush combo and the opt-in `EPD_DEGHOST_ON_MENU`
+/// setting — callers are responsible for their own `FULL_REFRESH_PENDING`
+/// bookkeeping around this.
+async fn deghost_flush(display: &mut EpdGfx<'_>) {
+    let speed = bornhack_aegg::fw::epd::current_lut_speed();
+    display.clear(Color::Black);
+    let _ = display.reset().await;
+    let _ = display.update_tc(speed).await;
+    display.clear(Color::White);
+    let _ = display.reset().await;
+    let _ = display.update_tc(speed).await;
+    let _ = display.deep_sleep().await;
+}
+
 async fn display_loop(
     display: &mut EpdGfx<'_>,
     button_rcvr: &mut embassy_sync::watch::Receiver<
@@ -611,22 +631,15 @@ async fn display_loop(
 
         // Hidden-combo de-ghost: a deliberate, user-triggered full black →
         // white flush, run before this iteration's normal content draw
-        // below. Each half is a genuine inverting full refresh (same
-        // primitive the boot-time clear and heavy-graphic screens use),
-        // so the panel visibly settles solid black, then solid white,
-        // before the real screen content goes down. FULL_REFRESH_PENDING
-        // (already checked further down) then forces that redraw to mark
-        // every pixel dirty, so nothing here needs its own "mark all"
-        // bookkeeping.
+        // below. FULL_REFRESH_PENDING (already checked further down) then
+        // forces that redraw to mark every pixel dirty, so nothing here
+        // needs its own "mark all" bookkeeping. This double-refresh is
+        // genuinely slow (two full OTP passes) — acceptable for a
+        // deliberate, occasional manual combo, but see
+        // `EPD_DEGHOST_ON_MENU` below for the automatic case, which uses
+        // a single-pass alternative instead for exactly that reason.
         if bornhack_aegg::FORCE_FLUSH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
-            let speed = bornhack_aegg::fw::epd::current_lut_speed();
-            display.clear(Color::Black);
-            let _ = display.reset().await;
-            let _ = display.update_tc(speed).await;
-            display.clear(Color::White);
-            let _ = display.reset().await;
-            let _ = display.update_tc(speed).await;
-            let _ = display.deep_sleep().await;
+            deghost_flush(display).await;
             bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
@@ -670,9 +683,13 @@ async fn display_loop(
         // First iteration after boot (last_screen == 0xFF) skips since boot
         // already drove a clean frame.
         let screen_changed = last_screen != 0xFF && last_screen != active_screen;
-        let mark_all = bornhack_aegg::FULL_REFRESH_PENDING
-            .swap(false, core::sync::atomic::Ordering::Relaxed)
-            || screen_changed;
+        // Captured separately from `mark_all` (rather than folded straight
+        // into the `||`) so `EPD_DEGHOST_ON_MENU` below can key off "a
+        // menu/text-box/mini-game actually opened or closed" without also
+        // catching a plain screen_changed carousel swipe.
+        let menu_opened_or_closed = bornhack_aegg::FULL_REFRESH_PENDING
+            .swap(false, core::sync::atomic::Ordering::Relaxed);
+        let mark_all = menu_opened_or_closed || screen_changed;
 
         // Feed the SSD1675's per-temperature LUT lookup from the nRF52840
         // die sensor (the chip itself has no on-die sensor — datasheet pg 6).
@@ -771,7 +788,25 @@ async fn display_loop(
                         // full/inverting refresh while typing (e.g. the
                         // start-screen flag would otherwise force one per key).
                         let text_entry = bornhack_aegg::text_entry::is_active();
-                        if !text_entry && (start_screen || name_screen || game_status) {
+                        // Opt-in setting (off by default): a menu, text box,
+                        // or mini-game just opened or closed — see
+                        // `fw::epd::EPD_DEGHOST_ON_MENU`'s doc comment for
+                        // exactly which screens that covers — and the user
+                        // wants a stronger de-ghost than the normal delta
+                        // path gives. Deliberately just ONE inverting
+                        // `update_tc` pass of the real content (not the
+                        // separate black → white → redraw the hidden combo
+                        // does): that combo's two extra full OTP passes are
+                        // slow enough to make routine menu navigation feel
+                        // broken, whereas this reuses the exact same
+                        // "render heavy content via the full path instead
+                        // of delta" trick already used for the start/name
+                        // screens above, so it costs only the one refresh
+                        // that would have happened anyway.
+                        let deghost_on_menu = menu_opened_or_closed
+                            && bornhack_aegg::fw::epd::EPD_DEGHOST_ON_MENU
+                                .load(core::sync::atomic::Ordering::Relaxed);
+                        if !text_entry && (start_screen || name_screen || game_status || deghost_on_menu) {
                             // Render via the full tri-color path (the same one
                             // the sponsor slideshow uses), NOT the delta
                             // no-invert LUT.  The no-invert LUT leaves the red

@@ -860,6 +860,47 @@ pub async fn epd_temp_bias_persist_loop() -> ! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// De-ghost on menu open/close (opt-in stronger refresh for bad ghosting)
+// ---------------------------------------------------------------------------
+
+/// When true, every screen that already marks itself dirty via
+/// [`crate::FULL_REFRESH_PENDING`] — every in-game modal, the top-level
+/// Settings/Config menu, mini-game close, the Qwiic scan overlay — also
+/// runs a full black → white → redraw de-ghost cycle (the same primitive
+/// [`crate::display_flush`]'s hidden combo uses) before the real content
+/// goes down, rather than just the normal delta-refresh mark-dirty.
+///
+/// Off by default: this is a deliberate opt-in for badges seeing
+/// noticeably bad ghosting, not the default behavior, since the extra
+/// full-panel cycling is slower and visibly flashes on every menu open
+/// and close. Toggled from the Settings menu; persisted in the
+/// `"settings"` KV namespace under `"epd_dgm"`.
+pub static EPD_DEGHOST_ON_MENU: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "embassy-base")]
+pub static EPD_DEGHOST_ON_MENU_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+// Gated on `mesh` (settings KV store) — see `load_persisted_lut_speed`.
+#[cfg(feature = "mesh")]
+pub async fn load_persisted_deghost_on_menu() {
+    let v = crate::fw::mesh::settings::get_epd_deghost_on_menu().await;
+    EPD_DEGHOST_ON_MENU.store(v, Ordering::Relaxed);
+}
+
+// Spawned only by the mesh settings persister; needs `fw::mesh::settings`.
+#[cfg(feature = "mesh")]
+pub async fn epd_deghost_on_menu_persist_loop() -> ! {
+    loop {
+        EPD_DEGHOST_ON_MENU_DIRTY.wait().await;
+        let v = EPD_DEGHOST_ON_MENU.load(Ordering::Relaxed);
+        match crate::fw::mesh::settings::set_epd_deghost_on_menu(v).await {
+            Ok(()) => defmt::debug!("settings: epd_deghost_on_menu={=bool} persisted", v),
+            Err(e) => defmt::warn!("settings: epd_deghost_on_menu persist failed: {:?}", e),
+        }
+    }
+}
+
 /// PCB temperature estimate (°C × 10) for SSD1675 LUT-table indexing.
 /// Returns `last_c10() - self_heating_bias_c10(variant) - user_bias`,
 /// or `i16::MIN` if no MCU die reading has been taken yet.

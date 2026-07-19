@@ -69,6 +69,12 @@ See [GAME.md](GAME.md) for full player-facing rules.
   full black → white → redraw de-ghost cycle on demand, on whichever
   screen is showing. Not game-specific — works on any screen, with no
   pet active, since e-paper ghosting isn't a BornPets problem.
+- **De-ghost on menu (Settings toggle)** — a persisted opt-in setting,
+  off by default. When on, every menu, text box, and mini-game close
+  runs the same black → white de-ghost cycle as the hidden combo above,
+  instead of the normal "just redraw what changed" refresh. For badges
+  where ghosting is a recurring problem rather than a one-off — the
+  hidden combo is still there for a one-time nudge.
 
 ### Removed
 

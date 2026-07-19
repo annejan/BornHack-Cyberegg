@@ -577,3 +577,22 @@ pub async fn get_epd_temp_bias_c10() -> Option<i8> {
 pub async fn set_epd_temp_bias_c10(bias: i8) -> Result<(), kv::KvError> {
     ns().set("epd_tb", &[bias as u8], true).await
 }
+
+// ---------------------------------------------------------------------------
+// EPD de-ghost-on-menu toggle
+// ---------------------------------------------------------------------------
+
+/// Read the persisted "de-ghost on menu open/close" toggle. Defaults to
+/// `false` (off) if never set.
+pub async fn get_epd_deghost_on_menu() -> bool {
+    let mut b = [0u8; 1];
+    match ns().get("epd_dgm", &mut b).await {
+        Ok(1) => b[0] != 0,
+        _ => false,
+    }
+}
+
+/// Persist the "de-ghost on menu open/close" toggle.
+pub async fn set_epd_deghost_on_menu(enabled: bool) -> Result<(), kv::KvError> {
+    ns().set("epd_dgm", &[enabled as u8], true).await
+}

@@ -107,6 +107,10 @@ pub mod fw {
         pub static EPD_VARIANT_IS_B: AtomicBool = AtomicBool::new(false);
         /// Host-simulator stub. Mirrors `fw::epd::EPD_CUSTOM_LUT_ACTIVE`.
         pub static EPD_CUSTOM_LUT_ACTIVE: AtomicBool = AtomicBool::new(false);
+        /// Host-simulator stub: no real panel to de-ghost, so the toggle
+        /// exists purely for the menu to read/write. Mirrors
+        /// `fw::epd::EPD_DEGHOST_ON_MENU`.
+        pub static EPD_DEGHOST_ON_MENU: AtomicBool = AtomicBool::new(false);
     }
 
     /// Host-simulator stub: no Qwiic I2C bus off-badge, so the scan overlay is
