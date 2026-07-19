@@ -283,7 +283,7 @@ pub fn start_pm_compose(pub_key: [u8; 32]) {
     });
     // 130-byte limit matches MeshCore's `MAX_TXT_TEXT_SIZE` after
     // accounting for the 5-byte header (`timestamp[4] | flags[1]`).
-    crate::text_entry::begin(b"", 130, on_pm_compose_done, "PM");
+    crate::text_entry::begin(b"", 130, on_pm_compose_done, "PM", false);
 }
 
 // ── Contact-store mutation queue ───────────────────────────────────────────

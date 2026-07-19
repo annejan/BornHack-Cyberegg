@@ -1328,6 +1328,7 @@ fn action_set_name() {
         31,
         on_name_complete,
         "Set Node Name",
+        true,
     );
 }
 

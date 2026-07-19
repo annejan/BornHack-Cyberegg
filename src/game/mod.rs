@@ -647,7 +647,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         if lifecycle::take_naming_pending() {
             let seed = lifecycle::now_tick();
             let default = lifecycle::random_default_name(seed);
-            crate::text_entry::begin(default.as_bytes(), 12, on_pet_named, "Name your Pet");
+            crate::text_entry::begin(default.as_bytes(), 12, on_pet_named, "Name your Pet", true);
         }
     }
 

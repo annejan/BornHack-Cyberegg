@@ -109,6 +109,10 @@ pub struct TextEntry {
     on_complete: fn(&[u8]),
     /// Optional title shown above the text area (e.g. "Name your Pet").
     title: &'static str,
+    /// When `true`, Execute from `Root` asks for confirmation before committing
+    /// (used for naming, so a stray press can't fix the name — issue #126).
+    /// When `false` (channel/PM messages), Execute commits straight away.
+    confirm: bool,
 }
 
 fn char_table(id: u8) -> &'static [u8] {
@@ -167,7 +171,13 @@ fn alt_pair(ch: u8) -> Option<(u8, u8)> {
 }
 
 impl TextEntry {
-    pub fn new(prefill: &[u8], max_len: u8, on_complete: fn(&[u8]), title: &'static str) -> Self {
+    pub fn new(
+        prefill: &[u8],
+        max_len: u8,
+        on_complete: fn(&[u8]),
+        title: &'static str,
+        confirm: bool,
+    ) -> Self {
         let mut text = heapless::Vec::new();
         let n = prefill.len().min(max_len as usize).min(MAX_TEXT_LEN);
         let _ = text.extend_from_slice(&prefill[..n]);
@@ -183,6 +193,7 @@ impl TextEntry {
             state: InputState::Root,
             on_complete,
             title,
+            confirm,
         }
     }
 
@@ -263,10 +274,16 @@ impl TextEntry {
                 }
                 ButtonId::Cancel => return true,
                 ButtonId::Execute | ButtonId::Fire => {
-                    // Don't commit straight from Root — a single stray press
-                    // at the start would otherwise fix the name and exit with
-                    // no way back (issue #126).  Ask for confirmation first.
-                    self.state = InputState::Confirm;
+                    if self.confirm {
+                        // Don't commit straight from Root — a single stray
+                        // press at the start would otherwise fix the name and
+                        // exit with no way back (issue #126).  Confirm first.
+                        self.state = InputState::Confirm;
+                    } else {
+                        // Messages (channel/PM) commit straight away.
+                        (self.on_complete)(&self.text);
+                        return true;
+                    }
                 }
             },
 
@@ -919,8 +936,16 @@ pub static TEXT_ENTRY: std::sync::Mutex<RefCell<Option<TextEntry>>> =
 /// Start a text entry session. `prefill` is the initial text, `max_len` the
 /// maximum number of characters, `on_complete` is called with the final
 /// text bytes when the user submits, and `title` is shown above the text area.
-pub fn begin(prefill: &[u8], max_len: u8, on_complete: fn(&[u8]), title: &'static str) {
-    let entry = TextEntry::new(prefill, max_len, on_complete, title);
+/// `confirm` gates whether Execute asks "Save name?" before committing — set
+/// for naming, cleared for channel/PM messages.
+pub fn begin(
+    prefill: &[u8],
+    max_len: u8,
+    on_complete: fn(&[u8]),
+    title: &'static str,
+    confirm: bool,
+) {
+    let entry = TextEntry::new(prefill, max_len, on_complete, title, confirm);
     #[cfg(feature = "embassy-base")]
     TEXT_ENTRY.lock(|cell| cell.replace(Some(entry)));
     #[cfg(feature = "simulator")]
