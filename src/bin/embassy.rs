@@ -962,7 +962,6 @@ async fn wait_display_event(
                         }
                         bornhack_aegg::game::engine::DisplayAnim::Feeding
                         | bornhack_aegg::game::engine::DisplayAnim::Healing
-                        | bornhack_aegg::game::engine::DisplayAnim::Relaxing
                         | bornhack_aegg::game::engine::DisplayAnim::Playing => {
                             // Spread frames over the remaining action time.
                             let stats = bornhack_aegg::game::lifecycle::cycle();

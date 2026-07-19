@@ -87,6 +87,12 @@ pub enum Toast {
     /// `drunk`, unlike `Drink`. Kept as its own variant so the toast
     /// after picking Water/Cola doesn't misleadingly say "+drunk".
     Refreshed = 24,
+    /// Sent the pet to "Only pets" — see `game::engine::Action::OnlyPets`.
+    OnlyPets = 25,
+    /// Won (or drew) a mini-game — see `GameState::award_inspiration`.
+    /// Neutral flavor toast; replaced the old `Inspired` ("+inspired")
+    /// toast when the `drained`/inspired stat was removed.
+    MinigameWin = 26,
 }
 
 impl Toast {
@@ -116,6 +122,8 @@ impl Toast {
             22 => Self::BattleWon,
             23 => Self::BattleLost,
             24 => Self::Refreshed,
+            25 => Self::OnlyPets,
+            26 => Self::MinigameWin,
             _ => Self::None,
         }
     }
@@ -147,7 +155,9 @@ impl Toast {
             Toast::FriendReunion => "+happy",
             Toast::BattleWon => "won a battle!",
             Toast::BattleLost => "lost a battle",
-            Toast::Refreshed => "-drained",
+            Toast::Refreshed => "refreshed!",
+            Toast::OnlyPets => "Only pets!",
+            Toast::MinigameWin => "nice game!",
         }
     }
 }
@@ -383,6 +393,25 @@ where
     {
         let pct = crate::fw::battery::read_pct();
         crate::draw_battery_icon(display, 128, 2, pct)?;
+    }
+
+    // HAX balance — top-right, below the battery icon + menu icon row
+    // (y=33 clears the icons; y=16 overlapped them). Larger bold font.
+    // Hidden entirely when money mode is disabled for this pet.
+    if lifecycle::money_enabled() {
+        let right_style = TextStyleBuilder::new()
+            .baseline(Baseline::Top)
+            .alignment(Alignment::Right)
+            .build();
+        let mut money_buf: heapless::String<12> = heapless::String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut money_buf,
+            format_args!("{} H", lifecycle::money()),
+        );
+        // Reuse the already-linked bold font (FONT_7X13_BOLD via `font`) —
+        // pulling in a second glyph table (9x15) overflowed FLASH by ~12 KB.
+        Text::with_text_style(money_buf.as_str(), Point::new(150, 33), font, right_style)
+            .draw(display)?;
     }
 
     // Sim-only sprite blit: in firmware the async `render()` blits sprites
@@ -676,7 +705,6 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Hatching { .. } => "HATCHING",
             DisplayAnim::Feeding => "FEEDING",
             DisplayAnim::Healing => "HEALING",
-            DisplayAnim::Relaxing => "RELAXING",
             DisplayAnim::Playing => "PLAYING",
             DisplayAnim::Sleeping => "SLEEPING",
             DisplayAnim::Exercising => "EXERCISING",
@@ -684,15 +712,14 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Drinking => "DRINKING",
             DisplayAnim::Ozempic => "OZEMPIC",
             DisplayAnim::Rehab => "REHAB",
+            DisplayAnim::OnlyPets => "ONLYPETS",
             DisplayAnim::Leaving { .. } => "LEAVING",
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",
             DisplayAnim::CriticalHungry => "CRIT:HUNGRY",
-            DisplayAnim::CriticalDrained => "CRIT:DRAINED",
             DisplayAnim::WarningSick => "WARN:SICK",
             DisplayAnim::WarningTired => "WARN:TIRED",
             DisplayAnim::WarningHungry => "WARN:HUNGRY",
-            DisplayAnim::WarningDrained => "WARN:DRAINED",
             DisplayAnim::WarningMiserable => "WARN:MISER",
             DisplayAnim::Happy => "HAPPY",
             DisplayAnim::Idle => "IDLE",

@@ -186,7 +186,7 @@ pub fn activate() {
     if r != RESULT_IN_PROGRESS {
         if r == RESULT_HUMAN_WINS {
             super::lifecycle::award_inspiration(super::engine::MiniGame::Nim);
-            super::show_toast(super::Toast::Inspired);
+            super::show_toast(super::Toast::MinigameWin);
         }
         close();
         return;
@@ -438,7 +438,7 @@ where
         .build();
     let font = MonoTextStyle::new(&FONT_6X10, BLACK);
     let msg: &str = match result {
-        RESULT_HUMAN_WINS => "You win! +inspired",
+        RESULT_HUMAN_WINS => "You win!",
         RESULT_EI_WINS => "EI wins!",
         _ => match (human_turn, phase) {
             (true, PHASE_ROW_SELECT) => "Pick a row",

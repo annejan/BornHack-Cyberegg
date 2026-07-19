@@ -200,10 +200,17 @@ pub fn can_use_station() -> bool {
 }
 
 /// Create a new egg and begin the hatching countdown.
-/// Called after the player selects a pet kind on the selection screen.
-pub fn start_new_game(kind: super::engine::PetKind) {
+/// Called after the player selects a pet kind (and money mode) on the
+/// selection screen. The egg always starts with `money = 100` (see
+/// `GameState::new_egg`); `money_enabled` decides whether that balance
+/// is actually in play for this generation. `hard_mode` is only
+/// meaningful when `money_enabled` is true — the pet-select screen only
+/// ever sets it alongside `money_enabled = true` (see `pet_select::confirm`).
+pub fn start_new_game(kind: super::engine::PetKind, money_enabled: bool, hard_mode: bool) {
     let mut egg = new_egg(kind);
     egg.last_update_tick = now_tick();
+    egg.money_enabled = money_enabled;
+    egg.hard_mode = hard_mode;
     unsafe {
         *GAME.get() = Some(egg);
     }
@@ -365,8 +372,8 @@ static REALM_DIRTY: AtomicBool = AtomicBool::new(false);
 fn current_severity(state: &GameState) -> Severity {
     use super::engine::Phase;
     use super::engine::thresholds::{
-        SICK_TRIGGER_DRAINED, SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED, WARNING_DRAINED,
-        WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK, WARNING_TIRED,
+        SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED, WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK,
+        WARNING_TIRED,
     };
 
     if state.phase == Phase::Gone {
@@ -381,15 +388,13 @@ fn current_severity(state: &GameState) -> Severity {
     // the action ends.
     let severe = state.sick > SICK_TRIGGER_TIRED()
         || state.tired > SICK_TRIGGER_TIRED()
-        || state.hunger > SICK_TRIGGER_HUNGER()
-        || state.drained > SICK_TRIGGER_DRAINED();
+        || state.hunger > SICK_TRIGGER_HUNGER();
     if severe {
         return Severity::Severe;
     }
     let warning = state.sick > WARNING_SICK()
         || state.tired > WARNING_TIRED()
         || state.hunger > WARNING_HUNGER()
-        || state.drained > WARNING_DRAINED()
         || state.miserable > WARNING_MISERABLE();
     if warning {
         return Severity::Warning;
@@ -494,7 +499,6 @@ pub fn display_anim() -> DisplayAnim {
             | DisplayAnim::WarningTired
             | DisplayAnim::WarningSick
             | DisplayAnim::WarningHungry
-            | DisplayAnim::WarningDrained
             | DisplayAnim::WarningMiserable
     ) && now_tick() < SLEEP_ANIM_UNTIL_TICK.load(Ordering::Relaxed)
     {
@@ -525,12 +529,14 @@ pub fn heal() -> bool {
     with_state(|s| s.heal())
 }
 
-pub fn relax() -> bool {
-    with_state(|s| s.relax())
-}
-
 pub fn play() -> bool {
     with_state(|s| s.play())
+}
+
+/// Send the pet to "Only pets" to earn HAX. Timed action like Play; only
+/// meaningful (and only surfaced in the menu) when `money_enabled()`.
+pub fn only_pets() -> bool {
+    with_state(|s| s.only_pets())
 }
 
 pub fn exercise() -> bool {
@@ -657,8 +663,8 @@ pub fn is_hibernating() -> bool {
     state.is_some_and(|s| s.hibernating)
 }
 
-/// Award inspiration for winning a mini-game.  Starts only the
-/// matching game's cooldown so other games stay playable.
+/// Award the mini-game win reward (HAX + cooldown + hunger cost).
+/// Starts only the matching game's cooldown so other games stay playable.
 pub fn award_inspiration(game: super::engine::MiniGame) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
@@ -672,20 +678,11 @@ pub fn award_inspiration(game: super::engine::MiniGame) {
     }
 }
 
-/// Apply a variable-magnitude `drained` reduction.  Used by Triple
-/// Born to scale the on-close bonus by the score earned in the
-/// just-finished game (paired with `award_inspiration` for the
-/// fixed cooldown + hunger cost).
-pub fn add_drained_relief(amount: u16) {
-    let state = unsafe { (*GAME.get()).as_mut() };
-    if let Some(s) = state {
-        s.add_drained_relief(amount);
-    }
-}
-
 /// Start a new generation (after pet has left or manual reset).
 /// Records the current pet in the Unicorn Realm before replacing it.
-pub fn new_generation(kind: super::engine::PetKind) {
+/// `money_enabled` (and `hard_mode`) are chosen fresh per generation,
+/// same as `kind`.
+pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool, hard_mode: bool) {
     use super::engine::Phase;
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
@@ -712,6 +709,8 @@ pub fn new_generation(kind: super::engine::PetKind) {
 
         let seed = now_tick() as u64 ^ 0xDEAD_BEEF;
         s.new_generation(seed, kind);
+        s.money_enabled = money_enabled;
+        s.hard_mode = hard_mode;
         s.last_update_tick = now_tick();
 
         // Push AFTER the state reset (so new_generation() can't clobber the
@@ -772,6 +771,36 @@ pub fn pet_generation() -> u16 {
     match state {
         Some(s) => s.generation,
         None => 0,
+    }
+}
+
+/// Get the current HAX balance (defaults to 0 if no game).
+pub fn money() -> u32 {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.money,
+        None => 0,
+    }
+}
+
+/// Whether HAX money mode is enabled for the current pet (defaults to
+/// false if no game).
+pub fn money_enabled() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.money_enabled,
+        None => false,
+    }
+}
+
+/// Whether Hard (US) prices are in effect for the current pet (defaults
+/// to false if no game). Only meaningful when `money_enabled()` is also
+/// true.
+pub fn hard_mode() -> bool {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        Some(s) => s.hard_mode,
+        None => false,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Tic-tac-toe mini-game.
 //!
 //! The player (X, red) plays against a simple AI (O, black).
-//! Winning reduces the pet's `drained` stat (more inspired).
+//! Winning awards HAX (when money mode is on) plus this game's cooldown.
 //!
 //! State is held in module-level atomics so it integrates with the
 //! existing single-threaded game loop without allocations.
@@ -157,7 +157,7 @@ pub fn place() -> bool {
         let r = RESULT.load(Ordering::Relaxed);
         if r == 1 || r == 3 {
             super::lifecycle::award_inspiration(super::engine::MiniGame::TicTacToe);
-            super::show_toast(super::Toast::Inspired);
+            super::show_toast(super::Toast::MinigameWin);
         }
         close();
         return true;
@@ -408,9 +408,9 @@ where
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let msg = match result {
-        1 => "You win! +inspired",
+        1 => "You win!",
         2 => "EI wins!",
-        3 => "Draw! +inspired",
+        3 => "Draw!",
         _ => "Your turn (X)",
     };
     Text::with_text_style(msg, Point::new(76, 134), font, centered).draw(display)?;

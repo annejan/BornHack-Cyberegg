@@ -118,16 +118,12 @@ pub fn open() {
 
 pub fn close() {
     if ACTIVE.swap(false, Ordering::Relaxed) {
-        // Award inspiration scaled by score earned during the game.
-        // Match-3 scores ~30 per cleared row; cap the relief at a
-        // reasonable per-game max so a fluke can't trivialise the
-        // pet's drained stat.
+        // Award the win reward (HAX + cooldown + hunger cost) for any
+        // game that scored at least one cleared row.
         let score = SCORE.load(Ordering::Relaxed);
         if score > 0 {
-            let relief: u16 = (score / 6).min(4096) as u16;
             super::lifecycle::award_inspiration(super::engine::MiniGame::BornJeweled);
-            super::lifecycle::add_drained_relief(relief);
-            super::show_toast(super::Toast::Inspired);
+            super::show_toast(super::Toast::MinigameWin);
         }
     }
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);

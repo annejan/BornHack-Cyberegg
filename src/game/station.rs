@@ -1,13 +1,13 @@
 //! Station NFC text-record dispatcher.
 //!
-//! Event-side stations (food / medic / inspiration / rest) hand out
-//! buffs to a player's badge.  Two callers reach this dispatcher:
+//! Event-side stations (food / medic / rest) hand out buffs to a
+//! player's badge.  Two callers reach this dispatcher:
 //!   * the signed NFC channel (`nfct::handle_signed`) — authenticated,
 //!     always on; the phrase is the verified plaintext of a signed APDU.
 //!   * an unsigned plaintext NDEF write (`nfct::try_apply_station`) —
 //!     off by default, gated behind the `nfc-plaintext-station` feature
 //!     for physical event-station tags.
-//! Either way, if the phrase matches one of the four below the
+//! Either way, if the phrase matches one of the three below the
 //! corresponding stat is restored to full and a station toast is
 //! shown.  Anything else is silently ignored.
 //!
@@ -20,7 +20,7 @@
 //!
 //! # Cooldown
 //!
-//! Each of the four effects has its own 5-minute cooldown so a player
+//! Each of the three effects has its own 5-minute cooldown so a player
 //! can walk between stations without delay but can't farm the same
 //! station twice in quick succession.  Cooldowns live in RAM only and
 //! reset across reboots, which is acceptable for the event use case.
@@ -39,7 +39,6 @@ const COOLDOWN_TICKS: u32 = 30;
 /// skips the cooldown gate, so the first tap always succeeds.
 static LAST_FOOD: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_DRUGS: AtomicU32 = AtomicU32::new(u32::MAX);
-static LAST_INSPIRE: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_REST: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Try to claim the cooldown slot.  Returns `Ok(())` and stamps the
@@ -77,9 +76,6 @@ pub fn apply(text: &[u8]) -> Option<Toast> {
     match key.as_slice() {
         b"more food" => station_step(&LAST_FOOD, Toast::StationFood, |s| s.hunger = 0),
         b"more drugs" => station_step(&LAST_DRUGS, Toast::StationDrugs, |s| s.sick = 0),
-        b"more inspiration" => {
-            station_step(&LAST_INSPIRE, Toast::StationInspire, |s| s.drained = 0)
-        }
         b"sleep like a bear" => station_step(&LAST_REST, Toast::StationRest, |s| s.tired = 0),
         _ => None,
     }

@@ -4,7 +4,7 @@
 //! Toggling a cell also toggles its orthogonal neighbours.
 //! Goal: turn all lights off.
 //!
-//! Winning awards inspiration (reduces `drained`).
+//! Winning awards HAX (when money mode is on) plus this game's cooldown.
 //!
 //! State is held in module-level atomics — no heap, no alloc.
 
@@ -143,7 +143,7 @@ pub fn activate() {
     if SOLVED.load(Ordering::Relaxed) {
         // Puzzle already solved — Fire closes and awards reward.
         super::lifecycle::award_inspiration(super::engine::MiniGame::LightsOut);
-        super::show_toast(super::Toast::Inspired);
+        super::show_toast(super::Toast::MinigameWin);
         close();
         return;
     }

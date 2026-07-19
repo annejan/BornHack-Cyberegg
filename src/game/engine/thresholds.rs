@@ -68,22 +68,15 @@ thresholds_table! {
     SLEEP_HUNGER_COST: u16,
     SLEEP_TIER_SLOW: u16,
     SLEEP_TIER_MEDIUM: u16,
-    // Drained
-    DRAINED_AMOUNT: u16,
-    DRAINED_INTERVAL: u32,
-    DRAINED_INTERVAL_MISERABLE: u32,
-    DRAINED_SLEEP_RECOVERY: u16,
     // Sick
     SICK_RATE: u16,
     SICK_CONDITION_RATE: u16,
     SICK_CONDITION_MISERABLE_RATE: u16,
     SICK_TRIGGER_HUNGER: u16,
     SICK_TRIGGER_TIRED: u16,
-    SICK_TRIGGER_DRAINED: u16,
     // Warnings
     WARNING_HUNGER: u16,
     WARNING_TIRED: u16,
-    WARNING_DRAINED: u16,
     WARNING_SICK: u16,
     WARNING_MISERABLE: u16,
     // Miserable
@@ -98,19 +91,13 @@ thresholds_table! {
     FEED_DURATION: u8,
     FEED_COOLDOWN: u16,
     FEED_HUNGER_RELIEF: u16,
-    FEED_DRAINED_RELIEF: u16,
     HEAL_DURATION: u8,
     HEAL_COOLDOWN: u16,
     HEAL_SICK_RELIEF: u16,
-    RELAX_DURATION: u8,
-    RELAX_COOLDOWN: u16,
-    RELAX_DRAINED_RELIEF: u16,
-    RELAX_HUNGER_COST: u16,
     PLAY_DURATION: u8,
     PLAY_COOLDOWN: u16,
     PLAY_HUNGER_COST: u16,
     PLAY_TIRED_COST: u16,
-    PLAY_DRAINED_COST: u16,
     MINIGAME_COOLDOWN: u16,
     MINIGAME_HUNGER_COST: u16,
     // Lifecycle
@@ -136,7 +123,6 @@ thresholds_table! {
     EXERCISE_WEIGHT_RELIEF: u16,
     EXERCISE_TIRED_COST: u16,
     EXERCISE_HUNGER_COST: u16,
-    EXERCISE_DRAINED_RELIEF: u16,
     // Medication
     MEDICATE_DURATION: u8,
     MEDICATE_COOLDOWN: u16,
@@ -145,12 +131,10 @@ thresholds_table! {
     OZEMPIC_COOLDOWN: u16,
     OZEMPIC_WEIGHT_RELIEF: u16,
     OZEMPIC_HUNGER_RELIEF: u16,
-    OZEMPIC_DRAINED_COST: u16,
     // Drink
     DRINK_DURATION: u8,
     DRINK_COOLDOWN: u16,
     DRINK_DRUNK_GAIN: u16,
-    DRINK_DRAINED_RELIEF: u16,
     DRINK_WEIGHT_GAIN: u16,
     // Drunk / alcoholism
     DRUNK_SOBER_RATE: u16,
@@ -190,21 +174,14 @@ impl Thresholds {
         SLEEP_TIER_SLOW: 49807,
         SLEEP_TIER_MEDIUM: 30145,
 
-        DRAINED_AMOUNT: 655,
-        DRAINED_INTERVAL: 90,
-        DRAINED_INTERVAL_MISERABLE: 30,
-        DRAINED_SLEEP_RECOVERY: 655,
-
         SICK_RATE: 1,
         SICK_CONDITION_RATE: 655,
         SICK_CONDITION_MISERABLE_RATE: 1310,
         SICK_TRIGGER_HUNGER: 39321,
         SICK_TRIGGER_TIRED: 49151,
-        SICK_TRIGGER_DRAINED: 43908,
 
         WARNING_HUNGER: 19660,
         WARNING_TIRED: 26214,
-        WARNING_DRAINED: 22937,
         WARNING_SICK: 26214,
         WARNING_MISERABLE: 32768,
 
@@ -219,19 +196,13 @@ impl Thresholds {
         FEED_DURATION: 2,
         FEED_COOLDOWN: 12,
         FEED_HUNGER_RELIEF: 3930,
-        FEED_DRAINED_RELIEF: 1310,
         HEAL_DURATION: 3,
         HEAL_COOLDOWN: 24,
         HEAL_SICK_RELIEF: 9825,
-        RELAX_DURATION: 2,
-        RELAX_COOLDOWN: 24,
-        RELAX_DRAINED_RELIEF: 6550,
-        RELAX_HUNGER_COST: 6550,
         PLAY_DURATION: 4,
         PLAY_COOLDOWN: 48,
         PLAY_HUNGER_COST: 655,
         PLAY_TIRED_COST: 1310,
-        PLAY_DRAINED_COST: 1965,
         MINIGAME_COOLDOWN: 18,
         MINIGAME_HUNGER_COST: 3000,
 
@@ -260,7 +231,6 @@ impl Thresholds {
         EXERCISE_WEIGHT_RELIEF: 4370,
         EXERCISE_TIRED_COST: 1310,
         EXERCISE_HUNGER_COST: 655,
-        EXERCISE_DRAINED_RELIEF: 655,
 
         MEDICATE_DURATION: 2,
         MEDICATE_COOLDOWN: 720,
@@ -269,12 +239,10 @@ impl Thresholds {
         OZEMPIC_COOLDOWN: 4320,
         OZEMPIC_WEIGHT_RELIEF: 13100,
         OZEMPIC_HUNGER_RELIEF: 1500,
-        OZEMPIC_DRAINED_COST: 800,
 
         DRINK_DURATION: 2,
         DRINK_COOLDOWN: 24,
         DRINK_DRUNK_GAIN: 4915,
-        DRINK_DRAINED_RELIEF: 3275,
         DRINK_WEIGHT_GAIN: 655,
 
         DRUNK_SOBER_RATE: 6,
@@ -311,21 +279,14 @@ impl Thresholds {
         SLEEP_TIER_SLOW: 49807,
         SLEEP_TIER_MEDIUM: 30145,
 
-        DRAINED_AMOUNT: 655,
-        DRAINED_INTERVAL: 180,
-        DRAINED_INTERVAL_MISERABLE: 60,
-        DRAINED_SLEEP_RECOVERY: 655,
-
         SICK_RATE: 1,
         SICK_CONDITION_RATE: 328,
         SICK_CONDITION_MISERABLE_RATE: 655,
         SICK_TRIGGER_HUNGER: 39321,
         SICK_TRIGGER_TIRED: 49151,
-        SICK_TRIGGER_DRAINED: 43908,
 
         WARNING_HUNGER: 19660,
         WARNING_TIRED: 26214,
-        WARNING_DRAINED: 22937,
         WARNING_SICK: 26214,
         WARNING_MISERABLE: 32768,
 
@@ -340,19 +301,13 @@ impl Thresholds {
         FEED_DURATION: 2,
         FEED_COOLDOWN: 12,
         FEED_HUNGER_RELIEF: 6550,
-        FEED_DRAINED_RELIEF: 2620,
         HEAL_DURATION: 3,
         HEAL_COOLDOWN: 24,
         HEAL_SICK_RELIEF: 16384,
-        RELAX_DURATION: 2,
-        RELAX_COOLDOWN: 24,
-        RELAX_DRAINED_RELIEF: 9825,
-        RELAX_HUNGER_COST: 3275,
         PLAY_DURATION: 4,
         PLAY_COOLDOWN: 48,
         PLAY_HUNGER_COST: 328,
         PLAY_TIRED_COST: 655,
-        PLAY_DRAINED_COST: 983,
         MINIGAME_COOLDOWN: 12,
         MINIGAME_HUNGER_COST: 1500,
 
@@ -381,7 +336,6 @@ impl Thresholds {
         EXERCISE_WEIGHT_RELIEF: 6550,
         EXERCISE_TIRED_COST: 655,
         EXERCISE_HUNGER_COST: 328,
-        EXERCISE_DRAINED_RELIEF: 983,
 
         MEDICATE_DURATION: 2,
         MEDICATE_COOLDOWN: 1440,
@@ -390,12 +344,10 @@ impl Thresholds {
         OZEMPIC_COOLDOWN: 2880,
         OZEMPIC_WEIGHT_RELIEF: 16400,
         OZEMPIC_HUNGER_RELIEF: 2000,
-        OZEMPIC_DRAINED_COST: 400,
 
         DRINK_DURATION: 2,
         DRINK_COOLDOWN: 24,
         DRINK_DRUNK_GAIN: 2500,
-        DRINK_DRAINED_RELIEF: 4915,
         DRINK_WEIGHT_GAIN: 328,
 
         DRUNK_SOBER_RATE: 10,
@@ -523,12 +475,6 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("SLEEP_HUNGER_COST", |t, v| {
         t.SLEEP_HUNGER_COST = clamp_u16(v)
     }),
-    // Interval keys divide the tick counter (see interval_fires); floor to 1
-    // so a BORNPETS.CFG value of 0 can't cause a divide-by-zero.
-    ("DRAINED_INTERVAL", |t, v| t.DRAINED_INTERVAL = v.max(1)),
-    ("DRAINED_INTERVAL_MISERABLE", |t, v| {
-        t.DRAINED_INTERVAL_MISERABLE = v.max(1)
-    }),
     ("SICK_RATE", |t, v| t.SICK_RATE = clamp_u16(v)),
     ("SICK_CONDITION_RATE", |t, v| {
         t.SICK_CONDITION_RATE = clamp_u16(v)
@@ -536,6 +482,8 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("SICK_CONDITION_MISERABLE_RATE", |t, v| {
         t.SICK_CONDITION_MISERABLE_RATE = clamp_u16(v)
     }),
+    // Interval keys divide the tick counter (see interval_fires); floor to 1
+    // so a BORNPETS.CFG value of 0 can't cause a divide-by-zero.
     ("MISERABLE_INTERVAL_BASE", |t, v| {
         t.MISERABLE_INTERVAL_BASE = v.max(1)
     }),
@@ -545,21 +493,9 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("FEED_HUNGER_RELIEF", |t, v| {
         t.FEED_HUNGER_RELIEF = clamp_u16(v)
     }),
-    ("FEED_DRAINED_RELIEF", |t, v| {
-        t.FEED_DRAINED_RELIEF = clamp_u16(v)
-    }),
     ("HEAL_SICK_RELIEF", |t, v| t.HEAL_SICK_RELIEF = clamp_u16(v)),
-    ("RELAX_DRAINED_RELIEF", |t, v| {
-        t.RELAX_DRAINED_RELIEF = clamp_u16(v)
-    }),
-    ("RELAX_HUNGER_COST", |t, v| {
-        t.RELAX_HUNGER_COST = clamp_u16(v)
-    }),
     ("PLAY_HUNGER_COST", |t, v| t.PLAY_HUNGER_COST = clamp_u16(v)),
     ("PLAY_TIRED_COST", |t, v| t.PLAY_TIRED_COST = clamp_u16(v)),
-    ("PLAY_DRAINED_COST", |t, v| {
-        t.PLAY_DRAINED_COST = clamp_u16(v)
-    }),
     ("MINIGAME_HUNGER_COST", |t, v| {
         t.MINIGAME_HUNGER_COST = clamp_u16(v)
     }),

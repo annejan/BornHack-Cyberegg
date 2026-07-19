@@ -26,6 +26,18 @@ here's what changed:
 - **Health Status view** (Stats menu) — a plain-language readout of
   Diabetic/Overweight/Alcoholic/Fit%, plus your lifetime mesh Battle
   win/loss record.
+- **HAX economy** — an optional in-game currency. Turn it on at pet
+  select ("With money"). Earn **HAX** from mini-game wins, Battle wins,
+  and the new **OnlyPets** work action; spend it on food, drinks, and
+  treatments (Aspirine/Insulin/Ozempic/Rehab). Anything you can't afford
+  is shown greyed-out with its price (e.g. `Salad 15H`).
+- **OnlyPets** — a work/hobby action (under Play) that earns HAX; a
+  forced-work branch kicks in and pays more when the pet is broke.
+- **Hard mode (US)** — a third pet-select option where *healthy* choices
+  cost more (staying fit hurts your wallet) and treatments are pricier.
+  Even the Frikandel speciaal is relabelled a **Hamburger**.
+- **Panda** — a fourth, optional pet skin, installed from a `PETS.CFG`
+  file on the badge's USB drive (no reflash needed).
 - **Debug cheat menu** — a hidden Konami-style button sequence
   (Up Up Down Down Left Right Left Right Fire) opens a testing menu with
   instant weight/diabetes/drunk/alcoholism triggers and a time-skip, so

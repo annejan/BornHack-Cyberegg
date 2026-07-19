@@ -205,7 +205,7 @@ pub fn activate() {
         // Game over: any Fire closes.  Award inspiration on win or tie.
         if result == 1 || result == 3 {
             super::lifecycle::award_inspiration(super::engine::MiniGame::BlackHole);
-            super::show_toast(super::Toast::Inspired);
+            super::show_toast(super::Toast::MinigameWin);
         }
         close();
         return;
@@ -568,13 +568,8 @@ where
             let _ = core::fmt::Write::write_fmt(&mut s, format_args!("You {} - {} EI", sa, sb));
             Text::with_text_style(s.as_str(), Point::new(76, 124), footer_font, centred_top)
                 .draw(display)?;
-            Text::with_text_style(
-                "You win! +inspired",
-                Point::new(76, 138),
-                footer_font,
-                centred_top,
-            )
-            .draw(display)?;
+            Text::with_text_style("You win!", Point::new(76, 138), footer_font, centred_top)
+                .draw(display)?;
         }
         2 => {
             let mut s: heapless::String<24> = heapless::String::new();
@@ -589,7 +584,7 @@ where
             let _ = core::fmt::Write::write_fmt(&mut s, format_args!("Tie {} - {}", sa, sb));
             Text::with_text_style(s.as_str(), Point::new(76, 124), footer_font, centred_top)
                 .draw(display)?;
-            Text::with_text_style("+inspired", Point::new(76, 138), footer_font, centred_top)
+            Text::with_text_style("Tie game!", Point::new(76, 138), footer_font, centred_top)
                 .draw(display)?;
         }
     }

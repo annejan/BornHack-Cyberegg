@@ -18,6 +18,9 @@ Press **Fire** to begin — you'll be asked to choose your pet:
   described under [Custom pets](USER_GAMES.md#custom-pets-petscfg) —
   fully playable, not a placeholder
 
+If money mode is available you'll also pick **With money** / **Without
+money** / **Hard mode (US)** here — see [HAX Economy & Hard Mode](#hax-economy--hard-mode).
+
 Use **Up/Down** to highlight your choice (wraps from the last pet back
 to the first) and **Fire** to confirm. A 1-minute egg hatching countdown
 begins with an animation — once it completes, your pet is born and
@@ -100,6 +103,30 @@ the mesh (see
 Each action has a **cooldown** — you'll see "(wait)" next to items that
 aren't ready yet. Actions are mutually exclusive: the pet can only do one
 thing at a time.
+
+## HAX Economy & Hard Mode
+
+At pet select you can choose to play **with money** — an optional layer
+that gives your pet a **HAX** balance (a fresh egg starts at 100).
+
+**Earning HAX**
+
+- Winning a mini-game
+- Winning a mesh Battle
+- **OnlyPets** — a work/hobby action under **Play**. It earns HAX; if the
+  pet is broke, a forced-work branch kicks in and pays more.
+
+**Spending HAX** — when money mode is on, food, drinks, Aspirine,
+Insulin, Ozempic and Rehab all cost HAX. Priced items show their cost
+(e.g. `Salad 15H`); anything you can't afford is disabled until you earn
+more.
+
+**Hard mode (US)** is a third choice at pet select. Prices flip so that
+staying healthy is expensive — healthy food and drinks cost more and
+treatments are pricier. In this mode the *Frikandel speciaal* is even
+relabelled a **Hamburger**.
+
+Play **without money** for the classic experience — no prices, no HAX.
 
 ## Mini-Games
 
