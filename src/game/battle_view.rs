@@ -193,7 +193,10 @@ pub fn handle_input(btn: ButtonId) {
     match btn {
         ButtonId::Up => cursor_up(),
         ButtonId::Down => cursor_down(),
-        ButtonId::Fire => try_challenge(),
+        // Both the joystick Fire and the Execute button confirm — players
+        // reach for either, and only accepting Fire made Execute silently
+        // close the screen ("no result").
+        ButtonId::Fire | ButtonId::Execute => try_challenge(),
         _ => close(),
     }
 }
