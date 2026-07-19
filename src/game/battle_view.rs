@@ -331,6 +331,17 @@ where
     };
     Text::with_text_style(banner, Point::new(76, 112), banner_color, centered).draw(display)?;
 
+    // On a win with money mode on, show the HAX reward that was credited.
+    if result.outcome.challenger_won && super::lifecycle::money_enabled() {
+        let mut reward: heapless::String<16> = heapless::String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut reward,
+            format_args!("+{} HAX", super::engine::BATTLE_HAX_REWARD),
+        );
+        Text::with_text_style(reward.as_str(), Point::new(76, 130), TEXT_BOLD_BLACK, centered)
+            .draw(display)?;
+    }
+
     let hint = TextStyleBuilder::new()
         .baseline(Baseline::Bottom)
         .alignment(Alignment::Center)
