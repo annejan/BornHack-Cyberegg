@@ -19,6 +19,8 @@ pub mod qwiic;
 pub mod i2c_keyboard;
 pub mod led;
 pub mod nfct;
+/// Buck/boost converter power-mode arbiter (`PS_SYNC` pin).
+pub mod power;
 /// PETS.CFG parser — registers custom pets from the USB-MSC partition.
 /// Game-only: it reads `crate::game` pet-registry types.
 #[cfg(feature = "game")]
