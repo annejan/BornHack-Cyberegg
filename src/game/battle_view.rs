@@ -201,11 +201,10 @@ where
 /// FAT12 (own left, opponent right-mirrored) and the stage-2 banner. The caller
 /// clears the display and drives the refresh.
 #[cfg(feature = "embassy-base")]
-pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>) {
+pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>, stage: BattleStage) {
     use crate::fw::fat12;
 
     let (own_kind, opp_kind, viewer_won) = super::battle_anim_ctx();
-    let stage = super::battle_anim_stage();
 
     let own_name = battle_filename(own_kind, pose_aa(stage, viewer_won, true));
     if let Ok(file) = fat12::find_file(&own_name).await {

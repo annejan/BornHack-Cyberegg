@@ -634,12 +634,18 @@ async fn display_loop(
         #[cfg(feature = "game")]
         if bornhack_aegg::game::battle_anim_active() {
             let anim_speed = bornhack_aegg::fw::epd::current_lut_speed();
-            while bornhack_aegg::game::battle_anim_stage()
-                != bornhack_aegg::game::BattleStage::Done
-            {
+            // Drive the two stages EXPLICITLY, holding each ~5 s after its
+            // refresh completes. Deriving the stage from wall-clock elapsed
+            // would skip the result frame: a single e-paper refresh takes
+            // several seconds, so by the time the standing frame + 5 s hold
+            // finish, the elapsed clock has already passed the result window.
+            for stage in [
+                bornhack_aegg::game::BattleStage::Standing,
+                bornhack_aegg::game::BattleStage::Result,
+            ] {
                 display.clear(Color::White);
                 let _ = display.reset().await;
-                bornhack_aegg::game::battle_view::render_anim(display).await;
+                bornhack_aegg::game::battle_view::render_anim(display, stage).await;
                 let _ = display.update_tc(anim_speed).await;
                 let _ = display.deep_sleep().await;
                 Timer::after_millis(5_000).await;
