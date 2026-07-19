@@ -661,6 +661,8 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.wait_on_busy().ok();
         self.lora.clear_irq_status(IrqMask::all()).ok();
 
+        // High-current PA window — hold buck/boost in boost until TxDone.
+        let _tx_boost = crate::fw::power::boost(crate::fw::power::Source::Lora);
         self.lora.rf_switch_tx();
 
         self.lora.write_buffer(0x00, message).unwrap();
@@ -678,6 +680,8 @@ impl<'a> SimpleLoRa<'a> {
 
         self.dio1.wait_for_rising_edge().await;
         let actual_ms = tx_start.elapsed().as_millis() as u32;
+        // TxDone — PA is off; drop back to power-save (unless another vote holds).
+        drop(_tx_boost);
 
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
 
