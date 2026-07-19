@@ -150,6 +150,53 @@ where
     Ok(())
 }
 
+/// Power-bar geometry (Street-Fighter style: top-left own, top-right opponent).
+const HP_BAR_Y: i32 = 4;
+const HP_BAR_H: u32 = 8;
+const HP_BAR_W: u32 = 66;
+const HP_LEFT_X: i32 = 4;
+const HP_RIGHT_X: i32 = 82;
+
+/// Draw one power bar: a black outline filled proportionally to `pct`. The own
+/// bar (left) fills from the left edge; the opponent bar (right, `anchor_right`)
+/// depletes toward the centre, mirroring the fighting-game convention.
+fn draw_hp_bar<D>(display: &mut D, x: i32, pct: u8, anchor_right: bool) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    Rectangle::new(Point::new(x, HP_BAR_Y), Size::new(HP_BAR_W, HP_BAR_H))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+        .draw(display)?;
+    let fw = HP_BAR_W * pct.min(100) as u32 / 100;
+    if fw > 0 {
+        let fx = if anchor_right {
+            x + (HP_BAR_W - fw) as i32
+        } else {
+            x
+        };
+        Rectangle::new(Point::new(fx, HP_BAR_Y), Size::new(fw, HP_BAR_H))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+    }
+    Ok(())
+}
+
+/// Draw both power bars for `stage`: 100/100 while standing, the outcome HP
+/// once the result stage begins.
+fn draw_hp_bars<D>(display: &mut D, stage: BattleStage) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let (own_hp, opp_hp) = if stage == BattleStage::Standing {
+        (100, 100)
+    } else {
+        super::battle_anim_hp()
+    };
+    draw_hp_bar(display, HP_LEFT_X, own_hp, false)?;
+    draw_hp_bar(display, HP_RIGHT_X, opp_hp, true)?;
+    Ok(())
+}
+
 /// Firmware render of the current battle-animation frame. Blits both pets from
 /// FAT12 (own left, opponent right-mirrored) and the stage-2 banner. The caller
 /// clears the display and drives the refresh.
@@ -168,6 +215,7 @@ pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>) {
     if let Ok(file) = fat12::find_file(&opp_name).await {
         super::sprite_loader::blit_file(display, &file, ANIM_RIGHT_X, ANIM_PET_Y, true).await;
     }
+    let _ = draw_hp_bars(display, stage);
     if stage == BattleStage::Result {
         let _ = draw_anim_banner(display, viewer_won);
     }
@@ -186,6 +234,7 @@ where
     super::sprite_loader::blit_pcx_sim(display, &own_name, ANIM_LEFT_X, ANIM_PET_Y, false);
     let opp_name = battle_filename(opp_kind, pose_aa(stage, viewer_won, false));
     super::sprite_loader::blit_pcx_sim(display, &opp_name, ANIM_RIGHT_X, ANIM_PET_Y, true);
+    let _ = draw_hp_bars(display, stage);
     if stage == BattleStage::Result {
         let _ = draw_anim_banner(display, viewer_won);
     }

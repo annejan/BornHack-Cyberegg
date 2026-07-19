@@ -29,13 +29,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_DIR = os.path.join(REPO, "assets/to-badge")
 MANIFEST = os.path.join(ASSET_DIR, "MANIFEST.TXT")
 
-# pet prefix -> short label
+# pet prefix -> short label. Firmware pets Bartholomeus/Cat/Slug plus the Panda
+# DLC — every set is a real pet; there is no generic placeholder.
 PETS = {
     0x00: "BART",
     0x01: "CAT",
     0x02: "SLUG",
     0x05: "PANDA",
-    0xFE: "???",
 }
 # pose code -> label
 POSES = {

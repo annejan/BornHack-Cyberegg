@@ -192,18 +192,15 @@ const FULL_SIZE: usize = 9;
 /// placeholder pet (see [`resolve_kind`]).
 pub const KIND_UNKNOWN: u8 = 0xFF;
 
-/// Sprite `PP` prefix of the generic "unknown species" placeholder pet, drawn
-/// when we can't resolve the real species (legacy packet + unknown friend).
-pub const GENERIC_KIND: u8 = 0xFE;
-
 /// Resolve a combatant's sprite species: use `kind` when it's a real value,
-/// else fall back to the stored friend record for `device_id`, else the
-/// generic placeholder pet.
+/// else fall back to the stored friend record for `device_id`, else the first
+/// firmware pet (Bartholomeus). There is no generic placeholder — every drawn
+/// species is a real pet.
 pub fn resolve_kind(kind: u8, device_id: [u8; 2]) -> u8 {
     if kind != KIND_UNKNOWN {
         return kind;
     }
-    super::friends::pet_kind_of(device_id).unwrap_or(GENERIC_KIND)
+    super::friends::pet_kind_of(device_id).unwrap_or(super::engine::PetKind::Bartholomeus.id())
 }
 
 impl BattleResultMsg {
@@ -333,7 +330,13 @@ pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
     });
 
     // Play the battle animation locally: our pet (left) vs the friend (right).
-    super::show_battle_anim(my_kind, friend.pet_kind, outcome.challenger_won);
+    super::show_battle_anim(
+        my_kind,
+        friend.pet_kind,
+        outcome.challenger_won,
+        outcome.challenger_hp_pct,
+        outcome.target_hp_pct,
+    );
 
     Some(outcome)
 }
@@ -384,7 +387,14 @@ pub async fn on_battle_result(data: &[u8]) {
     // generic placeholder pet (see `resolve_kind`).
     let own_kind = super::lifecycle::pet_kind().id();
     let opp_kind = resolve_kind(msg.challenger_kind, msg.challenger_id);
-    super::show_battle_anim(own_kind, opp_kind, we_won);
+    // From our side the HP swaps: our pet's HP is the packet's target HP.
+    super::show_battle_anim(
+        own_kind,
+        opp_kind,
+        we_won,
+        msg.target_hp_pct,
+        msg.challenger_hp_pct,
+    );
 }
 
 #[cfg(test)]

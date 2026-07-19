@@ -261,8 +261,17 @@ pub fn battle_stage_from_elapsed(ms: u32) -> BattleStage {
 
 /// Start the full-screen battle animation. `own_kind` is drawn on the left,
 /// `opp_kind` on the right (mirrored); `viewer_won` picks the stage-2 poses.
-pub fn show_battle_anim(own_kind: u8, opp_kind: u8, viewer_won: bool) {
-    let ctx = own_kind as u32 | ((opp_kind as u32) << 8) | ((viewer_won as u32) << 16);
+/// `own_hp`/`opp_hp` are the outcome HP percentages (0..=100) shown by the
+/// stage-2 power bars — stage 1 always shows 100%.
+///
+/// Layout of the packed context (`BATTLE_ANIM_CTX`, all in one u32):
+/// bits 0-7 own_kind, 8-15 opp_kind, 16-22 own_hp, 23-29 opp_hp, 30 viewer_won.
+pub fn show_battle_anim(own_kind: u8, opp_kind: u8, viewer_won: bool, own_hp: u8, opp_hp: u8) {
+    let ctx = own_kind as u32
+        | ((opp_kind as u32) << 8)
+        | ((own_hp.min(100) as u32) << 16)
+        | ((opp_hp.min(100) as u32) << 23)
+        | ((viewer_won as u32) << 30);
     BATTLE_ANIM_CTX.store(ctx, Ordering::Relaxed);
     BATTLE_ANIM_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
     BATTLE_ANIM_ACTIVE.store(true, Ordering::Relaxed);
@@ -284,7 +293,13 @@ pub fn battle_anim_stage() -> BattleStage {
 /// Unpacked animation context: `(own_kind, opp_kind, viewer_won)`.
 pub fn battle_anim_ctx() -> (u8, u8, bool) {
     let c = BATTLE_ANIM_CTX.load(Ordering::Relaxed);
-    (c as u8, (c >> 8) as u8, (c >> 16) & 1 != 0)
+    (c as u8, (c >> 8) as u8, (c >> 30) & 1 != 0)
+}
+
+/// Outcome HP percentages `(own_hp, opp_hp)` for the stage-2 power bars.
+pub fn battle_anim_hp() -> (u8, u8) {
+    let c = BATTLE_ANIM_CTX.load(Ordering::Relaxed);
+    (((c >> 16) & 0x7F) as u8, ((c >> 23) & 0x7F) as u8)
 }
 
 /// End the battle-animation takeover (called once the stage reaches `Done`).
