@@ -604,7 +604,14 @@ where
             (lifecycle::is_overweight_warning(), "OVERWEIGHT"),
             (lifecycle::is_drunk_warning(), "DRUNK"),
         ];
-        let mut banner_y = SEP_TOP + 2;
+        // When money mode is on, the HAX balance sits at y=33 (~13px tall)
+        // in the same top-right corner, so start the banner stack below it
+        // to avoid overlapping the balance readout.
+        let mut banner_y = if lifecycle::money_enabled() {
+            47
+        } else {
+            SEP_TOP + 2
+        };
         for (active, text) in banners {
             if active {
                 Text::with_text_style(text, Point::new(150, banner_y), font, style)
