@@ -69,7 +69,12 @@ async fn main(spawner: Spawner) {
     let [id0, id1] = device_id::get();
     defmt::info!("Device ID: {:02X}{:02X}", id0, id1);
 
-    let _ps_sync = Output::new(board!(p, ps_sync), Level::Low, OutputDrive::Standard);
+    // Buck/boost mode pin. Come up in boost (LOW = high power) and hold that
+    // for all of boot init via a Boot vote; released just before the main loop
+    // so the badge settles to power-save unless an EPD/LoRa event votes.
+    let ps_sync = Output::new(board!(p, ps_sync), Level::Low, OutputDrive::Standard);
+    bornhack_aegg::fw::power::init(ps_sync);
+    let boot_boost = bornhack_aegg::fw::power::boost(bornhack_aegg::fw::power::Source::Boot);
 
     // ── External flash (shared between KV store and USB mass storage) ────
     match bornhack_aegg::fw::flash::init(
@@ -511,6 +516,10 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
     }
 
+    // Boot init done — release the boot boost vote. From here the buck/boost
+    // pin is driven by EPD-refresh and LoRa-TX votes only.
+    drop(boot_boost);
+
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
 
@@ -620,6 +629,9 @@ async fn display_loop(
         // bookkeeping.
         if bornhack_aegg::FORCE_FLUSH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
             let speed = bornhack_aegg::fw::epd::current_lut_speed();
+            let _deghost_boost = bornhack_aegg::fw::power::boost(
+                bornhack_aegg::fw::power::Source::Epd,
+            );
             display.clear(Color::Black);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
@@ -627,6 +639,7 @@ async fn display_loop(
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
             let _ = display.deep_sleep().await;
+            drop(_deghost_boost);
             bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
@@ -779,13 +792,25 @@ async fn display_loop(
                             // render transparent.  `update_tc` drives red via
                             // LUT2.  Keep the delta shadow consistent with the
                             // panel afterwards so the next screen diffs cleanly.
-                            let _ = display.update_tc(speed).await;
+                            let _ = bornhack_aegg::fw::power::boosted(
+                                bornhack_aegg::fw::power::Source::Epd,
+                                display.update_tc(speed),
+                            )
+                            .await;
                             partial_state.commit_refresh();
                         } else {
-                            let _ = display.update_partial(partial_state, speed).await;
+                            let _ = bornhack_aegg::fw::power::boosted(
+                                bornhack_aegg::fw::power::Source::Epd,
+                                display.update_partial(partial_state, speed),
+                            )
+                            .await;
                         }
                     } else {
-                        let _ = display.update_bw(UpdateMode::Mode1, speed).await;
+                        let _ = bornhack_aegg::fw::power::boosted(
+                            bornhack_aegg::fw::power::Source::Epd,
+                            display.update_bw(UpdateMode::Mode1, speed),
+                        )
+                        .await;
                     }
                     let _ = display.deep_sleep().await;
                 },
@@ -1245,11 +1270,10 @@ async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryE
     let _ = Text::with_text_style("battery", Point::new(76, 130), font, centered).draw(display);
 
     let _ = display.reset().await;
-    let _ = display
-        .update_bw(
-            UpdateMode::Mode1,
-            bornhack_aegg::fw::epd::current_lut_speed(),
-        )
-        .await;
+    let _ = bornhack_aegg::fw::power::boosted(
+        bornhack_aegg::fw::power::Source::Epd,
+        display.update_bw(UpdateMode::Mode1, bornhack_aegg::fw::epd::current_lut_speed()),
+    )
+    .await;
     let _ = display.deep_sleep().await;
 }
