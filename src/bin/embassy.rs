@@ -843,27 +843,26 @@ async fn display_loop(
                     }
                     let _ = display.deep_sleep().await;
                 },
-                // `allow_sprite = false`: the animation frame timer must NOT
-                // cancel an in-flight refresh — only buttons/signals do (so
-                // menus stay responsive).  A slow red/full sweep therefore
-                // plays to completion instead of being interrupted mid-wave,
-                // which is what caused the ghosting.
-                wait_display_event(button_rcvr, active_screen, false),
+                // `allow_sprite = true`: ANY draw event — buttons/signals AND
+                // the animation frame timer — cancels an in-flight refresh.
+                // The dropped future leaves `in_flight` + dirty set, so the
+                // next `update_partial` resets the controller and re-drives
+                // (see display.rs recovery). Simple case: everything interrupts;
+                // ghosting corner-cases handled later.
+                wait_display_event(button_rcvr, active_screen, true),
             )
             .await
             {
                 Either::First(_) => {
                     // Refresh finished uninterrupted.  Commit the screen-
-                    // transition tracker, then wait the frame timer
-                    // (`allow_sprite = true`).  The pet animation advances a
-                    // frame only here — after BOTH the refresh completed AND
-                    // the frame timer elapsed — so a frame never advances
-                    // mid-sweep.  A button during this wait redraws without
-                    // advancing.
+                    // transition tracker, then wait the frame timer.
                     last_screen = active_screen;
                     wait_display_event(button_rcvr, active_screen, true).await
                 }
-                Either::Second(_) => false, // button/signal interrupted the refresh — redraw, no advance
+                // Interrupted mid-refresh.  Propagate the waiter's verdict:
+                // sprite-timer fire → advance the frame (true); button/signal
+                // → redraw without advancing (false).
+                Either::Second(sprite) => sprite,
             }
         };
 
