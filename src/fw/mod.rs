@@ -18,6 +18,8 @@ pub mod kv;
 pub mod qwiic;
 pub mod i2c_keyboard;
 pub mod led;
+/// Screen lock — Cancel-hold toggles a global input lock + red padlock overlay.
+pub mod lock;
 pub mod nfct;
 /// Buck/boost converter power-mode arbiter (`PS_SYNC` pin).
 pub mod power;

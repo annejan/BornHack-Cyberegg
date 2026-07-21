@@ -496,6 +496,8 @@ async fn main(spawner: Spawner) {
         }
     };
     spawner.must_spawn(battery_task(battery_monitor));
+    // Drives the transient screen-lock padlock (5 s auto-hide, refresh on key).
+    spawner.must_spawn(bornhack_aegg::fw::lock::overlay_task());
     spawner.must_spawn(minute_tick_task());
     #[cfg(feature = "mesh")]
     spawner.must_spawn(advert_ticker_task());

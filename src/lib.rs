@@ -89,6 +89,13 @@ pub mod fw;
 pub mod fw {
     pub mod emoji;
 
+    /// Screen lock — shares the real firmware module so the padlock overlay and
+    /// lock state render identically in the simulator. The Cancel-hold toggle
+    /// lives in the firmware-only `fw::button`, so in the sim the lock just
+    /// stays inactive unless toggled programmatically.
+    #[path = "lock.rs"]
+    pub mod lock;
+
     /// Host-simulator stubs for the shared settings menu, which reads these EPD
     /// tuning atomics/consts (`menu.rs`). The host has no e-paper panel, so the
     /// state is inert — the menu's adjust actions still update the live value
@@ -764,6 +771,14 @@ where
         SCREEN_QR => qr_screen::draw(display),
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
+
+    // Screen-lock padlock — above the active screen but below the BLE PIN
+    // overlay, so pairing still takes priority. Transient: shown for a few
+    // seconds after each key touch while locked, then hidden (keys stay
+    // locked) so the screen underneath stays readable.
+    if fw::lock::overlay_visible() {
+        fw::lock::draw(display)?;
+    }
 
     // BLE pairing PIN overlay — drawn last so it appears on every screen,
     // including over the game screen and any in-game modal.

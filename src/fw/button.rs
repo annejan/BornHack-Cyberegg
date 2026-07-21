@@ -60,31 +60,69 @@ pub async fn run_buttons(
         );
 
         if is_low {
-            // Hidden display-flush combo watches every press globally (not
-            // just on the game screen, since ghosting isn't game-specific)
-            // and only intercepts the triggering press on a full match —
-            // same "background watcher" contract as the game's debug-cheat
-            // sequence.
-            if crate::display_flush::feed(btn) {
-                crate::FORCE_FLUSH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
-            } else {
-                // Let the game handle the button first when its screen is active.
-                #[cfg(feature = "game")]
-                let consumed = {
-                    let on_game =
-                        DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
-                    on_game && crate::game::input::dispatch(btn)
-                };
-                #[cfg(not(feature = "game"))]
-                let consumed = false;
+            if btn == ButtonId::Cancel {
+                // Race the lock-toggle hold against an early release. A plain
+                // `wait_for_high` that resolves before the timeout means it was
+                // a short press; a timeout means Cancel was held for the full
+                // duration, which toggles the screen lock.
+                let held = embassy_time::with_timeout(
+                    embassy_time::Duration::from_secs(3),
+                    btn_can.wait_for_high(),
+                )
+                .await
+                .is_err();
 
-                if !consumed {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().dispatch_button(btn));
+                if held {
+                    // Toggle at the 3 s mark; the overlay task shows the padlock
+                    // (on lock) or clears it (on unlock) and wakes the render
+                    // loop, so the change is visible immediately.
+                    crate::fw::lock::toggle();
+                    crate::fw::lock::poke();
+                    // Wait for release so this press is fully consumed and a
+                    // release is guaranteed between a lock and the next unlock.
+                    btn_can.wait_for_high().await;
+                } else if crate::fw::lock::is_active() {
+                    // Short press while locked → swallow, but re-show the hint.
+                    crate::fw::lock::poke();
+                } else {
+                    // Short press → normal Cancel.
+                    handle_press(btn);
                 }
+            } else if crate::fw::lock::is_active() {
+                // Locked: swallow the key but re-show the padlock + hint.
+                crate::fw::lock::poke();
+            } else {
+                handle_press(btn);
             }
         }
 
         btn_sender.send(index as u8);
+    }
+}
+
+/// Dispatch a button-down to the normal input sinks (flush combo → game →
+/// menu). Unchanged behaviour extracted so the lock logic can gate it.
+fn handle_press(btn: ButtonId) {
+    // Hidden display-flush combo watches every press globally (not just on the
+    // game screen, since ghosting isn't game-specific) and only intercepts the
+    // triggering press on a full match — same "background watcher" contract as
+    // the game's debug-cheat sequence.
+    if crate::display_flush::feed(btn) {
+        crate::FORCE_FLUSH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+
+    // Let the game handle the button first when its screen is active.
+    #[cfg(feature = "game")]
+    let consumed = {
+        let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
+        on_game && crate::game::input::dispatch(btn)
+    };
+    #[cfg(not(feature = "game"))]
+    let consumed = false;
+
+    if !consumed {
+        DISPLAY_STATE.lock(|f| f.borrow_mut().dispatch_button(btn));
     }
 }
 
