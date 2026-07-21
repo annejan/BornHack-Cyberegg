@@ -125,19 +125,23 @@ where
     } else {
         let name_str = name_buf.as_str();
         let len = name_str.chars().count();
+        // Any codepoint above Latin-1 has no font glyph and renders as the
+        // U+FFFD `�` diamond — which only `ui::draw_text` can draw, so those
+        // names must take the MonoFont path (the huge u8g2 font can't).
+        let has_replacement = name_str.chars().any(|c| c as u32 > 0xFF);
 
         // Render the name with the MonoFont chain (profont + iso_8859_1, all
-        // full Latin-1).  Also the fallback if the huge u8g2 font is missing a
-        // glyph.
+        // full Latin-1) via `ui::draw_text`, so non-renderable chars become the
+        // `�` glyph.  Also the fallback if the huge u8g2 font is missing a glyph.
         let draw_mono = |display: &mut D| -> Result<(), D::Error> {
             let font = pick_name_font(len, 148);
-            Text::with_text_style(
+            crate::ui::draw_text(
+                display,
                 name_str,
                 Point::new(76, 100),
                 MonoTextStyle::new(font, BLACK),
                 centered,
             )
-            .draw(display)
             .map(|_| ())
         };
 
@@ -145,7 +149,7 @@ where
         // ~26 px wide, so 5 chars = ~130 px and clears the 152 px panel
         // with margin.  Falls back to the MonoFont chain for longer
         // names so we still single-line up to ~21 chars.
-        if len <= 5 {
+        if len <= 5 && !has_replacement {
             let renderer = FontRenderer::new::<u8g2_font_fub42_tf>();
             match renderer.render_aligned(
                 name_str,
@@ -209,13 +213,16 @@ fn snapshot_name(out: &mut heapless::String<31>) {
     }
 }
 
-/// Push the printable ASCII (`0x20..=0x7e`) and Latin-1 (`U+00A0..=U+00FF`)
-/// characters of `name` into `out`, stopping if the buffer fills.
+/// Push the drawable characters of `name` into `out`, stopping if the buffer
+/// fills.  Keeps printable ASCII (`0x20..=0x7e`), Latin-1 (`U+00A0..=U+00FF`),
+/// and any higher codepoint — the latter render as the U+FFFD `�` replacement
+/// glyph via `ui::draw_text`, so a name made of non-renderable characters is
+/// still shown (as diamonds) rather than collapsing to "(no name set)".  Only
+/// C0/C1 control characters are dropped.
 fn push_renderable(out: &mut heapless::String<31>, name: &str) {
     for c in name.chars() {
-        let renderable =
-            matches!(c, ' '..='~') || matches!(c, '\u{A0}'..='\u{FF}');
-        if renderable && out.push(c).is_err() {
+        let drawable = matches!(c, ' '..='~') || c as u32 >= 0xA0;
+        if drawable && out.push(c).is_err() {
             break;
         }
     }
