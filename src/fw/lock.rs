@@ -13,8 +13,11 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{RED, TriColor, WHITE};
 
@@ -50,5 +53,22 @@ where
     Rectangle::new(Point::new(74, 84), Size::new(4, 10))
         .into_styled(PrimitiveStyle::with_fill(WHITE))
         .draw(display)?;
+
+    // Unlock hint below the padlock, red + bold. Wrapped to two centred lines
+    // because the full string is wider than the 152 px panel.
+    let bold_red = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    Text::with_text_style("Hold 'cancel'", Point::new(76, 118), bold_red, centered)
+        .draw(display)?;
+    Text::with_text_style(
+        "3 seconds, to unlock",
+        Point::new(76, 132),
+        bold_red,
+        centered,
+    )
+    .draw(display)?;
     Ok(())
 }
