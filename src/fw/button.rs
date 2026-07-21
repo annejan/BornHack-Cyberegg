@@ -74,6 +74,9 @@ pub async fn run_buttons(
 
                 if held {
                     crate::fw::lock::toggle();
+                    // Wake the render loop now (at the 3 s mark, not on release)
+                    // so the lock engages/clears the instant the hold completes.
+                    btn_sender.send(index as u8);
                     // Wait for release so this press is fully consumed and a
                     // release is guaranteed between a lock and the next unlock.
                     btn_can.wait_for_high().await;
