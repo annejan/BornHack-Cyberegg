@@ -54,21 +54,14 @@ where
         .into_styled(PrimitiveStyle::with_fill(WHITE))
         .draw(display)?;
 
-    // Unlock hint below the padlock, red + bold. Wrapped to two centred lines
-    // because the full string is wider than the 152 px panel.
+    // Unlock hint below the padlock, red + bold. Fits one centred line at
+    // 7 px/char within the 152 px panel.
     let bold_red = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style("Hold 'cancel'", Point::new(76, 118), bold_red, centered)
+    Text::with_text_style("Hold cancel to unlock", Point::new(76, 122), bold_red, centered)
         .draw(display)?;
-    Text::with_text_style(
-        "3 seconds, to unlock",
-        Point::new(76, 132),
-        bold_red,
-        centered,
-    )
-    .draw(display)?;
     Ok(())
 }
