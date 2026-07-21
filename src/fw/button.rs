@@ -73,19 +73,25 @@ pub async fn run_buttons(
                 .is_err();
 
                 if held {
+                    // Toggle at the 3 s mark; the overlay task shows the padlock
+                    // (on lock) or clears it (on unlock) and wakes the render
+                    // loop, so the change is visible immediately.
                     crate::fw::lock::toggle();
-                    // Wake the render loop now (at the 3 s mark, not on release)
-                    // so the lock engages/clears the instant the hold completes.
-                    btn_sender.send(index as u8);
+                    crate::fw::lock::poke();
                     // Wait for release so this press is fully consumed and a
                     // release is guaranteed between a lock and the next unlock.
                     btn_can.wait_for_high().await;
-                } else if !crate::fw::lock::is_active() {
-                    // Short press → normal Cancel, but only when unlocked.
+                } else if crate::fw::lock::is_active() {
+                    // Short press while locked → swallow, but re-show the hint.
+                    crate::fw::lock::poke();
+                } else {
+                    // Short press → normal Cancel.
                     handle_press(btn);
                 }
-            } else if !crate::fw::lock::is_active() {
-                // All other buttons are swallowed while locked.
+            } else if crate::fw::lock::is_active() {
+                // Locked: swallow the key but re-show the padlock + hint.
+                crate::fw::lock::poke();
+            } else {
                 handle_press(btn);
             }
         }

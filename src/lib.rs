@@ -773,8 +773,10 @@ where
     }?;
 
     // Screen-lock padlock — above the active screen but below the BLE PIN
-    // overlay, so pairing still takes priority.
-    if fw::lock::is_active() {
+    // overlay, so pairing still takes priority. Transient: shown for a few
+    // seconds after each key touch while locked, then hidden (keys stay
+    // locked) so the screen underneath stays readable.
+    if fw::lock::overlay_visible() {
         fw::lock::draw(display)?;
     }
 
