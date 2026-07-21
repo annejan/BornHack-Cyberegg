@@ -394,6 +394,17 @@ pub fn pet_kind_of(device_id: [u8; 2]) -> Option<u8> {
         .map(|i| list.friends[i].pet_kind)
 }
 
+/// Look up a friend's pet name by device id, as `(buffer, len)`.
+///
+/// Returns a copy rather than a `&str` so callers don't hold a borrow on
+/// the static list. `None` when we've never received a beacon from that
+/// device — the battle-animation renderer falls back to the species name.
+pub fn name_of(device_id: [u8; 2]) -> Option<([u8; PET_NAME_MAX], u8)> {
+    let list = unsafe { &*FRIENDS.get() };
+    list.find_index(device_id)
+        .map(|i| (list.friends[i].name, list.friends[i].name_len))
+}
+
 /// Record a mesh Battle result against a specific friend — the
 /// head-to-head tally shown in the Friends detail screen. No-op if
 /// `device_id` isn't a known friend (e.g. a battle result arrived

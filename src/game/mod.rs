@@ -236,6 +236,10 @@ static BATTLE_ANIM_STARTED_MS: AtomicU32 = AtomicU32::new(0);
 /// Packed context: byte0 = own pet kind, byte1 = opponent kind, bit16 =
 /// viewer-won. Set once by [`show_battle_anim`], read by the renderer.
 static BATTLE_ANIM_CTX: AtomicU32 = AtomicU32::new(0);
+/// Opponent device id, packed little-endian into a u16. Kept out of
+/// `BATTLE_ANIM_CTX` (which is full) — the renderer uses it to look the
+/// opponent's pet name up in the friends list for the on-screen labels.
+static BATTLE_ANIM_OPP_ID: AtomicU16 = AtomicU16::new(0);
 
 /// Which stage of the battle animation to draw.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -264,15 +268,25 @@ pub fn battle_stage_from_elapsed(ms: u32) -> BattleStage {
 /// `own_hp`/`opp_hp` are the outcome HP percentages (0..=100) shown by the
 /// stage-2 power bars — stage 1 always shows 100%.
 ///
+/// `opp_id` is the opponent's device id, used only to label them on screen.
+///
 /// Layout of the packed context (`BATTLE_ANIM_CTX`, all in one u32):
 /// bits 0-7 own_kind, 8-15 opp_kind, 16-22 own_hp, 23-29 opp_hp, 30 viewer_won.
-pub fn show_battle_anim(own_kind: u8, opp_kind: u8, viewer_won: bool, own_hp: u8, opp_hp: u8) {
+pub fn show_battle_anim(
+    own_kind: u8,
+    opp_kind: u8,
+    viewer_won: bool,
+    own_hp: u8,
+    opp_hp: u8,
+    opp_id: [u8; 2],
+) {
     let ctx = own_kind as u32
         | ((opp_kind as u32) << 8)
         | ((own_hp.min(100) as u32) << 16)
         | ((opp_hp.min(100) as u32) << 23)
         | ((viewer_won as u32) << 30);
     BATTLE_ANIM_CTX.store(ctx, Ordering::Relaxed);
+    BATTLE_ANIM_OPP_ID.store(u16::from_le_bytes(opp_id), Ordering::Relaxed);
     BATTLE_ANIM_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
     BATTLE_ANIM_ACTIVE.store(true, Ordering::Relaxed);
     #[cfg(feature = "embassy-base")]
@@ -294,6 +308,11 @@ pub fn battle_anim_stage() -> BattleStage {
 pub fn battle_anim_ctx() -> (u8, u8, bool) {
     let c = BATTLE_ANIM_CTX.load(Ordering::Relaxed);
     (c as u8, (c >> 8) as u8, (c >> 30) & 1 != 0)
+}
+
+/// Opponent device id, for resolving their name in the friends list.
+pub fn battle_anim_opp_id() -> [u8; 2] {
+    BATTLE_ANIM_OPP_ID.load(Ordering::Relaxed).to_le_bytes()
 }
 
 /// Outcome HP percentages `(own_hp, opp_hp)` for the stage-2 power bars.
