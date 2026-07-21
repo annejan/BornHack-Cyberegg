@@ -31,7 +31,7 @@ use embedded_graphics::{
     mono_font::MonoTextStyle,
     pixelcolor::PixelColor,
     prelude::*,
-    text::{Baseline, Text, TextStyle},
+    text::{Alignment, Baseline, Text, TextStyle, TextStyleBuilder},
 };
 
 /// Width / height of every emoji bitmap, in pixels.
@@ -1191,6 +1191,7 @@ impl Iterator for EmojiTokens<'_> {
 pub fn column_width(s: &str) -> usize {
     decode_with_emojis(s)
         .map(|t| match t {
+            Token::Char(c) if is_unrenderable(c as u32) => EMOJI_COLUMNS,
             Token::Char(_) => 1,
             Token::Emoji(_) => EMOJI_COLUMNS,
         })
@@ -1203,6 +1204,7 @@ pub fn pixel_width(s: &str) -> i32 {
     let mut w = 0i32;
     for t in decode_with_emojis(s) {
         match t {
+            Token::Char(c) if is_unrenderable(c as u32) => w += EMOJI_ADVANCE_PX,
             Token::Char(_) => w += 7,
             Token::Emoji(_) => w += EMOJI_ADVANCE_PX,
         }
@@ -1253,6 +1255,53 @@ fn emoji_top_offset(baseline: Baseline) -> i32 {
     }
 }
 
+/// The generic "cannot render" replacement glyph — a filled diamond with a
+/// question-mark hole, i.e. U+FFFD `�`.  Each value is one 13-pixel row; x0
+/// (leftmost) is bit 12.  Set bits are the diamond body (drawn in the text
+/// colour); the `?`-shaped holes are left untouched so the background shows
+/// through, giving the familiar diamond / light question-mark look on the
+/// white panel.
+const REPLACEMENT_ROWS: [u16; EMOJI_PX] = [
+    0b0000001000000,
+    0b0000011100000,
+    0b0000111110000,
+    0b0001100011000,
+    0b0011011101100,
+    0b0111111101110,
+    0b1111110011111,
+    0b0111110111110,
+    0b0011111111100,
+    0b0001110111000,
+    0b0000111110000,
+    0b0000011100000,
+    0b0000001000000,
+];
+
+/// Is `cp` a codepoint the ISO-8859-1 text fonts cannot render (and which is
+/// not one of our atlas emojis)?  Anything above Latin-1 (U+00FF) has no glyph
+/// in `FONT_7X13` & friends, so it gets the [`REPLACEMENT_ROWS`] diamond.
+fn is_unrenderable(cp: u32) -> bool {
+    cp > 0xFF && atlas_index(cp).is_none()
+}
+
+/// Draw the U+FFFD replacement diamond at `top_left` in `color`.  Same 13×13
+/// cell and blit contract as [`draw_emoji`].
+fn draw_replacement<D>(display: &mut D, top_left: Point, color: D::Color) -> Result<(), D::Error>
+where
+    D: DrawTarget,
+    D::Color: PixelColor,
+{
+    for (y, row) in REPLACEMENT_ROWS.iter().enumerate() {
+        for x in 0..EMOJI_PX {
+            // x0 is bit 12 (the most-significant of the 13 used bits).
+            if row & (1 << (EMOJI_PX - 1 - x)) != 0 {
+                Pixel(top_left + Point::new(x as i32, y as i32), color).draw(display)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Drop-in replacement for `Text::with_text_style(...).draw(d)` that
 /// intercepts emoji codepoints from `s` and renders them via the atlas
 /// instead of letting them fall back to the host MonoFont's
@@ -1287,6 +1336,22 @@ where
 
     let emoji_dy = emoji_top_offset(text_style.baseline);
 
+    // We render every run left-to-right from an explicit cursor, so emoji /
+    // replacement glyphs land at the right x.  Honour the caller's alignment by
+    // shifting the start once (using the full measured width) and forcing each
+    // inner text run to draw left-aligned — otherwise each batched run would
+    // re-centre itself around the moving cursor.
+    let mut position = position;
+    match text_style.alignment {
+        Alignment::Left => {}
+        Alignment::Center => position.x -= pixel_width(s) / 2,
+        Alignment::Right => position.x -= pixel_width(s),
+    }
+    let run_style = TextStyleBuilder::new()
+        .baseline(text_style.baseline)
+        .alignment(Alignment::Left)
+        .build();
+
     let mut cursor = position;
     let mut text_start = 0usize;
     let mut iter = s.char_indices().peekable();
@@ -1298,7 +1363,8 @@ where
         // in a later batched run.
         let is_emoji = atlas_index(cp).is_some();
         let is_vs = cp == 0xFE0E || cp == 0xFE0F;
-        if !is_emoji && !is_vs {
+        let is_repl = is_unrenderable(cp);
+        if !is_emoji && !is_vs && !is_repl {
             iter.next();
             continue;
         }
@@ -1309,7 +1375,7 @@ where
                 &s[text_start..byte_idx],
                 cursor,
                 style,
-                text_style,
+                run_style,
             )
             .draw(target)?;
         }
@@ -1328,6 +1394,9 @@ where
                 iter.next();
                 text_start += peeked.len_utf8();
             }
+        } else if is_repl {
+            draw_replacement(target, Point::new(cursor.x, cursor.y + emoji_dy), color)?;
+            cursor.x += EMOJI_ADVANCE_PX;
         }
         // Orphan variation selector: silently dropped (already consumed
         // above, `text_start` advanced past it).
@@ -1335,7 +1404,7 @@ where
 
     // Flush any trailing text run.
     if text_start < s.len() {
-        cursor = Text::with_text_style(&s[text_start..], cursor, style, text_style)
+        cursor = Text::with_text_style(&s[text_start..], cursor, style, run_style)
             .draw(target)?;
     }
 

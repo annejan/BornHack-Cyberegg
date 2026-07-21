@@ -11,7 +11,7 @@ use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::iso_8859_1::{FONT_7X13, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle, TextStyleBuilder};
 
 use crate::{BLACK, RED, TriColor, WHITE};
 
@@ -127,6 +127,29 @@ where
         .build();
     Text::with_text_style(text, pos, TEXT_BLACK, style).draw(display)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Replacement-aware text
+// ---------------------------------------------------------------------------
+
+/// Drop-in for `Text::with_text_style(text, position, style, text_style)
+/// .draw(display)` that renders any codepoint the ISO-8859-1 fonts cannot
+/// display as the U+FFFD `�` diamond (and known emojis via the atlas), instead
+/// of the font's default missing-glyph box.  Use this for every dynamic or
+/// untrusted string.  Honours `Left`/`Center`/`Right` alignment and returns the
+/// end cursor, exactly like `Text::draw`.
+pub fn draw_text<D>(
+    display: &mut D,
+    text: &str,
+    position: Point,
+    style: MonoTextStyle<'_, TriColor>,
+    text_style: TextStyle,
+) -> Result<Point, D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    crate::fw::emoji::draw_string(display, text, position, style, text_style)
 }
 
 // ---------------------------------------------------------------------------
