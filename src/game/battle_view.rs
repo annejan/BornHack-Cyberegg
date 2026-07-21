@@ -150,6 +150,86 @@ where
     Ok(())
 }
 
+/// Sprite edge length of the battle poses (`72x72` PCX).
+const ANIM_PET_SIZE: i32 = 72;
+/// Name-label baseline, in the band between the pets' feet (y=106) and the
+/// stage-2 banner strip (y=122).
+const ANIM_NAME_Y: i32 = 108;
+/// Horizontal centre of each fighter's sprite column. The right sprite runs
+/// past the 152px panel edge, so its label centres on the *visible* part.
+const ANIM_LEFT_CX: i32 = ANIM_LEFT_X + ANIM_PET_SIZE / 2;
+const ANIM_RIGHT_CX: i32 = (ANIM_RIGHT_X + 152) / 2;
+
+/// Clip a name to the 12 characters that fit a 72px column at 6px/char,
+/// on a UTF-8 boundary so a multi-byte codepoint is never split.
+fn fit_name(s: &str) -> &str {
+    const MAX: usize = 12;
+    if s.len() <= MAX {
+        return s;
+    }
+    let mut end = MAX;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Label both fighters under their sprites: the player's pet name on the
+/// left, the opponent's on the right. Falls back to the species name when a
+/// pet is unnamed, or when the opponent never beaconed us (so they aren't in
+/// the friends list) — better than a blank label. Drawn in both stages.
+fn draw_anim_names<D>(display: &mut D, own_kind: u8, opp_kind: u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use embedded_graphics::mono_font::MonoTextStyle;
+    use embedded_graphics::mono_font::iso_8859_1::FONT_6X10;
+
+    let ts = TextStyleBuilder::new()
+        .baseline(Baseline::Top)
+        .alignment(Alignment::Center)
+        .build();
+    let style = MonoTextStyle::new(&FONT_6X10, BLACK);
+
+    let own = super::lifecycle::pet_name();
+    let own = if own.is_empty() {
+        super::engine::PetKind::from_u8(own_kind).name()
+    } else {
+        own
+    };
+    Text::with_text_style(
+        fit_name(own),
+        Point::new(ANIM_LEFT_CX, ANIM_NAME_Y),
+        style,
+        ts,
+    )
+    .draw(display)?;
+
+    let opp_buf;
+    let opp = match super::friends::name_of(super::battle_anim_opp_id()) {
+        Some((buf, len)) => {
+            opp_buf = buf;
+            let n = (len as usize).min(PET_NAME_MAX);
+            core::str::from_utf8(&opp_buf[..n]).unwrap_or("")
+        }
+        None => "",
+    };
+    let opp = if opp.is_empty() {
+        super::engine::PetKind::from_u8(opp_kind).name()
+    } else {
+        opp
+    };
+    Text::with_text_style(
+        fit_name(opp),
+        Point::new(ANIM_RIGHT_CX, ANIM_NAME_Y),
+        style,
+        ts,
+    )
+    .draw(display)?;
+
+    Ok(())
+}
+
 /// Power-bar geometry (Street-Fighter style: top-left own, top-right opponent).
 const HP_BAR_Y: i32 = 4;
 const HP_BAR_H: u32 = 8;
@@ -215,6 +295,7 @@ pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>, stage: Battle
         super::sprite_loader::blit_file(display, &file, ANIM_RIGHT_X, ANIM_PET_Y, true).await;
     }
     let _ = draw_hp_bars(display, stage);
+    let _ = draw_anim_names(display, own_kind, opp_kind);
     if stage == BattleStage::Result {
         let _ = draw_anim_banner(display, viewer_won);
     }
@@ -234,6 +315,7 @@ where
     let opp_name = battle_filename(opp_kind, pose_aa(stage, viewer_won, false));
     super::sprite_loader::blit_pcx_sim(display, &opp_name, ANIM_RIGHT_X, ANIM_PET_Y, true);
     let _ = draw_hp_bars(display, stage);
+    let _ = draw_anim_names(display, own_kind, opp_kind);
     if stage == BattleStage::Result {
         let _ = draw_anim_banner(display, viewer_won);
     }
@@ -547,5 +629,32 @@ mod anim_tests {
         // Stage 2, viewer lost: own pet LOST, opponent WON.
         assert_eq!(pose_aa(BattleStage::Result, false, true), BATTLE_AA_LOST);
         assert_eq!(pose_aa(BattleStage::Result, false, false), BATTLE_AA_WON);
+    }
+
+    #[test]
+    fn name_labels_fit_the_sprite_column() {
+        // Short names pass through untouched.
+        assert_eq!(fit_name("Rex"), "Rex");
+        // 12 chars is exactly the 72px column at 6px/char — the longest
+        // species name ("Bartholomeus") must survive intact.
+        assert_eq!(fit_name("Bartholomeus"), "Bartholomeus");
+        assert_eq!(fit_name("Bartholomeus").len(), 12);
+        // Longer names are clipped rather than overflowing the panel.
+        assert_eq!(fit_name("AAAAAAAAAAAAAAAA"), "AAAAAAAAAAAA");
+        // Multi-byte codepoints are never split mid-sequence.
+        let s = fit_name("ÆÆÆÆÆÆÆÆ"); // 8 x 2 bytes = 16
+        assert!(s.len() <= 12);
+        assert_eq!(s, "ÆÆÆÆÆÆ");
+    }
+
+    #[test]
+    fn name_labels_clear_the_banner_and_sprites() {
+        // Labels sit below the pets' feet and above the banner strip, so
+        // neither the sprite nor the WON/LOST banner overlaps them.
+        assert!(ANIM_NAME_Y >= ANIM_PET_Y + ANIM_PET_SIZE);
+        assert!(ANIM_NAME_Y + 10 <= 122);
+        // Both labels centre inside the 152px panel.
+        assert!(ANIM_LEFT_CX > 0 && ANIM_LEFT_CX < 152);
+        assert!(ANIM_RIGHT_CX > 0 && ANIM_RIGHT_CX < 152);
     }
 }

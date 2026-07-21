@@ -336,6 +336,7 @@ pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
         outcome.challenger_won,
         outcome.challenger_hp_pct,
         outcome.target_hp_pct,
+        friend.device_id,
     );
 
     Some(outcome)
@@ -394,6 +395,7 @@ pub async fn on_battle_result(data: &[u8]) {
         we_won,
         msg.target_hp_pct,
         msg.challenger_hp_pct,
+        msg.challenger_id,
     );
 }
 
