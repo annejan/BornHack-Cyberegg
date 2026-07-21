@@ -340,7 +340,7 @@ where
         }
 
         let font = if is_sel { FONT_INV } else { FONT };
-        Text::with_text_style(&label, Point::new(4, y + 1), font, left).draw(display)?;
+        crate::ui::draw_text(display, &label, Point::new(4, y + 1), font, left)?;
     }
 
     Ok(())
@@ -408,7 +408,7 @@ where
     Rectangle::new(Point::new(0, 0), Size::new(152, 16))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
-    Text::with_text_style(&header, Point::new(76, 2), FONT_INV, center).draw(display)?;
+    crate::ui::draw_text(display, &header, Point::new(76, 2), FONT_INV, center)?;
 
     let chars_per_line = 20usize;
     let max_lines = 8usize;
@@ -507,7 +507,7 @@ where
             Rectangle::new(Point::new(2, y), Size::new(nick_w, LH as u32))
                 .into_styled(PrimitiveStyle::with_fill(BLACK))
                 .draw(display)?;
-            Text::with_text_style(&nick, Point::new(4, y + 1), FONT_INV, left).draw(display)?;
+            crate::ui::draw_text(display, &nick, Point::new(4, y + 1), FONT_INV, left)?;
             y += LH;
 
             // Message text — word-aware wrap with newline support.  Renders
