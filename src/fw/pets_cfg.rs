@@ -25,7 +25,7 @@ const READ_BUF_LEN: usize = 1024;
 /// Load `PETS.CFG` (if present) and install the resulting roster.  Always
 /// calls [`pet_registry::install`] — with an empty custom list when the file
 /// is missing or unreadable — so the built-in roster is set up either way.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_and_install() {
     use crate::fw::fat12;
 
@@ -137,7 +137,7 @@ fn parse_u8(s: &[u8]) -> Option<u8> {
     Some(acc as u8)
 }
 
-#[cfg(all(test, not(feature = "embassy-base")))]
+#[cfg(all(test, not(feature = "embassy-core")))]
 mod tests {
     use super::*;
 

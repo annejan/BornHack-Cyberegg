@@ -80,11 +80,11 @@ pub fn wants_full_refresh() -> bool {
 
 /// Low 32 bits of uptime in ms (firmware); 0 on the simulator, where the
 /// dismiss guard below is a no-op.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn now_ms() -> u32 {
     embassy_time::Instant::now().as_millis() as u32
 }
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 fn now_ms() -> u32 {
     0
 }
@@ -280,7 +280,7 @@ where
 /// Firmware render of the current battle-animation frame. Blits both pets from
 /// FAT12 (own left, opponent right-mirrored) and the stage-2 banner. The caller
 /// clears the display and drives the refresh.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>, stage: BattleStage) {
     use crate::fw::fat12;
 
@@ -302,7 +302,7 @@ pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>, stage: Battle
 }
 
 /// Simulator render of the current battle-animation frame (host build).
-#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+#[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
 pub fn draw_anim_sim<D>(display: &mut D)
 where
     D: DrawTarget<Color = TriColor>,

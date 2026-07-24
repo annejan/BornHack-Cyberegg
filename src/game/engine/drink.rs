@@ -10,7 +10,7 @@
 
 /// Which drink the player picked for the current Drink action.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum DrinkKind {
     Water,
     Cola,

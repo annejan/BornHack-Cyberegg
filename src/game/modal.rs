@@ -703,7 +703,7 @@ pub fn activate() {
 }
 
 fn play_song(_index: usize) {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::fw::buzzer::play(_index);
     close();
 }

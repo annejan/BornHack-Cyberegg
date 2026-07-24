@@ -8,7 +8,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use super::engine::{DisplayAnim, GameState, PET_NAME_MAX, PetRealm, PetRecord, PetStats};
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use super::engine::{REALM_SAVE_SIZE, SAVE_SIZE};
 
 // ---------------------------------------------------------------------------
@@ -48,15 +48,15 @@ static UPTIME_TICKS: AtomicU32 = AtomicU32::new(0);
 /// stat decay actually progress when running `make sim`), and the
 /// manually-advanced `UPTIME_TICKS` counter elsewhere (tests).
 pub fn now_tick() -> u32 {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         (embassy_time::Instant::now().as_secs() / 10) as u32
     }
-    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    #[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
     {
         (sim_elapsed_ms() / 10_000) as u32
     }
-    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+    #[cfg(not(any(feature = "embassy-core", feature = "simulator")))]
     {
         UPTIME_TICKS.load(Ordering::Relaxed)
     }
@@ -67,7 +67,7 @@ pub fn now_tick() -> u32 {
 /// values from the same epoch.  Used by `now_tick` (10 s per tick)
 /// and by the in-game sprite-frame pacer (sub-tick resolution for
 /// visible animation).
-#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+#[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
 pub fn sim_elapsed_ms() -> u64 {
     use std::sync::OnceLock;
     use std::time::Instant;
@@ -92,7 +92,7 @@ pub fn advance_ticks(delta: u32) {
 /// Initialise the game.  Loads from flash if a save exists.
 /// If no save is found, the game state stays `None` until the player
 /// presses Fire to start (see [`start_new_game`]).
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn init() {
     let state = try_load().await;
     if state.is_some() {
@@ -138,7 +138,7 @@ pub async fn init() {
     super::friends::init().await;
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 async fn try_load() -> Option<GameState> {
     use crate::fw::kv;
     let ns = kv::namespace("game");
@@ -160,7 +160,7 @@ async fn try_load() -> Option<GameState> {
     None
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn new_egg(kind: super::engine::PetKind) -> GameState {
     let id = crate::fw::device_id::get_bytes();
     let seed = u64::from_le_bytes([
@@ -176,7 +176,7 @@ fn new_egg(kind: super::engine::PetKind) -> GameState {
     GameState::new_egg(seed, kind)
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 fn new_egg(kind: super::engine::PetKind) -> GameState {
     GameState::new_egg(42, kind)
 }
@@ -420,7 +420,7 @@ fn check_severity_transition(state: &GameState) {
     // does not trigger this path.
     if now == Severity::Gone as u8 && prev != Severity::Gone as u8 {
         if !muted {
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             crate::fw::buzzer::play(crate::FUNNY_ENDING_INDEX);
         }
         return;
@@ -432,7 +432,7 @@ fn check_severity_transition(state: &GameState) {
     //   Severe(3)  → Leaving(4)
     let upward = now > prev && now <= Severity::Leaving as u8;
     if upward && !muted {
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::fw::buzzer::play(crate::PET_WARN_INDEX);
     }
 }
@@ -448,7 +448,7 @@ fn check_diabetes_onset(state: &super::engine::GameState) {
     if now && !prev {
         let muted = crate::GAME_MUTE.load(Ordering::Relaxed);
         if !muted {
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             crate::fw::buzzer::play(crate::PET_WARN_INDEX);
         }
         // Full-screen takeover, not just a toast — this is a rare,
@@ -467,7 +467,7 @@ fn check_alcoholism_onset(state: &super::engine::GameState) {
     if now && !prev {
         let muted = crate::GAME_MUTE.load(Ordering::Relaxed);
         if !muted {
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             crate::fw::buzzer::play(crate::PET_WARN_INDEX);
         }
         super::show_alcoholism_alert();
@@ -671,7 +671,7 @@ pub fn award_inspiration(game: super::engine::MiniGame) {
         s.award_inspiration(game);
         // Celebratory jingle on a mini-game win — the main
         // active-engagement reward previously had no audio, only a toast.
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         if !crate::GAME_MUTE.load(Ordering::Relaxed) {
             crate::fw::buzzer::play(crate::MINIGAME_WIN_INDEX);
         }
@@ -839,7 +839,7 @@ pub fn realm_pet(index: usize) -> Option<PetRecord> {
 /// Returns true if a save was performed.
 /// Available in any firmware build that pulls in `embassy-base` (which
 /// brings the KV store).  Stubbed out for the simulator below.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn save_if_needed() -> bool {
     // Friends list has its own dirty flag and KV namespace, independent of
     // the main game-state save below — flush it even if no pet is active
@@ -899,7 +899,7 @@ pub async fn save_if_needed() -> bool {
 }
 
 /// No-op when ekv is not available (simulator build).
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub async fn save_if_needed() -> bool {
     false
 }

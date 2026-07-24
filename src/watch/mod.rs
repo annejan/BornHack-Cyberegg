@@ -38,7 +38,7 @@ pub use alarm::{
     alarm_minute, alarm_minute_n, alarm_month_n, alarm_toggle_day, alarm_toggle_enabled,
     alarm_tone_label, alarm_year_n, clear_imported_alarms, first_empty_event_slot,
 };
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub use alarm::{
     add_quick_event, alarm_ring_timeout_task, check_and_fire_alarm, dismiss_alarm_if_ringing,
 };
@@ -54,18 +54,18 @@ use crate::{TriColor, draw_frame};
 // signal and persists both submodules' state to the shared `"watch"` KV
 // namespace.
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static SETTINGS_DIRTY_SIGNAL: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
 > = embassy_sync::signal::Signal::new();
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(crate) fn signal_settings_dirty() {
     SETTINGS_DIRTY_SIGNAL.signal(());
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub(crate) fn signal_settings_dirty() {}
 
 // ── Button dispatch ─────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
 /// + per-event notification sound preferences) from the `"watch"`
 /// kv namespace.  Call once at boot, after `kv::init()`.  Silently
 /// leaves defaults in place if a key is missing or invalid.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_settings_from_kv() {
     use core::sync::atomic::Ordering;
     let ns = crate::fw::kv::namespace("watch");
@@ -102,7 +102,7 @@ pub async fn load_settings_from_kv() {
 /// Embassy task that persists watch settings (alarm + face + boot
 /// chime + per-event sound preferences) whenever a setter signals
 /// `SETTINGS_DIRTY_SIGNAL`.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn settings_persister_task() {
     use core::sync::atomic::Ordering;
@@ -138,10 +138,10 @@ pub async fn settings_persister_task() {
 /// ~250 B per event with DESCRIPTION/UID/etc removed) fits.  Lives on
 /// the stack only during the brief boot import — released before any
 /// user-facing task starts.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const ICS_READ_BUF_LEN: usize = 16 * 1024;
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn import_alarms_from_fat12() {
     use core::sync::atomic::Ordering;
 
@@ -247,7 +247,7 @@ pub async fn import_alarms_from_fat12() {
 /// arithmetic.  Returns the input unchanged if the date is outside
 /// fasttime's representable range (shouldn't happen for any realistic
 /// value).
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn shift_utc_to_local(
     year: u16,
     month: u8,

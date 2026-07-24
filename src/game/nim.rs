@@ -364,11 +364,11 @@ fn all_empty() -> bool {
 }
 
 fn entropy_byte() -> u8 {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         embassy_time::Instant::now().as_ticks() as u8
     }
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now()

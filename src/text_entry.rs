@@ -922,10 +922,10 @@ where
 
 // ── Global session ───────────────────────────────────────────────────────────
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static TEXT_ENTRY: Mutex<CriticalSectionRawMutex, RefCell<Option<TextEntry>>> =
     Mutex::new(RefCell::new(None));
 
@@ -946,7 +946,7 @@ pub fn begin(
     confirm: bool,
 ) {
     let entry = TextEntry::new(prefill, max_len, on_complete, title, confirm);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     TEXT_ENTRY.lock(|cell| cell.replace(Some(entry)));
     #[cfg(feature = "simulator")]
     TEXT_ENTRY.lock().unwrap().replace(Some(entry));
@@ -954,7 +954,7 @@ pub fn begin(
 
 /// Returns true when text entry is active.
 pub fn is_active() -> bool {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     return TEXT_ENTRY.lock(|cell| cell.borrow().is_some());
     #[cfg(feature = "simulator")]
     return TEXT_ENTRY.lock().unwrap().borrow().is_some();
@@ -976,7 +976,7 @@ fn keyboard_active() -> bool {
 
 /// Inject an external-keyboard key into the active entry (no-op if none).
 /// On Enter the entry completes and is removed (matching the button path).
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn inject(key: ExtKey) {
     TEXT_ENTRY.lock(|cell| {
         let done = cell

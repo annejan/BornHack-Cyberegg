@@ -195,7 +195,7 @@ where
 /// on-screen snapshot.
 fn snapshot_name(out: &mut heapless::String<31>) {
     out.clear();
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         crate::NODE_NAME.lock(|cell| {
             let name = cell.borrow();
@@ -238,7 +238,7 @@ fn write_device_id(out: &mut heapless::String<16>) {
     let _ = out.push_str("Cyber ");
     let _ = out.push('\u{00C6}');
     let _ = out.push_str("gg ");
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         let id = crate::fw::device_id::get_bytes();
         let _ = out.push_str(core::str::from_utf8(&id).unwrap_or("????"));
