@@ -50,14 +50,18 @@ enum Which {
 /// waiting on any menu signal and persisting that change before waiting again.
 #[embassy_executor::task]
 pub async fn run() -> ! {
-    join(
-        settings_dispatch_loop(),
-        join(
-            crate::fw::epd::epd_lut_speed_persist_loop(),
-            crate::fw::epd::epd_temp_bias_persist_loop(),
-        ),
-    )
-    .await;
+    // EPD LUT-speed + temperature-bias persistence is SSD1675-only; the SSD1680
+    // runs OTP mode with no host-side LUT/temperature tuning, so on that build
+    // this arm just idles forever like the other loops.
+    #[cfg(feature = "ssd1675-driver")]
+    let epd_persist = join(
+        crate::fw::epd::epd_lut_speed_persist_loop(),
+        crate::fw::epd::epd_temp_bias_persist_loop(),
+    );
+    #[cfg(not(feature = "ssd1675-driver"))]
+    let epd_persist = core::future::pending::<()>();
+
+    join(settings_dispatch_loop(), epd_persist).await;
     // Unreachable — every inner loop is `loop {}`.  The signature
     // returns `!` so callers can spawn this without unwrapping.
     loop {

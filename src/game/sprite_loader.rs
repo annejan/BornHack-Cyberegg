@@ -14,8 +14,6 @@
 //! Uses the display's work buffer as scratch for RLE decoding.
 
 #[cfg(feature = "embassy-core")]
-use crate::fw::epd::EpdGfx;
-#[cfg(feature = "embassy-core")]
 use crate::fw::fat12;
 
 /// Display dimensions.
@@ -328,7 +326,10 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 /// drawn horizontally flipped (right-facing) — the source is read normally and
 /// only the destination column is reversed, so transparency is preserved. Used
 /// for the right-hand combatant in the battle animation.
-pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, y: i32, mirror: bool) {
+pub async fn blit_file<D>(display: &mut D, file: &fat12::FileRef, x: i32, y: i32, mirror: bool)
+where
+    D: crate::epd_driver::PlaneAccess,
+{
     let file_size = file.size as usize;
     if file_size < PCX_HEADER_SIZE {
         defmt::warn!("sprite: PCX too small ({}B)", file_size);
@@ -382,7 +383,7 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
 
     // We only need black/red framebuffers now — the work buffer is no
     // longer used for sprite decoding.
-    let (black, red, _work) = display.all_buffers_mut();
+    let (black, red) = display.planes_mut();
 
     for pcx_row in 0..pcx_h {
         // Worst-case compressed bytes per scanline is `2 * bpl`: when every

@@ -913,9 +913,12 @@ fn action_path_hash_dec() {
 // persister loop in fw/mesh/persister.rs writes the new value to the
 // "settings" KV namespace alongside every other persisted setting.
 
+#[cfg(feature = "ssd1675-driver")]
 const EPD_LUT_SPEED_STEP: u8 = 5;
+#[cfg(feature = "ssd1675-driver")]
 const EPD_LUT_SPEED_MAX: u8 = 200;
 
+#[cfg(feature = "ssd1675-driver")]
 fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
@@ -924,6 +927,7 @@ fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
 
 /// Read-only row: e-paper panel variant + which waveform LUT is live.
 /// e.g. `SSD1675B custom LUT` or `SSD1675A OTP LUT`.
+#[cfg(feature = "ssd1675-driver")]
 fn fmt_epd_panel_info(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
     let panel = if crate::fw::epd::EPD_VARIANT_IS_B.load(Ordering::Relaxed) {
@@ -939,6 +943,7 @@ fn fmt_epd_panel_info(buf: &mut heapless::String<24>) {
     let _ = write!(buf, "{} {}", panel, lut);
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_lut_speed_inc() {
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
     let new = v.saturating_add(EPD_LUT_SPEED_STEP).min(EPD_LUT_SPEED_MAX);
@@ -949,6 +954,7 @@ fn action_epd_lut_speed_inc() {
     }
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_lut_speed_dec() {
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
     let new = v
@@ -968,6 +974,7 @@ fn action_epd_lut_speed_dec() {
 // Negative = treat panel as colder (picks a warmer / stronger WS),
 // positive = treat panel as warmer (picks a milder WS).
 
+#[cfg(feature = "ssd1675-driver")]
 fn fmt_epd_temp_bias(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
     let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed) as i16;
@@ -977,6 +984,7 @@ fn fmt_epd_temp_bias(buf: &mut heapless::String<24>) {
     let _ = write!(buf, "EPD bias: {}{}.{} C", sign, whole.abs(), frac);
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_temp_bias_inc() {
     let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed);
     let new = v
@@ -989,6 +997,7 @@ fn action_epd_temp_bias_inc() {
     }
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_temp_bias_dec() {
     let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed);
     let new = v
@@ -1858,8 +1867,10 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
     },
 ];
 
-const SETTINGS_ITEMS_LEN: usize =
-    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+const SETTINGS_ITEMS_LEN: usize = 9
+    + if cfg!(feature = "ssd1675-driver") { 3 } else { 0 }
+    + if cfg!(feature = "watch") { 2 } else { 0 }
+    + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1901,6 +1912,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             dec: action_tz_dec,
         },
     },
+    #[cfg(feature = "ssd1675-driver")]
     MenuItem {
         label: || "",
         kind: MenuItemKind::ValueStepper {
@@ -1909,6 +1921,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             dec: action_epd_lut_speed_dec,
         },
     },
+    #[cfg(feature = "ssd1675-driver")]
     MenuItem {
         label: || "",
         kind: MenuItemKind::ValueStepper {
@@ -1917,6 +1930,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             dec: action_epd_temp_bias_dec,
         },
     },
+    #[cfg(feature = "ssd1675-driver")]
     MenuItem {
         label: || "",
         kind: MenuItemKind::Info {

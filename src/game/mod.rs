@@ -743,7 +743,11 @@ where
 /// in-game animation blitting, and the debug animation name overlay
 /// when no artwork is loaded.
 #[cfg(feature = "embassy-core")]
-pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) {
+pub async fn render<D>(display: &mut D, sprite_frame: u8)
+where
+    D: embedded_graphics::draw_target::DrawTarget<Color = crate::TriColor>
+        + crate::epd_driver::PlaneAccess,
+{
     use engine::anim_files;
     use engine::to_display::DisplayAnim;
 

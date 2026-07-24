@@ -281,7 +281,11 @@ where
 /// FAT12 (own left, opponent right-mirrored) and the stage-2 banner. The caller
 /// clears the display and drives the refresh.
 #[cfg(feature = "embassy-core")]
-pub async fn render_anim(display: &mut crate::fw::epd::EpdGfx<'_>, stage: BattleStage) {
+pub async fn render_anim<D>(display: &mut D, stage: BattleStage)
+where
+    D: embedded_graphics::draw_target::DrawTarget<Color = TriColor>
+        + crate::epd_driver::PlaneAccess,
+{
     use crate::fw::fat12;
 
     let (own_kind, opp_kind, viewer_won) = super::battle_anim_ctx();
