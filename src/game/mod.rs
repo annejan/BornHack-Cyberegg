@@ -812,7 +812,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         use embedded_graphics::mono_font::MonoTextStyle;
         use embedded_graphics::mono_font::iso_8859_1::FONT_7X13;
         use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
-        use ssd1675::graphics::Color;
+        use crate::EpdColor as Color;
 
         let anim = lifecycle::display_anim();
         let anim_name: &str = match anim {
