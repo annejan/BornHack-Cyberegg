@@ -303,16 +303,11 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
         let n = self.plane_len();
         // Compose the 152 canvas into the 200 panel planes (scaled or centred).
         self.compose_panel();
-        // Promote Fast to Full whenever the red plane changes: the fast delta
-        // LUT's red drive does not reliably seat red ink, while the full
-        // tri-colour waveform (custom 200 Hz LUT, its dedicated red-extra group)
-        // does. Red-bearing screens (name badge, game toasts) are rare, so the
-        // occasional flash is acceptable.
-        let mode = if mode == RefreshMode::Fast && self.prev_red[..n] != self.panel_red[..n] {
-            RefreshMode::Full
-        } else {
-            mode
-        };
+        // No Fast→Full promotion on red change any more: the fast delta seats
+        // red itself via the DELTA_LUT G3 white→neutral→red sort. A B/W-only
+        // frame skips that group entirely (DELTA_LUT_NO_RED, selected by
+        // `skip_red` below), so red changes stay on the fast path — slower than
+        // a pure B/W delta, but no full-screen flash.
         match mode {
             RefreshMode::Full => {
                 // Panel planes are already wire-convention (red = `(R=1,
