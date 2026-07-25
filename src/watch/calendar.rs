@@ -119,6 +119,14 @@ static DAY_LIST_SCROLL: AtomicU8 = AtomicU8::new(0);
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
+/// Centre of the unread-PM envelope in the frame header.  The header is
+/// the title at x=4 (7 px/char, so "Calendar" runs to x=60) and the
+/// battery icon at x=128; the envelope is 13 px wide and its optional
+/// `+N` suffix another ~18, so this sits clear of both.  `PM_BADGE_CY`
+/// matches the title's vertical centre.
+const PM_BADGE_CX: i32 = 76;
+const PM_BADGE_CY: i32 = 8;
+
 const MONTH_LABEL_Y: i32 = 25; // baseline middle
 const WEEKDAY_STRIP_Y: i32 = 39;
 
@@ -414,6 +422,14 @@ where
 {
     let bat = battery_pct();
     draw_frame(display, Some(("Calendar", &bat)), None)?;
+
+    // Unread-PM envelope, same as the clock face carries.  The header
+    // strip between the "Calendar" title and the battery icon is
+    // otherwise empty, and the calendar is the screen the organizer
+    // edition boots on — mail shouldn't need a trip to the clock to
+    // notice.
+    #[cfg(feature = "mesh")]
+    super::alarm::draw_unread_badge(display, PM_BADGE_CX, PM_BADGE_CY)?;
 
     let mut events_buf = [EventRow {
         year: 0,
@@ -1008,4 +1024,48 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The header strip is shared by the title, the unread-PM envelope
+    /// and the battery icon, all positioned by hand.  Pin the gaps so a
+    /// later layout tweak can't quietly overlap them.
+    #[test]
+    fn pm_badge_clears_the_title_and_battery() {
+        // `draw_frame` puts the title at x=4 in a 7 px/char font and the
+        // battery icon at x=128.
+        const TITLE_X: i32 = 4;
+        const TITLE_END: i32 = TITLE_X + 7 * "Calendar".len() as i32;
+        const BATTERY_X: i32 = 128;
+        /// Envelope glyph, drawn centred.
+        const BADGE_W: i32 = 13;
+        /// Widest `+N` suffix: 2 chars at 6 px, offset 8 px from centre.
+        const SUFFIX_END: i32 = 8 + 2 * 6;
+
+        assert!(
+            PM_BADGE_CX - BADGE_W / 2 > TITLE_END,
+            "envelope overlaps the title"
+        );
+        assert!(
+            PM_BADGE_CX + SUFFIX_END < BATTERY_X,
+            "unread count overlaps the battery icon"
+        );
+        // Title baseline is y=14 in a 13 px font, so the header band is
+        // roughly y=1..15; the 13 px envelope has to sit inside it.
+        assert!(PM_BADGE_CY - BADGE_W / 2 >= 1);
+        assert!(PM_BADGE_CY + BADGE_W / 2 <= 15);
+    }
+
+    #[test]
+    fn scroll_chars_counts_characters_not_bytes() {
+        assert_eq!(scroll_chars("Bornhack", 4), "hack");
+        // Latin-1 letters are two UTF-8 bytes; a byte offset would land
+        // mid-sequence here and lose the rest of the title.
+        assert_eq!(scroll_chars("CyberÆgg", 5), "Ægg");
+        assert_eq!(scroll_chars("SKÅL", 2), "ÅL");
+        assert_eq!(scroll_chars("short", 99), "");
+    }
 }

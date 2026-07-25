@@ -857,32 +857,52 @@ where
         }
     }
 
-    // PM envelope — only when mesh is built in and at least one incoming
-    // PM is unread.  Drawn last so it lands right of the bell + alarm
+    // PM envelope — drawn last so it lands right of the bell + alarm
     // time, well clear of the title text on the left.
     #[cfg(feature = "mesh")]
-    {
-        let unread = crate::fw::mesh::pm_inbox::unread_total();
-        if unread > 0 {
-            let env_cx = alarm_time_end_x + 7;
-            draw_envelope(display, env_cx, bell_cy)?;
-            // The envelope alone says "you've got one" — only annotate
-            // when a count adds information (≥ 2).
-            if unread >= 2 {
-                let mut buf: heapless::String<8> = heapless::String::new();
-                let _ = core::fmt::write(&mut buf, format_args!("+{}", unread));
-                Text::with_text_style(
-                    &buf,
-                    Point::new(env_cx + 8, bell_cy),
-                    MonoTextStyle::new(&FONT_6X10, BLACK),
-                    left,
-                )
-                .draw(display)?;
-            }
-        }
-    }
+    draw_unread_badge(display, alarm_time_end_x + 7, bell_cy)?;
     #[cfg(not(feature = "mesh"))]
     let _ = alarm_time_end_x;
+    Ok(())
+}
+
+/// Draw the unread-PM envelope centred at `(cx, cy)`, followed by `+N`
+/// when more than one is waiting.  Renders nothing when the inbox has no
+/// unread incoming PMs.
+///
+/// Shared by the clock face and the calendar header: "you have mail" is
+/// worth knowing from whichever screen you happen to be on, and both put
+/// it in the same free strip between the title and the battery icon.
+///
+/// The envelope sits on the red plane, which only refreshes on a full
+/// tri-color update; the `+N` is black and updates on every redraw.
+#[cfg(feature = "mesh")]
+pub(super) fn draw_unread_badge<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let unread = crate::fw::mesh::pm_inbox::unread_total();
+    if unread == 0 {
+        return Ok(());
+    }
+    draw_envelope(display, cx, cy)?;
+    // The envelope alone says "you've got one" — only annotate when a
+    // count adds information (≥ 2).
+    if unread >= 2 {
+        let left = TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Left)
+            .build();
+        let mut buf: heapless::String<8> = heapless::String::new();
+        let _ = core::fmt::write(&mut buf, format_args!("+{}", unread));
+        Text::with_text_style(
+            &buf,
+            Point::new(cx + 8, cy),
+            MonoTextStyle::new(&FONT_6X10, BLACK),
+            left,
+        )
+        .draw(display)?;
+    }
     Ok(())
 }
 
