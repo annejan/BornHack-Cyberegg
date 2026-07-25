@@ -10,8 +10,26 @@
 //! - READ CAPACITY(10), READ(10), WRITE(10)
 //! - MODE SENSE(6), PREVENT ALLOW MEDIUM REMOVAL
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use embassy_usb::Builder;
 use embassy_usb::driver::{Driver, Endpoint, EndpointIn, EndpointOut};
+
+/// Counts blocks the host has written to the FAT partition.
+///
+/// Watchers can't be told "the copy finished" — MSC has no such
+/// notification, and hosts flush lazily — so instead they sample this
+/// and act once it stops moving. Used by the calendar auto-reload
+/// (`watch::ics_reload_task`) to pick up a freshly dropped `ALARMS.ICS`
+/// without a reboot.
+static HOST_WRITES: AtomicU32 = AtomicU32::new(0);
+
+/// Number of blocks the host has written since power-on. Compare two
+/// samples a couple of seconds apart: unchanged and non-zero means the
+/// host has finished writing.
+pub fn host_write_count() -> u32 {
+    HOST_WRITES.load(Ordering::Relaxed)
+}
 
 // USB class/subclass/protocol for Mass Storage BBB.
 const USB_CLASS_MSC: u8 = 0x08;
@@ -276,6 +294,7 @@ impl<'d, D: Driver<'d>> MscClass<'d, D> {
                         self.state.last_sense = SENSE_INVALID_CMD;
                         return (CSW_STATUS_FAILED, residue);
                     }
+                    HOST_WRITES.fetch_add(1, Ordering::Relaxed);
                     residue = residue.saturating_sub(B::BLOCK_SIZE as u32);
                 }
                 (CSW_STATUS_PASSED, residue)

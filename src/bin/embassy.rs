@@ -273,6 +273,9 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::watch::import_alarms_from_fat12().await;
         spawner.must_spawn(bornhack_aegg::watch::settings_persister_task());
         spawner.must_spawn(bornhack_aegg::watch::alarm_ring_timeout_task());
+        // Picks up a new ALARMS.ICS after the host finishes copying it,
+        // so the calendar doesn't need a reboot to see a fresh schedule.
+        spawner.must_spawn(bornhack_aegg::watch::ics_reload_task());
     }
 
     // ── BornPets balance — install the active threshold set before any

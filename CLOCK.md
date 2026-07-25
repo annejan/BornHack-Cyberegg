@@ -190,7 +190,9 @@ At boot, the firmware:
 4. Slot 0 (manual recurring alarm) is left untouched
 
 **Import notes:**
-- Re-runs at every boot — edits while running don't take effect until reboot
+- Re-runs at every boot, **and automatically whenever the file changes**: the badge counts blocks written over USB mass storage and re-imports once the host has been quiet for 2 seconds. Copy a new `ALARMS.ICS` onto the badge, watch the blue LED blink, and the calendar has the new schedule — no reboot
+- Each import clears the previous one first, so a new file *replaces* the schedule instead of merging into it. That also clears any **Quick test** events
+- **Settings → Events → Reload from ICS** forces an immediate re-read if you'd rather not wait for the settle window
 - Caps at 159 events (slots 1..159). Anything past that is counted and reported: the boot log warns, and the Calendar grid shows a red `! N events not loaded` line. The 2026 Bornhack programme is 127 events, so it fits with room to spare
 - A single `RRULE` expands to at most 64 occurrences
 - Multi-day events clamped to 23:59 of the start day
@@ -205,6 +207,7 @@ Lists every populated one-shot slot read-only (`<n>: HH:MM MM-DD`) plus two acti
 
 | Action | Description |
 | ------ | ----------- |
+| **Reload from ICS** | Re-reads `ALARMS.ICS` immediately. The badge already does this by itself after a USB copy settles; this is the manual fallback. |
 | **Quick test +5min** | Drops a `Quick test` event 5 minutes from now in the first empty slot. Handy for verifying the alarm path without USB. Silently no-ops if the wall clock isn't synced or all slots are taken. |
 | **Clear all** | Destructive — disables and zeros slots 1..159 immediately. |
 

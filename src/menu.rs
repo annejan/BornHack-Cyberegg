@@ -1640,6 +1640,17 @@ fn slot_alarm_visible(slot: u8) -> bool {
     crate::watch::alarm_enabled_n(slot as usize)
 }
 
+/// Action: re-read `ALARMS.ICS` from the USB partition without a
+/// reboot.  The badge does this by itself once a host copy settles, so
+/// this is the manual fallback for when you'd rather not wait — or when
+/// the file changed some other way.
+#[cfg(all(feature = "watch", feature = "embassy-base"))]
+fn action_reload_ics() {
+    crate::watch::request_ics_reload();
+}
+#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+fn action_reload_ics() {}
+
 /// Action: drop a "Quick test" event 5 minutes from now in the first
 /// empty slot.  Useful for verifying the alarm path without USB.
 /// Silently no-ops if the wall clock isn't synced or all slots are
@@ -1670,6 +1681,10 @@ macro_rules! events_items {
             // no-ops without a synced wall clock; the new event shows
             // up via the Calendar dot + Clock-face bell.
             MenuItem {
+                label: || "Reload from ICS",
+                kind: MenuItemKind::Action(action_reload_ics),
+            },
+            MenuItem {
                 label: || "Quick test +5min",
                 kind: MenuItemKind::Action(action_add_quick_test),
             },
@@ -1691,10 +1706,10 @@ macro_rules! events_items {
     };
 }
 
-// 1 (Back) + 1 (Quick test) + 1 (Sep) + 159 (slot rows) + 1 (Sep) + 1 (Clear)
-// = 164.  Must stay in step with `alarm::N_ALARMS`; the test below checks it.
+// 1 (Back) + 1 (Reload) + 1 (Quick test) + 1 (Sep) + 159 (slot rows)
+// + 1 (Sep) + 1 (Clear) = 165.  Must stay in step with `alarm::N_ALARMS`; the test below checks it.
 #[cfg(feature = "watch")]
-static EVENTS_ITEMS: [MenuItem; 164] = events_items!(
+static EVENTS_ITEMS: [MenuItem; 165] = events_items!(
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
     26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
     48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
@@ -2876,8 +2891,9 @@ mod tests {
     #[test]
     #[cfg(feature = "watch")]
     fn events_menu_covers_every_slot() {
-        // Back + Quick test + separator + slots + separator + Clear all.
-        const FIXED_ROWS: usize = 5;
+        // Back + Reload + Quick test + separator + slots + separator
+        // + Clear all.
+        const FIXED_ROWS: usize = 6;
         assert_eq!(
             EVENTS_ITEMS.len(),
             crate::watch::N_ALARMS - 1 + FIXED_ROWS,

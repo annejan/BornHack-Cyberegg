@@ -118,26 +118,11 @@ pub async fn settings_persister_task() {
     }
 }
 
-/// At boot: if a file named `ALARMS.ICS` exists on the FAT12 partition,
-/// parse its `VEVENT` blocks and populate alarm slots 1..N_ALARMS with
-/// one-shot date alarms.  Slot 0 is reserved for the user's manual alarm
-/// and is left untouched.
-///
-/// Drop the file on the badge by mounting its USB mass-storage partition
-/// (hold Execute on plug-in if you need DFU first) and copying any
-/// iCalendar export — the schedule from <https://bornhack.dk/.../program/ics/>
-/// works directly.  Times are taken at face value as local time; if your
-/// ICS is in UTC you'll be off by `TIMEZONE_OFFSET` hours.
-///
-/// Re-runs on every boot, overwriting whatever was in slots 1..N_ALARMS.
-/// The default melody (`ALARM` beep-beep) is applied; the trigger
-/// auto-disables each one-shot slot after firing, so old events stop
-/// alarming themselves at midnight.
-/// Read window used to walk `ALARMS.ICS` at boot.  The file is parsed in
-/// chunks rather than slurped, so its size is not a limit on how many
-/// events can be imported — only [`alarm::N_ALARMS`] is.  8 KiB holds
-/// many whole `VEVENT` blocks at a time while staying comfortable on the
-/// main task's stack during the brief boot import.
+/// Read window used to walk `ALARMS.ICS`.  The file is parsed in chunks
+/// rather than slurped, so its size is not a limit on how many events
+/// can be imported — only [`alarm::N_ALARMS`] is.  8 KiB holds many
+/// whole `VEVENT` blocks at a time while staying comfortable on the
+/// stack during the brief import.
 #[cfg(feature = "embassy-base")]
 const ICS_READ_BUF_LEN: usize = 8 * 1024;
 
@@ -151,6 +136,22 @@ pub fn events_dropped() -> u16 {
     EVENTS_DROPPED.load(core::sync::atomic::Ordering::Relaxed)
 }
 
+/// Populate alarm slots 1..N_ALARMS from `ALARMS.ICS` on the FAT12
+/// partition, if the file is there.  Slot 0 is reserved for the user's
+/// manual alarm and is left untouched.
+///
+/// Drop the file on the badge by mounting its USB mass-storage partition
+/// (hold Execute on plug-in if you need DFU first) and copying any
+/// iCalendar export — the schedule from <https://bornhack.dk/.../program/ics/>
+/// works directly.  Times with a `Z` suffix are converted using
+/// `TIMEZONE_OFFSET`; floating and `TZID=…:` values are taken at face
+/// value, since the badge ships no tzdata.
+///
+/// Runs at boot and again whenever [`ics_reload_task`] sees the file
+/// change, clearing the previous import first so a new file replaces the
+/// schedule rather than merging into it.  The default melody (`ALARM`
+/// beep-beep) is applied; the trigger auto-disables each one-shot slot
+/// after firing, so old events stop alarming themselves at midnight.
 #[cfg(feature = "embassy-base")]
 pub async fn import_alarms_from_fat12() {
     use core::sync::atomic::Ordering;
@@ -166,6 +167,15 @@ pub async fn import_alarms_from_fat12() {
     let Ok(file) = fat12::find_file(&name).await else {
         return; // not present — nothing to do
     };
+    let Ok(mut reader) = fat12::FileReader::open(&file).await else {
+        return; // corrupt chain — leave whatever is already loaded
+    };
+
+    // Drop the previous import first. On a re-import the new file may be
+    // shorter than the old one, and stale events left in the tail slots
+    // would show up on the calendar as entries no ICS file mentions.
+    // Also clears anything added via Settings → Events → Quick test.
+    alarm::clear_imported_alarms();
 
     // Visible "we're chewing on the calendar file" feedback — boot
     // import can take a noticeable second on a full festival ICS, and
@@ -183,15 +193,12 @@ pub async fn import_alarms_from_fat12() {
     let mut buf = [0u8; ICS_READ_BUF_LEN];
     let mut slot = 1usize; // slot 0 stays reserved for the manual alarm
     let mut dropped = 0u16;
-    // Byte offset in the file that `buf[0]` corresponds to, and how much
-    // of `buf` is carried over from the previous window (the tail of a
-    // `VEVENT` that straddled the boundary).
-    let mut file_pos = 0usize;
+    // How much of `buf` is carried over from the previous window (the
+    // tail of a `VEVENT` that straddled the boundary).
     let mut carry = 0usize;
 
     loop {
-        let read = match fat12::read_file(&file, (file_pos + carry) as u32, &mut buf[carry..]).await
-        {
+        let read = match reader.read(&mut buf[carry..]).await {
             Ok(n) => n,
             Err(_) => break,
         };
@@ -215,16 +222,14 @@ pub async fn import_alarms_from_fat12() {
             break; // end of file, and the tail held no further event
         }
         if used == 0 && avail == buf.len() {
-            // A single VEVENT longer than the whole window — skip it
-            // rather than spinning on the same bytes forever.
-            file_pos += avail;
+            // A single VEVENT longer than the whole window — drop the
+            // window and move on rather than spinning on the same bytes.
             carry = 0;
             continue;
         }
         // Keep the unparsed tail and refill behind it.
         carry = avail - used;
         buf.copy_within(used..avail, 0);
-        file_pos += used;
     }
 
     let imported = slot - 1;
@@ -245,6 +250,98 @@ pub async fn import_alarms_from_fat12() {
     led::set_led(&LED_BLUE, LedState::Off);
     if imported > 0 {
         led::set_led(&crate::fw::led::LED_GREEN, LedState::Duty50Once);
+    }
+}
+
+/// Set by **Settings → Events → Reload from ICS** to ask
+/// [`ics_reload_task`] for an immediate re-import.  A signal rather than
+/// a direct call because the import is async and menu actions are not.
+#[cfg(feature = "embassy-base")]
+pub static ICS_RELOAD_SIGNAL: embassy_sync::signal::Signal<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    (),
+> = embassy_sync::signal::Signal::new();
+
+/// Menu action: re-read `ALARMS.ICS` without a reboot.
+#[cfg(feature = "embassy-base")]
+pub fn request_ics_reload() {
+    ICS_RELOAD_SIGNAL.signal(());
+}
+
+/// Re-import `ALARMS.ICS` whenever the file might have changed.
+///
+/// Two triggers:
+///   * the host wrote to the USB mass-storage partition and then went
+///     quiet — MSC gives no "copy finished" notification and hosts flush
+///     lazily, so the settle window is the only reliable signal;
+///   * the user picked **Settings → Events → Reload from ICS**.
+///
+/// Either way the import clears the old event slots first, so dropping a
+/// new calendar on the badge replaces the schedule rather than merging
+/// into it.
+#[cfg(feature = "embassy-base")]
+#[embassy_executor::task]
+pub async fn ics_reload_task() {
+    use embassy_time::{Duration, Timer};
+
+    /// How long the host must stay quiet before we treat a copy as done.
+    const SETTLE: Duration = Duration::from_secs(2);
+    /// Poll interval while idle.  Cheap (one atomic load) and the
+    /// latency it adds is invisible next to an EPD refresh.
+    const POLL: Duration = Duration::from_millis(500);
+
+    let mut seen = host_write_count();
+
+    loop {
+        // Wait for either trigger.
+        let manual = loop {
+            if ICS_RELOAD_SIGNAL.signaled() {
+                ICS_RELOAD_SIGNAL.reset();
+                break true;
+            }
+            if host_write_count() != seen {
+                break false;
+            }
+            Timer::after(POLL).await;
+        };
+
+        if !manual {
+            // Let the host finish: re-arm the settle window for as long
+            // as blocks keep arriving.
+            loop {
+                let before = host_write_count();
+                Timer::after(SETTLE).await;
+                if host_write_count() == before {
+                    break;
+                }
+            }
+            defmt::info!("watch: USB write settled, re-reading ALARMS.ICS");
+        } else {
+            defmt::info!("watch: manual ALARMS.ICS reload");
+        }
+
+        import_alarms_from_fat12().await;
+        // Nudge the display loop so a visible calendar picks the new
+        // events up straight away instead of at the next minute tick.
+        crate::TOAST_SIGNAL.signal(());
+        seen = host_write_count();
+    }
+}
+
+/// Blocks the USB host has written to the FAT partition.
+///
+/// Always zero in builds without `usb-storage`: there is no host write
+/// path at all, so the auto-reload trigger never fires and
+/// [`ics_reload_task`] runs on the manual signal alone.
+#[cfg(feature = "embassy-base")]
+fn host_write_count() -> u32 {
+    #[cfg(feature = "usb-storage")]
+    {
+        crate::fw::usb_msc::host_write_count()
+    }
+    #[cfg(not(feature = "usb-storage"))]
+    {
+        0
     }
 }
 
