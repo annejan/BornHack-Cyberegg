@@ -1150,6 +1150,7 @@ fn label_telemetry_share() -> &'static str {
 
 // ── Ignore blink toggle ────────────────────────────────────────────────────
 
+#[cfg(feature = "game")]
 fn label_game_mute() -> &'static str {
     if crate::GAME_MUTE.load(Ordering::Relaxed) {
         "Mute (On)"
@@ -1158,35 +1159,28 @@ fn label_game_mute() -> &'static str {
     }
 }
 
+#[cfg(feature = "game")]
 fn action_game_mute_toggle() {
     let cur = crate::GAME_MUTE.load(Ordering::Relaxed);
     crate::GAME_MUTE.store(!cur, Ordering::Relaxed);
 }
 
+#[cfg(feature = "game")]
 fn label_game_enabled() -> &'static str {
-    #[cfg(feature = "game")]
-    {
-        if crate::game::settings::is_enabled() {
-            "Disable Game"
-        } else {
-            "Enable Game"
-        }
-    }
-    #[cfg(not(feature = "game"))]
-    {
+    if crate::game::settings::is_enabled() {
         "Disable Game"
+    } else {
+        "Enable Game"
     }
 }
 
+#[cfg(feature = "game")]
 fn action_game_enabled_toggle() {
-    #[cfg(feature = "game")]
-    {
-        let on = crate::game::settings::is_enabled();
-        crate::game::settings::set_enabled(!on);
-        // The DisplayState reconcile in `dispatch_button` flips
-        // `enabled[SCREEN_GAME]` (and hops off the game screen if it was
-        // the active one) after this action returns.
-    }
+    let on = crate::game::settings::is_enabled();
+    crate::game::settings::set_enabled(!on);
+    // The DisplayState reconcile in `dispatch_button` flips
+    // `enabled[SCREEN_GAME]` (and hops off the game screen if it was
+    // the active one) after this action returns.
 }
 
 fn label_boot_chime() -> &'static str {
@@ -2026,6 +2020,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     },
 ];
 
+#[cfg(feature = "game")]
 static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "< Back",
@@ -2070,31 +2065,23 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     },
 ];
 
+#[cfg(feature = "game")]
 fn fmt_game_mode(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
-    #[cfg(feature = "game")]
-    {
-        let mode = crate::game::settings::pending_mode();
-        let needs_reboot = crate::game::settings::pending_differs_from_active();
-        let suffix = if needs_reboot { "*" } else { "" };
-        let _ = write!(buf, "Mode: {}{}", mode.label(), suffix);
-    }
-    #[cfg(not(feature = "game"))]
-    {
-        let _ = write!(buf, "Mode: -");
-    }
+    let mode = crate::game::settings::pending_mode();
+    let needs_reboot = crate::game::settings::pending_differs_from_active();
+    let suffix = if needs_reboot { "*" } else { "" };
+    let _ = write!(buf, "Mode: {}{}", mode.label(), suffix);
 }
 
+#[cfg(feature = "game")]
 fn action_game_mode_next() {
-    #[cfg(feature = "game")]
-    {
-        use crate::game::engine::thresholds::Mode;
-        let next = match crate::game::settings::pending_mode() {
-            Mode::Classic => Mode::Casual,
-            Mode::Casual => Mode::Classic,
-        };
-        crate::game::settings::request_mode_change(next);
-    }
+    use crate::game::engine::thresholds::Mode;
+    let next = match crate::game::settings::pending_mode() {
+        Mode::Classic => Mode::Casual,
+        Mode::Casual => Mode::Classic,
+    };
+    crate::game::settings::request_mode_change(next);
 }
 
 #[cfg(feature = "game")]
@@ -2291,11 +2278,32 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
+#[cfg(feature = "game")]
 static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
     },
+    MenuItem {
+        label: || "Settings",
+        kind: MenuItemKind::Submenu(&SETTINGS_ITEMS),
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "About",
+        kind: MenuItemKind::Submenu(&ABOUT_ITEMS),
+    },
+];
+
+/// Same root menu without the pet.  A game-less build has nothing behind
+/// the Bornagotchi submenu — every entry in it toggles or resets state
+/// the firmware doesn't carry — so the row is dropped rather than left
+/// as a dead end at the top of the menu.
+#[cfg(not(feature = "game"))]
+static MAIN_ITEMS: [MenuItem; 3] = [
     MenuItem {
         label: || "Settings",
         kind: MenuItemKind::Submenu(&SETTINGS_ITEMS),
