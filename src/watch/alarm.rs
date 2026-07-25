@@ -37,7 +37,6 @@ use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
-use super::ics::SUMMARY_LEN;
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE};
 
@@ -45,11 +44,11 @@ use crate::{BLACK, RED, TriColor, WHITE};
 /// "primary" alarm; slots 1..N_ALARMS-1 hold imported calendar events and
 /// other automation.
 ///
-/// At ~44 bytes of atomics per slot (most of it the 31-byte SUMMARY),
-/// 160 slots cost ~7 KiB of RAM.  Sized for a whole festival programme
-/// with headroom rather than a single day: the 2026 Bornhack schedule is
-/// 127 events, where the previous 32 stopped a quarter of the way in and
-/// the import gave no sign it had.
+/// These hold only what firing an alarm needs — time, date, tone — so a
+/// slot is ~8 bytes and 160 of them cost about 1.3 KiB.  The calendar
+/// screen doesn't read them at all: it works off the day index and the
+/// day cache, both of which cover the whole ICS file however big it is.
+/// The slots are the *near future*, which is all that can ring.
 pub const N_ALARMS: usize = 160;
 
 // ── Edit-mode state ─────────────────────────────────────────────────────────
@@ -211,16 +210,6 @@ static ALARM_MELODY: [AtomicU8; N_ALARMS] =
 static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
 static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
-/// Event end time (hour, minute) per slot.  Used by the Calendar
-/// day-view to render events as duration blocks.  When `DTEND` is
-/// missing in the source ICS the importer mirrors the start time
-/// (zero-duration event → renders as a thin marker).  Multi-day
-/// events are clamped to 23:59 of the start day at import time so
-/// the day-view doesn't have to handle midnight crossings.  These
-/// fields are not consulted by `check_and_fire_alarm`; the alarm
-/// fires at the start time only.
-static ALARM_END_HOUR: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
-static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 /// Show-but-don't-ring flag.  Set for imported all-day events: they're
 /// real calendar entries the day-view should list, but an all-day entry
 /// nominally starts at 00:00 and waking the camp at midnight for "Camp
@@ -228,14 +217,6 @@ static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_A
 /// [`check_and_fire_alarm`], which also means it isn't auto-disabled at
 /// its start time and so stays visible for the rest of the day.
 static ALARM_SILENT: [AtomicBool; N_ALARMS] = [const { AtomicBool::new(false) }; N_ALARMS];
-/// Event SUMMARY (calendar title) per slot, NUL-padded ASCII.  Stored as
-/// per-byte atomics to match the rest of the alarm state — no
-/// synchronisation primitive needed and the byte-by-byte loads are
-/// negligible compared to a screen redraw.  Empty for slot 0 (the
-/// manual alarm has no title) and overwritten at boot from `ALARMS.ICS`.
-static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
-    [const { [const { AtomicU8::new(0) }; SUMMARY_LEN] }; N_ALARMS];
-
 /// Curated tone choices: (display name, melody index).  Shared between
 /// the alarm-tone stepper (Settings → Alarm → Tone) and the per-event
 /// notification-sound steppers in `fw::mesh::sounds` — both modules use
@@ -290,31 +271,6 @@ pub fn alarm_month_n(slot: usize) -> u8 {
 pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
-pub fn alarm_end_hour_n(slot: usize) -> u8 {
-    ALARM_END_HOUR[s(slot)].load(Ordering::Relaxed)
-}
-pub fn alarm_end_minute_n(slot: usize) -> u8 {
-    ALARM_END_MINUTE[s(slot)].load(Ordering::Relaxed)
-}
-
-/// Returns the slot's SUMMARY as a heapless string.  Empty if no
-/// summary was set (e.g. slot 0, or pre-import).
-///
-/// The slot stores Latin-1, one byte per character, so `b as char` is the
-/// decode; the result needs twice the capacity because a Latin-1 letter
-/// is two bytes once re-encoded as UTF-8.
-pub fn alarm_summary_n(slot: usize) -> heapless::String<{ SUMMARY_LEN * 2 }> {
-    let i = s(slot);
-    let mut out: heapless::String<{ SUMMARY_LEN * 2 }> = heapless::String::new();
-    for byte_atomic in ALARM_SUMMARY[i].iter() {
-        let b = byte_atomic.load(Ordering::Relaxed);
-        if b == 0 {
-            break;
-        }
-        let _ = out.push(b as char);
-    }
-    out
-}
 
 /// `day` is 0 = Mon .. 6 = Sun.
 pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
@@ -344,16 +300,6 @@ pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
     super::signal_settings_dirty();
 }
 
-/// Set the slot's event end time.  Used by the ICS importer to record
-/// the `DTEND` of each event so the day-view can render duration
-/// blocks.  Defaults to the start time when `DTEND` is missing or
-/// degenerate (zero-duration event renders as a thin marker).
-pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
-    let i = s(slot);
-    ALARM_END_HOUR[i].store(hour.min(23), Ordering::Relaxed);
-    ALARM_END_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
-}
-
 pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
     ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
     super::signal_settings_dirty();
@@ -369,14 +315,6 @@ pub fn set_alarm_silent_n(slot: usize, silent: bool) {
     ALARM_SILENT[s(slot)].store(silent, Ordering::Relaxed);
 }
 
-/// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
-pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
-    let i = s(slot);
-    for (j, b) in src.iter().enumerate() {
-        ALARM_SUMMARY[i][j].store(*b, Ordering::Relaxed);
-    }
-}
-
 /// Find the lowest empty event slot index (>= 1) suitable for a new
 /// event.  Returns None if all event slots (1..N_ALARMS) are populated.
 pub fn first_empty_event_slot() -> Option<usize> {
@@ -388,7 +326,7 @@ pub fn first_empty_event_slot() -> Option<usize> {
 /// Returns the firing `(hour, minute)` on success, or `None` if the
 /// wall clock isn't synced or all event slots are full.
 #[cfg(feature = "embassy-base")]
-pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
+pub fn add_quick_event(minutes_ahead: u16) -> Option<(u8, u8)> {
     let c = clock::wall_clock()?;
     let slot = first_empty_event_slot()?;
 
@@ -410,18 +348,6 @@ pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
 
     set_alarm_date_n(slot, year, month, day);
     set_alarm_time_n(slot, target_hour, target_min);
-    let mut buf = [0u8; SUMMARY_LEN];
-    let mut i = 0usize;
-    for &b in summary {
-        if i >= SUMMARY_LEN {
-            break;
-        }
-        if (0x20..=0x7e).contains(&b) {
-            buf[i] = b;
-            i += 1;
-        }
-    }
-    set_alarm_summary_n(slot, &buf);
     set_alarm_enabled_n(slot, true);
     Some((target_hour, target_min))
 }
@@ -437,12 +363,7 @@ pub fn clear_imported_alarms() {
         ALARM_YEAR[slot].store(0, Ordering::Relaxed);
         ALARM_MONTH[slot].store(0, Ordering::Relaxed);
         ALARM_DAY[slot].store(0, Ordering::Relaxed);
-        ALARM_END_HOUR[slot].store(0, Ordering::Relaxed);
-        ALARM_END_MINUTE[slot].store(0, Ordering::Relaxed);
         ALARM_SILENT[slot].store(false, Ordering::Relaxed);
-        for byte_atomic in ALARM_SUMMARY[slot].iter() {
-            byte_atomic.store(0, Ordering::Relaxed);
-        }
     }
     super::signal_settings_dirty();
 }

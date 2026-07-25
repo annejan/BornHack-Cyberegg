@@ -69,10 +69,6 @@ where
     Ok(())
 }
 
-use super::alarm::{
-    N_ALARMS, alarm_day_n, alarm_enabled_n, alarm_end_hour_n, alarm_end_minute_n, alarm_hour_n,
-    alarm_is_one_shot_n, alarm_minute_n, alarm_month_n, alarm_summary_n, alarm_year_n,
-};
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE, draw_frame};
 
@@ -94,8 +90,6 @@ static MODE: AtomicU8 = AtomicU8::new(MODE_PASSIVE);
 static CURSOR_YEAR: AtomicU16 = AtomicU16::new(0);
 static CURSOR_MONTH: AtomicU8 = AtomicU8::new(0);
 static CURSOR_DAY: AtomicU8 = AtomicU8::new(0);
-
-const MAX_EVENTS: usize = N_ALARMS;
 
 /// First hour visible at the top of the day-detail timeline (0..=23).
 /// Sentinel `0xFF` means "auto-position on next render" — set when the
@@ -145,56 +139,6 @@ const MONTH_ABBR: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// ── Event collection ────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct EventRow {
-    year: u16,
-    month: u8,
-    day: u8,
-    hour: u8,
-    minute: u8,
-    /// Event end time on the same day.  Mirrors `(hour, minute)` for
-    /// zero-duration events (DTEND missing in the source ICS).
-    end_hour: u8,
-    end_minute: u8,
-    /// Back-reference to the alarm slot — used to look up the summary.
-    slot: u8,
-}
-
-fn collect_sorted(out: &mut [EventRow; MAX_EVENTS]) -> usize {
-    let mut n = 0usize;
-    for slot in 0..N_ALARMS {
-        if !alarm_enabled_n(slot) || !alarm_is_one_shot_n(slot) {
-            continue;
-        }
-        if n >= out.len() {
-            break;
-        }
-        out[n] = EventRow {
-            year: alarm_year_n(slot),
-            month: alarm_month_n(slot),
-            day: alarm_day_n(slot),
-            hour: alarm_hour_n(slot),
-            minute: alarm_minute_n(slot),
-            end_hour: alarm_end_hour_n(slot),
-            end_minute: alarm_end_minute_n(slot),
-            slot: slot as u8,
-        };
-        n += 1;
-    }
-    for i in 1..n {
-        let key = out[i];
-        let mut j = i;
-        while j > 0 && cmp_event(&out[j - 1], &key) == core::cmp::Ordering::Greater {
-            out[j] = out[j - 1];
-            j -= 1;
-        }
-        out[j] = key;
-    }
-    n
-}
-
 /// Drop the first `n` *characters* of `s`.  Empty once `n` runs past the
 /// end.  Used for the day-view title scroll, where counting bytes would
 /// split a multi-byte character in an accented title.
@@ -203,16 +147,6 @@ fn scroll_chars(s: &str, n: usize) -> &str {
         Some((byte, _)) => &s[byte..],
         None => "",
     }
-}
-
-fn cmp_event(a: &EventRow, b: &EventRow) -> core::cmp::Ordering {
-    (a.year, a.month, a.day, a.hour, a.minute).cmp(&(b.year, b.month, b.day, b.hour, b.minute))
-}
-
-fn day_has_events(events: &[EventRow], y: u16, m: u8, d: u8) -> bool {
-    events
-        .iter()
-        .any(|ev| ev.year == y && ev.month == m && ev.day == d)
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────────
@@ -243,8 +177,9 @@ fn add_days(year: u16, month: u8, day: u8, delta_days: i64) -> (u16, u8, u8) {
 }
 
 /// Cursor-date getter (sentinel-aware): if uninitialised, pick today,
-/// then first event, then a Bornhack-2026 fallback.
-fn ensure_cursor(events: &[EventRow]) -> (u16, u8, u8) {
+/// then the first day the calendar has anything on, then a
+/// Bornhack-2026 fallback.
+fn ensure_cursor() -> (u16, u8, u8) {
     let y = CURSOR_YEAR.load(Ordering::Relaxed);
     if y != 0 {
         return (
@@ -254,7 +189,7 @@ fn ensure_cursor(events: &[EventRow]) -> (u16, u8, u8) {
         );
     }
     let init = today()
-        .or_else(|| events.first().map(|e| (e.year, e.month, e.day)))
+        .or_else(super::first_indexed_day)
         .unwrap_or((2026, 7, 15));
     set_cursor(init);
     init
@@ -393,7 +328,10 @@ fn dispatch_day_list(btn: ButtonId) -> bool {
             // Loose cap — the renderer just leaves rows blank past the
             // end of the day's events.  N_ALARMS is the absolute upper
             // bound on events ever importable.
-            DAY_LIST_SCROLL.store(cur.saturating_add(1).min(N_ALARMS as u8), Ordering::Relaxed);
+            DAY_LIST_SCROLL.store(
+                cur.saturating_add(1).min(super::DAY_CACHE_MAX as u8),
+                Ordering::Relaxed,
+            );
             true
         }
         ButtonId::Cancel => {
@@ -431,32 +369,47 @@ where
     #[cfg(feature = "mesh")]
     super::alarm::draw_unread_badge(display, PM_BADGE_CX, PM_BADGE_CY)?;
 
-    let mut events_buf = [EventRow {
-        year: 0,
-        month: 0,
-        day: 0,
-        hour: 0,
-        minute: 0,
-        end_hour: 0,
-        end_minute: 0,
-        slot: 0,
-    }; MAX_EVENTS];
-    let n = collect_sorted(&mut events_buf);
-    let events = &events_buf[..n];
+    // Everything below reads the cursor day out of the shared cache,
+    // which the ICS task refills from the file whenever the cursor
+    // moves.  Nothing here walks a list of every event in the calendar,
+    // which is what lets the file be arbitrarily large.
+    let cursor = ensure_cursor();
+    super::request_day(cursor.0, cursor.1, cursor.2);
 
-    match MODE.load(Ordering::Relaxed) {
-        MODE_DAY_LIST => draw_day_list(display, events),
-        MODE_DAY_DETAIL => draw_day_detail(display, events),
-        MODE_ACTIVE => draw_grid(display, events, true),
-        _ => draw_grid(display, events, false),
-    }
+    super::with_day_cache(|cache| {
+        // A cache miss is transient — the task is already loading the
+        // day and will signal a redraw.  Render the empty day rather
+        // than a spinner; on a fast day-load the placeholder is never
+        // even seen.
+        let day: &[super::CachedEvent] = if cache.date == cursor {
+            cache.valid()
+        } else {
+            &[]
+        };
+        let overflow = if cache.date == cursor {
+            cache.overflow
+        } else {
+            0
+        };
+
+        match MODE.load(Ordering::Relaxed) {
+            MODE_DAY_LIST => draw_day_list(display, cursor, day, overflow),
+            MODE_DAY_DETAIL => draw_day_detail(display, cursor, day),
+            MODE_ACTIVE => draw_grid(display, cursor, day, true),
+            _ => draw_grid(display, cursor, day, false),
+        }
+    })
 }
 
-fn draw_grid<D>(display: &mut D, events: &[EventRow], active: bool) -> Result<(), D::Error>
+fn draw_grid<D>(
+    display: &mut D,
+    cursor: (u16, u8, u8),
+    day: &[super::CachedEvent],
+    active: bool,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let cursor = ensure_cursor(events);
     let today_ymd = today();
 
     // ── Month label ────────────────────────────────────────────────────────
@@ -537,7 +490,7 @@ where
                 )?;
 
                 // Has-events dot in the top-right corner.
-                if day_has_events(events, cell_date.0, cell_date.1, cell_date.2) {
+                if super::day_has_events(cell_date.0, cell_date.1, cell_date.2) {
                     Circle::new(Point::new(cell_x + COL_W - 5, cell_y + 1), 3)
                         .into_styled(PrimitiveStyle::with_fill(RED))
                         .draw(display)?;
@@ -560,22 +513,23 @@ where
     }
 
     // ── Footer: cursor day's first event + "+N more" ───────────────────────
-    let cursor_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
-        .iter()
-        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
-        .collect();
+    let cursor_evs = day;
 
     let left = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Left)
         .build();
-    // A truncated import gets its own line so a half-loaded programme
-    // says so on the screen you'd notice it on, instead of just in the
-    // boot log.  Drawn in red — this is missing data, not a status note.
+    // Every event in the file shows on this grid, however big the file
+    // is — but only the first N_ALARMS of them get an alarm slot, and
+    // the rest can't ring.  Say so in red rather than letting a silent
+    // alarm look like a working one.
     let dropped = super::events_dropped();
     if dropped > 0 {
         let mut warn: heapless::String<32> = heapless::String::new();
-        let _ = core::fmt::write(&mut warn, format_args!("! {dropped} events not loaded"));
+        let _ = core::fmt::write(
+            &mut warn,
+            format_args!("! {dropped} of {} won't ring", super::events_total()),
+        );
         draw_bold(
             display,
             &warn,
@@ -595,7 +549,7 @@ where
         )?;
     } else {
         let ev0 = cursor_evs[0];
-        let summary = alarm_summary_n(ev0.slot as usize);
+        let summary = ev0.summary();
         let mut row: heapless::String<48> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
@@ -655,11 +609,14 @@ where
 /// blocks shorter than ~10 px omit the title.  Today's "now" position
 /// is marked with a red horizontal line.  Empty days show
 /// `(no events)` over the timeline.
-fn draw_day_detail<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
+fn draw_day_detail<D>(
+    display: &mut D,
+    cursor: (u16, u8, u8),
+    day_evs: &[super::CachedEvent],
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let cursor = ensure_cursor(events);
     let today_ymd = today();
 
     // ── Day header (compact red bar) ─────────────────────────────────────
@@ -705,13 +662,6 @@ where
     const TL_AXIS_X: i32 = 20;
     const TL_LEFT_X: i32 = 22;
     const TL_RIGHT_X: i32 = 148;
-
-    // Filter events to the cursor day (collected before resolving the
-    // scroll position so we can auto-scroll to the first event).
-    let day_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
-        .iter()
-        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
-        .collect();
 
     // Resolve the scroll sentinel to a sensible top-hour: first event
     // hour, or current hour if today, or 06:00.  Clamp so the visible
@@ -796,7 +746,7 @@ where
     };
 
     // Event blocks — only those that intersect the visible window.
-    for ev in &day_evs {
+    for ev in day_evs {
         let ev_start_min = ev.hour as i32 * 60 + ev.minute as i32;
         let ev_end_min = ev.end_hour as i32 * 60 + ev.end_minute as i32;
         let win_start_min = tl_start_hour * 60;
@@ -838,7 +788,7 @@ where
         // that means 60-min events get titles; 30-min and 45-min events
         // render as bare time markers.
         if block_h >= 13 {
-            let summary = alarm_summary_n(ev.slot as usize);
+            let summary = ev.summary();
             // Apply the global title scroll offset.  Counted in
             // characters, not bytes: an accented title is UTF-8 here, so
             // a byte offset would land mid-sequence and blank the row.
@@ -914,11 +864,15 @@ where
 /// Day-list popup — full-screen scrollable list of every event on the
 /// cursor day with full (untruncated) summaries.  Reached from
 /// day-detail by Fire / Execute; see `MODE_DAY_LIST`.
-fn draw_day_list<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
+fn draw_day_list<D>(
+    display: &mut D,
+    cursor: (u16, u8, u8),
+    day_evs: &[super::CachedEvent],
+    overflow: u8,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let cursor = ensure_cursor(events);
     let today_ymd = today();
 
     // ── Day header (same red bar / FONT_7X13_BOLD as day-detail) ─────────
@@ -953,11 +907,8 @@ where
     .draw(display)?;
 
     // ── Event rows ───────────────────────────────────────────────────────
-    // Filter to cursor day; events arrive already sorted by start time.
-    let day_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
-        .iter()
-        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
-        .collect();
+    // The cache holds exactly the cursor day, already sorted by start
+    // time.
 
     if day_evs.is_empty() {
         Text::with_text_style(
@@ -995,7 +946,7 @@ where
             break;
         }
         let ev = day_evs[idx as usize];
-        let summary = alarm_summary_n(ev.slot as usize);
+        let summary = ev.summary();
         let mut row: heapless::String<48> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
@@ -1021,6 +972,21 @@ where
     }
     if (scroll + ROWS_VISIBLE) < day_evs.len() as i32 {
         draw_bold(display, "v", Point::new(146, ROW_BOT_Y - 4), arrow_style, centered)?;
+    }
+
+    // A day busier than the cache can hold says so rather than silently
+    // showing a subset. Red, like the truncated-import warning on the
+    // grid — both mean "there is more than this".
+    if overflow > 0 {
+        let mut warn: heapless::String<24> = heapless::String::new();
+        let _ = core::fmt::write(&mut warn, format_args!("+{overflow} more today"));
+        draw_bold(
+            display,
+            &warn,
+            Point::new(76, ROW_BOT_Y + 2),
+            MonoTextStyle::new(&FONT_6X10, RED),
+            centered,
+        )?;
     }
 
     Ok(())

@@ -370,7 +370,7 @@ fn parse_rrule(value: &[u8]) -> Option<Recur> {
 // date library into the parser.
 
 /// Days since 1970-01-01 for a proleptic-Gregorian date.
-fn days_from_civil(y: u16, m: u8, d: u8) -> i64 {
+pub(super) fn days_from_civil(y: u16, m: u8, d: u8) -> i64 {
     let y = y as i64 - if m <= 2 { 1 } else { 0 };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400; // [0, 399]
@@ -382,7 +382,7 @@ fn days_from_civil(y: u16, m: u8, d: u8) -> i64 {
 
 /// Inverse of [`days_from_civil`].  `None` if the result falls outside a
 /// `u16` year.
-fn civil_from_days(z: i64) -> Option<(u16, u8, u8)> {
+pub(super) fn civil_from_days(z: i64) -> Option<(u16, u8, u8)> {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097; // [0, 146096]

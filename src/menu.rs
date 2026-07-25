@@ -1645,15 +1645,17 @@ fn action_reload_ics() {
 #[cfg(all(feature = "watch", not(feature = "embassy-base")))]
 fn action_reload_ics() {}
 
-/// Action: drop a "Quick test" event 5 minutes from now in the first
-/// empty slot.  Useful for verifying the alarm path without USB.
-/// Silently no-ops if the wall clock isn't synced or all slots are
-/// taken — the new event becomes visible on the Calendar grid (red
-/// dot) and the Clock face (bell + HH:MM), so no toast confirmation
-/// is needed.
+/// Action: arm a test alarm 5 minutes from now in the first empty slot.
+/// Useful for verifying the ring path without USB.  Silently no-ops if
+/// the wall clock isn't synced or all slots are taken — the bell and
+/// `HH:MM` on the Clock face confirm it landed, so no toast is needed.
+///
+/// It does *not* appear on the Calendar: that screen reads the ICS file
+/// on flash, not the alarm slots, so anything not in the file has
+/// nothing to show.
 #[cfg(all(feature = "watch", feature = "embassy-base"))]
 fn action_add_quick_test() {
-    let _ = crate::watch::add_quick_event(5, b"Quick test");
+    let _ = crate::watch::add_quick_event(5);
 }
 #[cfg(all(feature = "watch", not(feature = "embassy-base")))]
 fn action_add_quick_test() {}
@@ -1679,7 +1681,7 @@ macro_rules! events_items {
                 kind: MenuItemKind::Action(action_reload_ics),
             },
             MenuItem {
-                label: || "Quick test +5min",
+                label: || "Test alarm +5min",
                 kind: MenuItemKind::Action(action_add_quick_test),
             },
             MenuItem { label: || "", kind: MenuItemKind::Separator },

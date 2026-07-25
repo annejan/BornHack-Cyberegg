@@ -189,11 +189,24 @@ At boot, the firmware:
 3. Populates slots 1..159 with one-shot alarms
 4. Slot 0 (manual recurring alarm) is left untouched
 
+**How big a calendar can it hold?** As big as the file. The badge does
+not keep every event in RAM:
+
+| What | Where it comes from | Limit |
+| ---- | ------------------- | ----- |
+| Month-grid dots | A one-bit-per-day index built during import (~96 bytes, covering just over two years) | Every event in the file |
+| Day detail / day list | The file, rescanned for that one day whenever the cursor moves | 24 events per day (more shows a red `+N more today`) |
+| Alarms that actually ring | Alarm slots 1..159, filled with the nearest upcoming events | 159; the rest show on the calendar but can't ring, and the grid says so in red |
+
+A 250 KiB, 800-event export navigates fine — opening a day costs one
+rescan of the file (tens of milliseconds, invisible next to an e-paper
+refresh) rather than any RAM.
+
 **Import notes:**
 - Re-runs at every boot, **and automatically whenever the file changes**: the badge counts blocks written over USB mass storage and re-imports once the host has been quiet for 2 seconds. Copy a new `ALARMS.ICS` onto the badge, watch the blue LED blink, and the calendar has the new schedule — no reboot
 - Each import clears the previous one first, so a new file *replaces* the schedule instead of merging into it. That also clears any **Quick test** events
 - **Settings → Events → Reload from ICS** forces an immediate re-read if you'd rather not wait for the settle window
-- Caps at 159 events (slots 1..159). Anything past that is counted and reported: the boot log warns, and the Calendar grid shows a red `! N events not loaded` line. The 2026 Bornhack programme is 127 events, so it fits with room to spare
+- Only the nearest 159 events get an alarm slot. Everything else still appears on the calendar — that reads the file — but can't ring; the boot log warns and the Calendar grid shows a red `! N of M won't ring` line. The 2026 Bornhack programme is 127 events, so it all rings
 - A single `RRULE` expands to at most 64 occurrences
 - Multi-day events clamped to 23:59 of the start day
 - Times with `Z` suffix (UTC) are converted using `TIMEZONE_OFFSET`; floating times and `TZID=...:` values are taken at face value
@@ -208,7 +221,7 @@ Lists every populated one-shot slot read-only (`<n>: HH:MM MM-DD`) plus two acti
 | Action | Description |
 | ------ | ----------- |
 | **Reload from ICS** | Re-reads `ALARMS.ICS` immediately. The badge already does this by itself after a USB copy settles; this is the manual fallback. |
-| **Quick test +5min** | Drops a `Quick test` event 5 minutes from now in the first empty slot. Handy for verifying the alarm path without USB. Silently no-ops if the wall clock isn't synced or all slots are taken. |
+| **Test alarm +5min** | Arms a test alarm 5 minutes from now in the first empty slot. Handy for verifying the ring path without USB. Silently no-ops if the wall clock isn't synced or all slots are taken. It does *not* show on the Calendar — that screen reads the ICS file, and this alarm isn't in it. |
 | **Clear all** | Destructive — disables and zeros slots 1..159 immediately. |
 
 Empty slots are auto-hidden — you only scroll past events that actually exist.
