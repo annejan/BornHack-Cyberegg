@@ -208,14 +208,14 @@ fn build_clock(unix_secs: u32, tz_offset_hours: i8) -> Option<Clock> {
     })
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) fn wall_clock() -> Option<Clock> {
     let unix = crate::unix_now()?;
     let tz = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
     build_clock(unix, tz)
 }
 
-#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+#[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
 pub(super) fn wall_clock() -> Option<Clock> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as u32;
@@ -223,17 +223,17 @@ pub(super) fn wall_clock() -> Option<Clock> {
     build_clock(unix, tz)
 }
 
-#[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+#[cfg(not(any(feature = "embassy-core", feature = "simulator")))]
 pub(super) fn wall_clock() -> Option<Clock> {
     None
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) fn battery_pct() -> u8 {
     crate::fw::battery::read_pct()
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub(super) fn battery_pct() -> u8 {
     100
 }
@@ -585,7 +585,7 @@ where
 
 // ── KV load / persist ───────────────────────────────────────────────────────
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     let mut b = [0u8; 1];
     if let Ok(1) = ns.get("face", &mut b).await
@@ -595,7 +595,7 @@ pub(super) async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     }
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) async fn persist(ns: &crate::fw::kv::KvNamespace) {
     let _ = ns
         .set("face", &[WATCH_FACE.load(Ordering::Relaxed)], true)

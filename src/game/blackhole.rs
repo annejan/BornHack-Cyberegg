@@ -377,11 +377,11 @@ fn xorshift(mut x: u32) -> u32 {
 }
 
 fn seed() -> u32 {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         embassy_time::Instant::now().as_ticks() as u32
     }
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     {
         0xCAFE_BABE
     }

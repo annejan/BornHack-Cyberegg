@@ -200,7 +200,7 @@ const DIABETES_ALERT_MIN_VISIBLE_MS: u32 = 3000;
 pub fn show_diabetes_alert() {
     DIABETES_ALERT_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
     DIABETES_ALERT_ACTIVE.store(true, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::TOAST_SIGNAL.signal(());
 }
 
@@ -214,7 +214,7 @@ static ALCOHOLISM_ALERT_STARTED_MS: AtomicU32 = AtomicU32::new(0);
 pub fn show_alcoholism_alert() {
     ALCOHOLISM_ALERT_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
     ALCOHOLISM_ALERT_ACTIVE.store(true, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::TOAST_SIGNAL.signal(());
 }
 
@@ -289,7 +289,7 @@ pub fn show_battle_anim(
     BATTLE_ANIM_OPP_ID.store(u16::from_le_bytes(opp_id), Ordering::Relaxed);
     BATTLE_ANIM_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
     BATTLE_ANIM_ACTIVE.store(true, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::TOAST_SIGNAL.signal(());
 }
 
@@ -330,15 +330,15 @@ pub fn clear_battle_anim() {
 /// wrapper so `mod.rs` compiles on both firmware (`embassy_time`) and
 /// simulator (`lifecycle::sim_elapsed_ms`).
 fn now_ms_u32() -> u32 {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         embassy_time::Instant::now().as_millis() as u32
     }
-    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    #[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
     {
         lifecycle::sim_elapsed_ms() as u32
     }
-    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+    #[cfg(not(any(feature = "embassy-core", feature = "simulator")))]
     {
         0
     }
@@ -354,7 +354,7 @@ pub fn show_toast(toast: Toast) {
     TOAST_MSG.store(toast as u8, Ordering::Relaxed);
     TOAST_STARTED_MS.store(now_ms_u32(), Ordering::Relaxed);
     TOAST_ACTIVE.store(true, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::TOAST_SIGNAL.signal(());
 }
 
@@ -498,7 +498,7 @@ where
     }
 
     // Battery icon — top-right.
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         let pct = crate::fw::battery::read_pct();
         crate::draw_battery_icon(display, 128, 2, pct)?;
@@ -742,8 +742,12 @@ where
 /// Handles the start screen (full 152×152 blit of `00000000.PCX`),
 /// in-game animation blitting, and the debug animation name overlay
 /// when no artwork is loaded.
-#[cfg(feature = "embassy-base")]
-pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) {
+#[cfg(feature = "embassy-core")]
+pub async fn render<D>(display: &mut D, sprite_frame: u8)
+where
+    D: embedded_graphics::draw_target::DrawTarget<Color = crate::TriColor>
+        + crate::epd_driver::PlaneAccess,
+{
     use engine::anim_files;
     use engine::to_display::DisplayAnim;
 
@@ -812,7 +816,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         use embedded_graphics::mono_font::MonoTextStyle;
         use embedded_graphics::mono_font::iso_8859_1::FONT_7X13;
         use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
-        use ssd1675::graphics::Color;
+        use crate::EpdColor as Color;
 
         let anim = lifecycle::display_anim();
         let anim_name: &str = match anim {
@@ -859,7 +863,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
 }
 
 /// Text entry callback: player has submitted a pet name.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn on_pet_named(name: &[u8]) {
     lifecycle::set_pet_name(name);
 }

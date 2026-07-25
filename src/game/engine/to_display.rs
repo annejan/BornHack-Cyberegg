@@ -24,7 +24,7 @@ use super::{Action, GameState, Phase};
 /// animation / sprite sequence.  Variants are ordered by priority —
 /// only the highest-priority active state is returned.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum DisplayAnim {
     // ── Group 1: terminal / blocking ────────────────────────────────
     /// Pet has left permanently.

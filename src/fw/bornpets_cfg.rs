@@ -22,7 +22,7 @@ const READ_BUF_LEN: usize = 2048;
 /// Pick the active preset, optionally overlay `BORNPETS.CFG`, install
 /// the result into the threshold accessor.  Returns the [`Mode`] used
 /// and whether at least one valid override row was applied.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_and_install(mode: Mode) -> (Mode, bool) {
     use crate::fw::fat12;
 
@@ -86,7 +86,7 @@ pub fn apply_overrides(values: &mut Thresholds, data: &[u8]) -> u32 {
             continue;
         };
         let Some(value_num) = parse_u32(value) else {
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             defmt::warn!("BORNPETS.CFG: cannot parse value for key");
             continue;
         };
@@ -101,7 +101,7 @@ pub fn apply_overrides(values: &mut Thresholds, data: &[u8]) -> u32 {
             }
         }
         if !handled {
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             defmt::info!("BORNPETS.CFG: unknown key, ignored");
         }
     }
@@ -150,7 +150,7 @@ fn parse_u32(s: &[u8]) -> Option<u32> {
     Some(acc)
 }
 
-#[cfg(all(test, not(feature = "embassy-base")))]
+#[cfg(all(test, not(feature = "embassy-core")))]
 mod tests {
     use super::*;
 

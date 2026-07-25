@@ -10,9 +10,9 @@
 use core::convert::Infallible;
 use core::sync::atomic::{AtomicI8, AtomicI16, AtomicU8, Ordering};
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::signal::Signal;
 
 use defmt_rtt as _;
@@ -782,7 +782,7 @@ pub static EPD_CUSTOM_LUT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Fired when [`EPD_LUT_SPEED`] is updated from the menu — drives the
 /// persister loop in [`epd_lut_speed_persist_loop`].
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static EPD_LUT_SPEED_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Load the persisted LUT-speed override (if any) into [`EPD_LUT_SPEED`].
@@ -832,7 +832,7 @@ pub const EPD_TEMP_BIAS_STEP: i8 = 5;
 
 pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static EPD_TEMP_BIAS_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // Gated on `mesh` (settings KV store) — see `load_persisted_lut_speed`.

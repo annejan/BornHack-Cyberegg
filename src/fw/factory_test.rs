@@ -524,6 +524,7 @@ pub async fn mark_passed() {
 ///    will use for tests that genuinely could hang mid-run.)
 /// 5. Footer + final refresh.  All-pass → wait for Fire → stamp KV.
 ///    Any fail → halt forever.
+#[cfg(feature = "ssd1675-driver")]
 pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::fw::epd::EpdGfx<'_>) {
     use embedded_graphics::geometry::Point;
     use embedded_graphics::mono_font::MonoTextStyle;
@@ -676,6 +677,7 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
 /// e-ink retains this image with no power, so the badge ships in
 /// its box with the test confirmation already visible — no separate
 /// sticker / label needed.
+#[cfg(feature = "ssd1675-driver")]
 async fn draw_ship_image(display: &mut crate::fw::epd::EpdGfx<'_>, lut_speed: u8) {
     use embedded_graphics::Drawable;
     use embedded_graphics::geometry::Point;
@@ -727,6 +729,7 @@ async fn draw_ship_image(display: &mut crate::fw::epd::EpdGfx<'_>, lut_speed: u8
 }
 
 /// Convenience: draw a single text string at the given position.
+#[cfg(feature = "ssd1675-driver")]
 fn draw_text(
     display: &mut crate::fw::epd::EpdGfx<'_>,
     text: &str,

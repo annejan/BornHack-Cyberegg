@@ -1170,7 +1170,7 @@ where
     // Name (bold)
     let name = entry.name.as_str();
     let name = if name.is_empty() { "(unknown)" } else { name };
-    Text::with_text_style(name, Point::new(4, 32), style_bold, bottom).draw(display)?;
+    ui::draw_text(display, name, Point::new(4, 32), style_bold, bottom)?;
 
     // Role
     let role = match entry.node_type {

@@ -8,7 +8,16 @@ pub mod button;
 pub mod buzzer;
 pub mod device_id;
 pub mod emoji;
+/// SSD1675 panel wiring + tri-colour OTP/partial refresh machinery.
+#[cfg(feature = "ssd1675-driver")]
 pub mod epd;
+/// SSD1675 [`crate::epd_driver::EpdDriver`] adapter over [`epd::EpdGfx`].
+#[cfg(feature = "ssd1675-driver")]
+pub mod epd_1675_driver;
+/// SSD1680 [`crate::epd_driver::EpdDriver`] — 152×152 canvas composed into the
+/// 200×200 panel, custom delta LUT for non-flashing partial updates.
+#[cfg(feature = "ssd1680-driver")]
+pub mod epd_1680_driver;
 pub mod factory_test;
 pub mod fat12;
 pub mod flash;

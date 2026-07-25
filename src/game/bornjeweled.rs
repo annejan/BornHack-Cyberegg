@@ -60,18 +60,18 @@ static GAME_RNG: AtomicU32 = AtomicU32::new(0xDEAD_BEEF);
 /// the embassy monotonic clock.  On the simulator: process-uptime in
 /// milliseconds.  Elsewhere (tests): fall back to a fixed seed.
 fn seed_rng() {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         let s = embassy_time::Instant::now().as_ticks() as u32;
         GAME_RNG.store(s.max(1), Ordering::Relaxed);
     }
-    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    #[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
     {
         let s = super::lifecycle::sim_elapsed_ms() as u32;
         GAME_RNG.store(s.max(1), Ordering::Relaxed);
         return;
     }
-    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+    #[cfg(not(any(feature = "embassy-core", feature = "simulator")))]
     {
         GAME_RNG.store(0xDEAD_BEEF, Ordering::Relaxed);
     }

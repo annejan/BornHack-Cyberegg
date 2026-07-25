@@ -7,9 +7,9 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::signal::Signal;
 
 use super::engine::thresholds::Mode;
@@ -28,12 +28,12 @@ static PENDING_MODE: AtomicU8 = AtomicU8::new(Mode::DEFAULT as u8);
 /// Defaults to enabled; persisted to KV so it survives a reboot.
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static SETTINGS_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Load the persisted mode from KV.  Returns [`Mode::DEFAULT`] (Classic)
 /// on first boot or if the stored value is malformed.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_mode_from_kv() -> Mode {
     let ns = crate::fw::kv::namespace(KV_NAMESPACE);
     let mut buf = [0u8; 1];
@@ -49,13 +49,13 @@ pub async fn load_mode_from_kv() -> Mode {
 /// it to KV.  Sync — safe to call from menu action handlers.
 pub fn request_mode_change(mode: Mode) {
     PENDING_MODE.store(mode as u8, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     SETTINGS_DIRTY.signal(());
 }
 
 /// Load the persisted game-enabled flag from KV.  Defaults to `true`
 /// (enabled) on first boot or if the stored value is malformed.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_enabled_from_kv() -> bool {
     let ns = crate::fw::kv::namespace(KV_NAMESPACE);
     let mut buf = [0u8; 1];
@@ -79,7 +79,7 @@ pub fn is_enabled() -> bool {
 /// button dispatch).
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     SETTINGS_DIRTY.signal(());
 }
 
@@ -98,7 +98,7 @@ pub fn pending_differs_from_active() -> bool {
 
 /// Drains [`SETTINGS_DIRTY`] and persists the pending mode to KV.
 /// Spawn once at boot.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn persister_task() {
     let ns = crate::fw::kv::namespace(KV_NAMESPACE);

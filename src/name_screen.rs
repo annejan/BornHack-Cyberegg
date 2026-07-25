@@ -128,7 +128,8 @@ where
 
         // Render the name with the MonoFont chain (profont + iso_8859_1, all
         // full Latin-1).  Also the fallback if the huge u8g2 font is missing a
-        // glyph.
+        // glyph.  Non-renderable chars were already mapped to `?` in the
+        // snapshot, so both font paths render them at the name's own size.
         let draw_mono = |display: &mut D| -> Result<(), D::Error> {
             let font = pick_name_font(len, 148);
             Text::with_text_style(
@@ -194,7 +195,7 @@ where
 /// on-screen snapshot.
 fn snapshot_name(out: &mut heapless::String<31>) {
     out.clear();
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         crate::NODE_NAME.lock(|cell| {
             let name = cell.borrow();
@@ -209,13 +210,23 @@ fn snapshot_name(out: &mut heapless::String<31>) {
     }
 }
 
-/// Push the printable ASCII (`0x20..=0x7e`) and Latin-1 (`U+00A0..=U+00FF`)
-/// characters of `name` into `out`, stopping if the buffer fills.
+/// Push the drawable characters of `name` into `out`, stopping if the buffer
+/// fills.  Printable ASCII (`0x20..=0x7e`) and Latin-1 (`U+00A0..=U+00FF`) pass
+/// through unchanged; any higher codepoint (CJK/emoji — no font glyph) is
+/// substituted with a plain `?` so it renders at the name's own (large) font
+/// size rather than a small `�` glyph amid big text, and so a name made only of
+/// such characters still shows (as `?`) rather than collapsing to "(no name
+/// set)".  C0/C1 control characters are dropped.
 fn push_renderable(out: &mut heapless::String<31>, name: &str) {
     for c in name.chars() {
-        let renderable =
-            matches!(c, ' '..='~') || matches!(c, '\u{A0}'..='\u{FF}');
-        if renderable && out.push(c).is_err() {
+        let mapped = if matches!(c, ' '..='~') || matches!(c, '\u{A0}'..='\u{FF}') {
+            c
+        } else if c.is_control() {
+            continue;
+        } else {
+            '?'
+        };
+        if out.push(mapped).is_err() {
             break;
         }
     }
@@ -227,7 +238,7 @@ fn write_device_id(out: &mut heapless::String<16>) {
     let _ = out.push_str("Cyber ");
     let _ = out.push('\u{00C6}');
     let _ = out.push_str("gg ");
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         let id = crate::fw::device_id::get_bytes();
         let _ = out.push_str(core::str::from_utf8(&id).unwrap_or("????"));
