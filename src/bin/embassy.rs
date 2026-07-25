@@ -313,6 +313,12 @@ async fn main(spawner: Spawner) {
         static CANVAS_BW_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
         static CANVAS_RED_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
 
+        // Read the panel's OWN OTP full waveform back over cmd 0x33 and halve
+        // its shake repeats. Runs BEFORE the display Spim is built (it borrows
+        // SPI3 + the EPD pins, restores TX-only, then forgets them), and is
+        // installed as the full() LUT just after Display::new below.
+        let otp_full_lut = halve_shake_rp_1680(probe_otp_full_lut_1680().await);
+
         // SPI3 bus + control pins (mirrors `epd::init_epd`).
         let mut cfg = Config::default();
         cfg.frequency = Frequency::M16;
@@ -333,7 +339,9 @@ async fn main(spawner: Spawner) {
         // x_offset = 8: the panel's leftmost visible pixel sits at controller
         // source 8, not 0 (SSD1680 has 176 sources; this module uses 152 of
         // them starting one byte in). Without it the image sits 8 px left.
-        let display = Display::new(iface, 152, 152, 8);
+        let mut display = Display::new(iface, 152, 152, 8);
+        // Install the boot-probed OTP full waveform (shake repeats halved).
+        display.set_full_lut(otp_full_lut);
 
         bornhack_aegg::fw::epd_1680_driver::Driver::new(
             display,
@@ -1119,6 +1127,168 @@ async fn display_loop_1680<D>(
 embassy_nrf::bind_interrupts!(struct Irqs1680 {
     SPIM3 => embassy_nrf::spim::InterruptHandler<embassy_nrf::peripherals::SPI3>;
 });
+
+/// Halve every group's RP (repeat) byte in a 153-byte SSD1680 waveform LUT,
+/// leaving TP drive-frame counts untouched — "fewer shake repeats, same drive".
+///
+/// Timing block = bytes 60..=143, 7 per group `[TP_A, TP_B, SR_AB, TP_C, TP_D,
+/// SR_CD, RP]`; RP of group `g` is byte `66 + 7*g` (g = 0..11). Halving RP keeps
+/// each phase's drive length (TP) but runs it half as many times.
+#[cfg(feature = "ssd1680-driver")]
+fn halve_shake_rp_1680(mut lut: [u8; 153]) -> [u8; 153] {
+    for g in 0..12usize {
+        lut[66 + 7 * g] /= 2;
+    }
+    lut
+}
+
+/// Boot-probe the SSD1680's OTP full-refresh waveform (register `0x32`, 153 B).
+///
+/// Loads the temperature-appropriate OTP band into the controller's LUT RAM
+/// (`0x22 = 0xB1`: LoadTemp | LoadOTP | Mode1, then `0x20`), then reads it back
+/// over cmd `0x33`: `0x33` is clocked out on MOSI (TX), the same data line is
+/// flipped to input (`new_rxonly`) to clock the reply in, then TX-only is
+/// restored — the single-wire read trick used by `fw::epd::probe_lut` on the
+/// SSD1675. Pins are stolen by number (board.rs: sck P0_08, mosi P0_27, busy
+/// P0_14, rst P0_11, dc P0_12, csn P1_09) and the GPIO wrappers `mem::forget`'d
+/// so the real display Spim re-owns them.
+///
+/// ⚠ UNVALIDATED on this panel: the raw bytes are logged over defmt so the OTP
+/// structure can be confirmed and the load/read sequence fixed on hardware if
+/// the reply comes back empty/garbage.
+#[cfg(feature = "ssd1680-driver")]
+async fn probe_otp_full_lut_1680() -> [u8; 153] {
+    use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
+    use embassy_nrf::peripherals;
+    use embassy_nrf::spim::{Config, Frequency, Spim};
+
+    // board.rs EPD pin numbers (port 1 = 32 + n).
+    const SCK: u8 = 8;
+    const MOSI: u8 = 27;
+    const BUSY: u8 = 14;
+    const RST: u8 = 11;
+    const DC: u8 = 12;
+    const CSN: u8 = 32 + 9;
+
+    let mut cs = Output::new(unsafe { AnyPin::steal(CSN) }, Level::High, OutputDrive::Standard);
+    let mut dc = Output::new(unsafe { AnyPin::steal(DC) }, Level::Low, OutputDrive::Standard);
+    let mut rst = Output::new(unsafe { AnyPin::steal(RST) }, Level::Low, OutputDrive::Standard);
+    let busy = Input::new(unsafe { AnyPin::steal(BUSY) }, Pull::Down);
+
+    let mut cfg = Config::default();
+    cfg.frequency = Frequency::M16;
+
+    // Hardware reset — flat 100 ms settle.
+    Timer::after_millis(10).await;
+    rst.set_high();
+    Timer::after_millis(100).await;
+
+    // Phase 1: soft reset, select the internal temp sensor, load the OTP band.
+    cs.set_low();
+    {
+        let mut tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        dc.set_low();
+        tx.write(&[0x12]).await.ok(); // SoftReset
+        dc.set_high();
+        core::mem::forget(tx);
+    }
+    cs.set_high();
+    for _ in 0..100u8 {
+        if !busy.is_high() {
+            break;
+        }
+        Timer::after_millis(10).await;
+    }
+    cs.set_low();
+    {
+        let mut tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        dc.set_low();
+        tx.write(&[0x18]).await.ok(); // TempSensorControl
+        dc.set_high();
+        tx.write(&[0x80]).await.ok(); // internal sensor
+        dc.set_low();
+        tx.write(&[0x22]).await.ok(); // UpdateDisplayOption2
+        dc.set_high();
+        tx.write(&[0xB1]).await.ok(); // LoadTemp | LoadOTP | Mode1
+        dc.set_low();
+        tx.write(&[0x20]).await.ok(); // MasterActivation
+        core::mem::forget(tx);
+    }
+    cs.set_high();
+    for _ in 0..100u8 {
+        if !busy.is_high() {
+            break;
+        }
+        Timer::after_millis(10).await;
+    }
+
+    // Phase 2: read 153 bytes from the LUT register (cmd 0x33).
+    let mut lut = [0u8; 153];
+    cs.set_low();
+    {
+        let mut tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        dc.set_low();
+        tx.write(&[0x33]).await.ok();
+        dc.set_high();
+        core::mem::forget(tx);
+    }
+    {
+        // Same data pin, now clocked as input.
+        let mut rx = Spim::new_rxonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        rx.read(&mut lut).await.ok();
+        drop(rx);
+    }
+    cs.set_high();
+
+    // Restore SPI3 to TX-only so the display Spim built next can transmit.
+    {
+        let restore = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg,
+        );
+        core::mem::forget(restore);
+    }
+
+    defmt::info!("1680 OTP full LUT read-back (153 B):");
+    for (i, chunk) in lut.chunks(16).enumerate() {
+        defmt::info!("  [{=usize:03}] {=[u8]:02x}", i * 16, chunk);
+    }
+
+    // Keep the GPIO pin config — the real display Output/Input own these next.
+    core::mem::forget(cs);
+    core::mem::forget(dc);
+    core::mem::forget(rst);
+    core::mem::forget(busy);
+
+    lut
+}
 
 /// Background task owning the Qwiic bus (TWISPI0).  Polls the optional I2C
 /// keyboard continuously while a text-entry screen is open — injecting keys
