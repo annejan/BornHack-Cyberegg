@@ -31,7 +31,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::iso_8859_1::FONT_6X10;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
@@ -43,10 +43,14 @@ use crate::{BLACK, RED, TriColor, WHITE};
 
 /// Maximum number of independent alarm slots.  Slot 0 is the user-editable
 /// "primary" alarm; slots 1..N_ALARMS-1 hold imported calendar events and
-/// other automation.  At ~11 bytes of atomics per slot, 32 slots cost
-/// ~352 bytes of RAM — comfortable for an unfiltered Bornhack day's worth
-/// of events.
-pub const N_ALARMS: usize = 32;
+/// other automation.
+///
+/// At ~44 bytes of atomics per slot (most of it the 31-byte SUMMARY),
+/// 160 slots cost ~7 KiB of RAM.  Sized for a whole festival programme
+/// with headroom rather than a single day: the 2026 Bornhack schedule is
+/// 127 events, where the previous 32 stopped a quarter of the way in and
+/// the import gave no sign it had.
+pub const N_ALARMS: usize = 160;
 
 // ── Edit-mode state ─────────────────────────────────────────────────────────
 
@@ -217,6 +221,13 @@ static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 /// fires at the start time only.
 static ALARM_END_HOUR: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+/// Show-but-don't-ring flag.  Set for imported all-day events: they're
+/// real calendar entries the day-view should list, but an all-day entry
+/// nominally starts at 00:00 and waking the camp at midnight for "Camp
+/// build-up" is not a feature.  A silent slot is skipped entirely by
+/// [`check_and_fire_alarm`], which also means it isn't auto-disabled at
+/// its start time and so stays visible for the rest of the day.
+static ALARM_SILENT: [AtomicBool; N_ALARMS] = [const { AtomicBool::new(false) }; N_ALARMS];
 /// Event SUMMARY (calendar title) per slot, NUL-padded ASCII.  Stored as
 /// per-byte atomics to match the rest of the alarm state — no
 /// synchronisation primitive needed and the byte-by-byte loads are
@@ -288,9 +299,13 @@ pub fn alarm_end_minute_n(slot: usize) -> u8 {
 
 /// Returns the slot's SUMMARY as a heapless string.  Empty if no
 /// summary was set (e.g. slot 0, or pre-import).
-pub fn alarm_summary_n(slot: usize) -> heapless::String<SUMMARY_LEN> {
+///
+/// The slot stores Latin-1, one byte per character, so `b as char` is the
+/// decode; the result needs twice the capacity because a Latin-1 letter
+/// is two bytes once re-encoded as UTF-8.
+pub fn alarm_summary_n(slot: usize) -> heapless::String<{ SUMMARY_LEN * 2 }> {
     let i = s(slot);
-    let mut out: heapless::String<SUMMARY_LEN> = heapless::String::new();
+    let mut out: heapless::String<{ SUMMARY_LEN * 2 }> = heapless::String::new();
     for byte_atomic in ALARM_SUMMARY[i].iter() {
         let b = byte_atomic.load(Ordering::Relaxed);
         if b == 0 {
@@ -342,6 +357,16 @@ pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
 pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
     ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
     super::signal_settings_dirty();
+}
+
+/// Whether `slot` is shown on the calendar but never rings.
+pub fn alarm_silent_n(slot: usize) -> bool {
+    ALARM_SILENT[s(slot)].load(Ordering::Relaxed)
+}
+
+/// Mark `slot` show-but-don't-ring — see [`ALARM_SILENT`].
+pub fn set_alarm_silent_n(slot: usize, silent: bool) {
+    ALARM_SILENT[s(slot)].store(silent, Ordering::Relaxed);
 }
 
 /// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
@@ -414,6 +439,7 @@ pub fn clear_imported_alarms() {
         ALARM_DAY[slot].store(0, Ordering::Relaxed);
         ALARM_END_HOUR[slot].store(0, Ordering::Relaxed);
         ALARM_END_MINUTE[slot].store(0, Ordering::Relaxed);
+        ALARM_SILENT[slot].store(false, Ordering::Relaxed);
         for byte_atomic in ALARM_SUMMARY[slot].iter() {
             byte_atomic.store(0, Ordering::Relaxed);
         }
@@ -623,7 +649,7 @@ pub fn check_and_fire_alarm() {
     };
     let mut fired = false;
     for slot in 0..N_ALARMS {
-        if !alarm_enabled_n(slot) {
+        if !alarm_enabled_n(slot) || alarm_silent_n(slot) {
             continue;
         }
         // Date- vs day-mask gate.

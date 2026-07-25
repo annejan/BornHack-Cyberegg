@@ -31,7 +31,7 @@
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::iso_8859_1::FONT_6X10;
 use embedded_graphics::mono_font::iso_8859_1::{FONT_6X13_BOLD, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
@@ -185,6 +185,16 @@ fn collect_sorted(out: &mut [EventRow; MAX_EVENTS]) -> usize {
         out[j] = key;
     }
     n
+}
+
+/// Drop the first `n` *characters* of `s`.  Empty once `n` runs past the
+/// end.  Used for the day-view title scroll, where counting bytes would
+/// split a multi-byte character in an accented title.
+fn scroll_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((byte, _)) => &s[byte..],
+        None => "",
+    }
 }
 
 fn cmp_event(a: &EventRow, b: &EventRow) -> core::cmp::Ordering {
@@ -543,6 +553,22 @@ where
         .baseline(Baseline::Middle)
         .alignment(Alignment::Left)
         .build();
+    // A truncated import gets its own line so a half-loaded programme
+    // says so on the screen you'd notice it on, instead of just in the
+    // boot log.  Drawn in red — this is missing data, not a status note.
+    let dropped = super::events_dropped();
+    if dropped > 0 {
+        let mut warn: heapless::String<32> = heapless::String::new();
+        let _ = core::fmt::write(&mut warn, format_args!("! {dropped} events not loaded"));
+        draw_bold(
+            display,
+            &warn,
+            Point::new(76, FOOTER_Y_2),
+            MonoTextStyle::new(&FONT_6X10, RED),
+            centered,
+        )?;
+    }
+
     if cursor_evs.is_empty() {
         draw_bold(
             display,
@@ -567,7 +593,10 @@ where
             left,
         )?;
 
-        if cursor_evs.len() > 1 {
+        // Both want the second footer line; the missing-events warning
+        // wins, since "+ 3 more" is recoverable by opening the day and
+        // "20 events not loaded" isn't.
+        if cursor_evs.len() > 1 && dropped == 0 {
             let mut more: heapless::String<24> = heapless::String::new();
             let _ = core::fmt::write(&mut more, format_args!("+ {} more", cursor_evs.len() - 1));
             draw_bold(
@@ -794,13 +823,14 @@ where
         // render as bare time markers.
         if block_h >= 13 {
             let summary = alarm_summary_n(ev.slot as usize);
-            // Apply the global title scroll offset.  `get(N..)` returns
-            // None if N is past the end of the (NUL-trimmed) summary —
-            // fine, the title row just renders as the bare time prefix
-            // for that event, which still tells the user what's where
-            // and is the cue to press Execute back.
+            // Apply the global title scroll offset.  Counted in
+            // characters, not bytes: an accented title is UTF-8 here, so
+            // a byte offset would land mid-sequence and blank the row.
+            // Past the end the title renders as the bare time prefix,
+            // which still tells the user what's where and is the cue to
+            // press Execute back.
             let scroll = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed) as usize;
-            let scrolled = summary.as_str().get(scroll..).unwrap_or("");
+            let scrolled = scroll_chars(summary.as_str(), scroll);
             let mut row: heapless::String<48> = heapless::String::new();
             let _ = core::fmt::write(
                 &mut row,

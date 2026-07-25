@@ -133,13 +133,23 @@ pub async fn settings_persister_task() {
 /// The default melody (`ALARM` beep-beep) is applied; the trigger
 /// auto-disables each one-shot slot after firing, so old events stop
 /// alarming themselves at midnight.
-/// Read buffer used to slurp `ALARMS.ICS` at boot.  Larger than the
-/// previous 4 KiB so a stripped Bornhack-programme dump (~100 events ×
-/// ~250 B per event with DESCRIPTION/UID/etc removed) fits.  Lives on
-/// the stack only during the brief boot import — released before any
-/// user-facing task starts.
+/// Read window used to walk `ALARMS.ICS` at boot.  The file is parsed in
+/// chunks rather than slurped, so its size is not a limit on how many
+/// events can be imported — only [`alarm::N_ALARMS`] is.  8 KiB holds
+/// many whole `VEVENT` blocks at a time while staying comfortable on the
+/// main task's stack during the brief boot import.
 #[cfg(feature = "embassy-base")]
-const ICS_READ_BUF_LEN: usize = 16 * 1024;
+const ICS_READ_BUF_LEN: usize = 8 * 1024;
+
+/// How many events the last import had to leave out because the slots
+/// ran out.  Surfaced on the calendar screen so a truncated import says
+/// so instead of quietly showing half a programme.
+static EVENTS_DROPPED: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+
+/// Events the last import could not fit into the available slots.
+pub fn events_dropped() -> u16 {
+    EVENTS_DROPPED.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 #[cfg(feature = "embassy-base")]
 pub async fn import_alarms_from_fat12() {
@@ -147,6 +157,8 @@ pub async fn import_alarms_from_fat12() {
 
     use crate::fw::fat12;
     use crate::fw::led::{self, LED_BLUE, LedState};
+
+    EVENTS_DROPPED.store(0, Ordering::Relaxed);
 
     let Some(name) = fat12::to_8_3("ALARMS.ICS") else {
         return;
@@ -162,77 +174,71 @@ pub async fn import_alarms_from_fat12() {
     // read+parse, off when the slots are populated.
     led::set_led(&LED_BLUE, LedState::On);
 
-    // Boxed onto the heap-equivalent? No heap — keep on stack.  16 KiB
-    // is fine on the main task's stack during this brief boot phase.
-    let mut buf = [0u8; ICS_READ_BUF_LEN];
-    let n = match fat12::read_file(&file, 0, &mut buf).await {
-        Ok(n) => n,
-        Err(_) => {
-            led::set_led(&LED_BLUE, LedState::Off);
-            return;
-        }
-    };
-
     // Pull the wall-clock UTC offset once — applied to any event whose
     // DTSTART / DTEND carried a `Z` suffix.  The badge has no tzdata,
     // so non-Z timestamps (floating local time, `TZID=...:` values) are
     // taken at face value.
     let tz_offset = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
 
+    let mut buf = [0u8; ICS_READ_BUF_LEN];
     let mut slot = 1usize; // slot 0 stays reserved for the manual alarm
-    for event in ics::Parser::new(&buf[..n]) {
-        if slot >= alarm::N_ALARMS {
+    let mut dropped = 0u16;
+    // Byte offset in the file that `buf[0]` corresponds to, and how much
+    // of `buf` is carried over from the previous window (the tail of a
+    // `VEVENT` that straddled the boundary).
+    let mut file_pos = 0usize;
+    let mut carry = 0usize;
+
+    loop {
+        let read = match fat12::read_file(&file, (file_pos + carry) as u32, &mut buf[carry..]).await
+        {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        let avail = carry + read;
+        if avail == 0 {
             break;
         }
-        let (sy, sm, sd, sh, smi) = if event.start_is_utc {
-            shift_utc_to_local(
-                event.year,
-                event.month,
-                event.day,
-                event.hour,
-                event.minute,
-                tz_offset,
-            )
-        } else {
-            (event.year, event.month, event.day, event.hour, event.minute)
-        };
-        let (ey, em, ed, eh, emi) = if event.end_is_utc {
-            shift_utc_to_local(
-                event.end_year,
-                event.end_month,
-                event.end_day,
-                event.end_hour,
-                event.end_minute,
-                tz_offset,
-            )
-        } else {
-            (
-                event.end_year,
-                event.end_month,
-                event.end_day,
-                event.end_hour,
-                event.end_minute,
-            )
-        };
 
-        // Day-view assumes start and end are on the same day.  Multi-
-        // day events get clamped to 23:59 of the start day so the
-        // renderer doesn't have to reason about midnight crossings.
-        let (final_eh, final_emi) = if (ey, em, ed) == (sy, sm, sd) {
-            (eh, emi)
-        } else {
-            (23, 59)
-        };
+        let mut parser = ics::Parser::new(&buf[..avail]);
+        for event in &mut parser {
+            if slot >= alarm::N_ALARMS {
+                dropped = dropped.saturating_add(1);
+                continue;
+            }
+            store_event(slot, &event, tz_offset);
+            slot += 1;
+        }
 
-        alarm::set_alarm_time_n(slot, sh, smi);
-        alarm::set_alarm_date_n(slot, sy, sm, sd);
-        alarm::set_alarm_end_time_n(slot, final_eh, final_emi);
-        alarm::set_alarm_summary_n(slot, &event.summary);
-        alarm::set_alarm_enabled_n(slot, true);
-        slot += 1;
+        let used = parser.consumed();
+        if read == 0 {
+            break; // end of file, and the tail held no further event
+        }
+        if used == 0 && avail == buf.len() {
+            // A single VEVENT longer than the whole window — skip it
+            // rather than spinning on the same bytes forever.
+            file_pos += avail;
+            carry = 0;
+            continue;
+        }
+        // Keep the unparsed tail and refill behind it.
+        carry = avail - used;
+        buf.copy_within(used..avail, 0);
+        file_pos += used;
     }
+
     let imported = slot - 1;
-    defmt::info!("imported {} alarm(s) from ALARMS.ICS", imported);
+    EVENTS_DROPPED.store(dropped, Ordering::Relaxed);
+    if dropped > 0 {
+        defmt::warn!(
+            "imported {} alarm(s) from ALARMS.ICS, {} dropped (only {} slots)",
+            imported,
+            dropped,
+            alarm::N_ALARMS - 1
+        );
+    } else {
+        defmt::info!("imported {} alarm(s) from ALARMS.ICS", imported);
+    }
 
     // Done — drop the blue "working" indicator and (on success) flash a
     // single green pulse so the user knows events landed in slots.
@@ -240,6 +246,62 @@ pub async fn import_alarms_from_fat12() {
     if imported > 0 {
         led::set_led(&crate::fw::led::LED_GREEN, LedState::Duty50Once);
     }
+}
+
+/// Write one parsed event into an alarm slot, converting UTC timestamps
+/// to local time on the way in.
+#[cfg(feature = "embassy-base")]
+fn store_event(slot: usize, event: &ics::Event, tz_offset: i8) {
+    // All-day events carry no meaningful clock time, so there is nothing
+    // to shift — and shifting would push them onto the wrong day.
+    let (sy, sm, sd, sh, smi) = if event.start_is_utc && !event.all_day {
+        shift_utc_to_local(
+            event.year,
+            event.month,
+            event.day,
+            event.hour,
+            event.minute,
+            tz_offset,
+        )
+    } else {
+        (event.year, event.month, event.day, event.hour, event.minute)
+    };
+    let (ey, em, ed, eh, emi) = if event.end_is_utc && !event.all_day {
+        shift_utc_to_local(
+            event.end_year,
+            event.end_month,
+            event.end_day,
+            event.end_hour,
+            event.end_minute,
+            tz_offset,
+        )
+    } else {
+        (
+            event.end_year,
+            event.end_month,
+            event.end_day,
+            event.end_hour,
+            event.end_minute,
+        )
+    };
+
+    // Day-view assumes start and end are on the same day.  Multi-
+    // day events get clamped to 23:59 of the start day so the
+    // renderer doesn't have to reason about midnight crossings.
+    let (final_eh, final_emi) = if (ey, em, ed) == (sy, sm, sd) {
+        (eh, emi)
+    } else {
+        (23, 59)
+    };
+
+    alarm::set_alarm_time_n(slot, sh, smi);
+    alarm::set_alarm_date_n(slot, sy, sm, sd);
+    alarm::set_alarm_end_time_n(slot, final_eh, final_emi);
+    alarm::set_alarm_summary_n(slot, &event.summary);
+    // An all-day entry belongs on the calendar but must not ring at
+    // midnight — see `alarm::set_alarm_silent_n`.
+    alarm::set_alarm_silent_n(slot, event.all_day);
+    alarm::set_alarm_enabled_n(slot, true);
 }
 
 /// Shift a UTC `(Y, M, D, H, Mi)` to local time using the given hour

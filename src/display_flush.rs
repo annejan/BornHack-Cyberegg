@@ -62,10 +62,26 @@ pub fn feed(btn: ButtonId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
     use super::*;
+
+    /// `feed` advances a module-level static, so these tests share one
+    /// piece of state and must not run concurrently.  Take this first in
+    /// every test; it also resets the progress so a test never inherits
+    /// a partial sequence from the one before it.
+    static SEQ_LOCK: Mutex<()> = Mutex::new(());
+
+    fn exclusive() -> MutexGuard<'static, ()> {
+        let guard = SEQ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Any button not starting the sequence clears progress.
+        let _ = feed(ButtonId::Execute);
+        guard
+    }
 
     #[test]
     fn full_sequence_returns_true_once() {
+        let _guard = exclusive();
         let mut result = false;
         for &btn in &SEQUENCE {
             result = feed(btn);
@@ -75,6 +91,7 @@ mod tests {
 
     #[test]
     fn wrong_button_resets_progress() {
+        let _guard = exclusive();
         assert!(!feed(ButtonId::Down));
         assert!(!feed(ButtonId::Down));
         // Wrong button here — breaks the sequence.
@@ -88,6 +105,7 @@ mod tests {
 
     #[test]
     fn partial_progress_never_returns_true_early() {
+        let _guard = exclusive();
         for &btn in &SEQUENCE[..SEQUENCE.len() - 1] {
             assert!(!feed(btn));
         }

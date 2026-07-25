@@ -1633,7 +1633,8 @@ fn fmt_alarm_slot(buf: &mut heapless::String<24>, slot: u8) {
 }
 
 /// Visibility predicate: only show enabled slots so the menu doesn't
-/// scroll past 31 empties when only a couple of events are loaded.
+/// scroll past a screenful of empties when only a couple of events are
+/// loaded.
 #[cfg(feature = "watch")]
 fn slot_alarm_visible(slot: u8) -> bool {
     crate::watch::alarm_enabled_n(slot as usize)
@@ -1657,7 +1658,9 @@ fn action_add_quick_test() {}
 /// `import_alarms_from_fat12` at boot from `ALARMS.ICS` — there's no
 /// on-device add path; this submenu is observe-only plus a "Clear all"
 /// destructive action.  One shared formatter + visibility predicate
-/// handles all 31 slot rows via `MenuItemKind::SlotInfo`.
+/// handles every slot row via `MenuItemKind::SlotInfo`; empty slots are
+/// hidden, so the list is as long as the imported programme, not as long
+/// as the slot array.
 #[cfg(feature = "watch")]
 macro_rules! events_items {
     ($($n:literal),* $(,)?) => {
@@ -1688,12 +1691,18 @@ macro_rules! events_items {
     };
 }
 
-// 1 (Back) + 1 (Quick test) + 1 (Sep) + 31 (slot rows) + 1 (Sep) + 1 (Clear) =
-// 36.
+// 1 (Back) + 1 (Quick test) + 1 (Sep) + 159 (slot rows) + 1 (Sep) + 1 (Clear)
+// = 164.  Must stay in step with `alarm::N_ALARMS`; the test below checks it.
 #[cfg(feature = "watch")]
-static EVENTS_ITEMS: [MenuItem; 36] = events_items!(
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-    27, 28, 29, 30, 31,
+static EVENTS_ITEMS: [MenuItem; 164] = events_items!(
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+    70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91,
+    92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+    111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+    129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146,
+    147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
 );
 
 #[cfg(feature = "game")]
@@ -2859,6 +2868,21 @@ mod tests {
             label: || "-",
             kind: MenuItemKind::Separator,
         }
+    }
+
+    /// The Events submenu lists one row per event slot, spelled out as a
+    /// literal list.  If `N_ALARMS` grows the list has to grow with it,
+    /// or the tail of an imported programme becomes unreachable there.
+    #[test]
+    #[cfg(feature = "watch")]
+    fn events_menu_covers_every_slot() {
+        // Back + Quick test + separator + slots + separator + Clear all.
+        const FIXED_ROWS: usize = 5;
+        assert_eq!(
+            EVENTS_ITEMS.len(),
+            crate::watch::N_ALARMS - 1 + FIXED_ROWS,
+            "EVENTS_ITEMS must list slots 1..N_ALARMS"
+        );
     }
 
     /// The carousel table has to be a permutation of the screen indices —
