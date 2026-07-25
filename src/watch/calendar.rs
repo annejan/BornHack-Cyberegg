@@ -121,6 +121,14 @@ static DAY_LIST_SCROLL: AtomicU8 = AtomicU8::new(0);
 const PM_BADGE_CX: i32 = 76;
 const PM_BADGE_CY: i32 = 8;
 
+/// Buffer size for an event row: `HH:MM-HH:MM ` plus the label.
+///
+/// Labels are stored as Latin-1, one byte per character, but a heapless
+/// `String` holds UTF-8 — so a 31-character title can be 62 bytes once
+/// decoded.  Sizing this for 31 *bytes* silently dropped the whole title
+/// on any accented event, because `push_str` is all-or-nothing.
+const ROW_BUF: usize = super::ics::SUMMARY_LEN * 2 + 16;
+
 const MONTH_LABEL_Y: i32 = 25; // baseline middle
 const WEEKDAY_STRIP_Y: i32 = 39;
 
@@ -525,11 +533,12 @@ where
     // alarm look like a working one.
     let dropped = super::events_dropped();
     if dropped > 0 {
-        let mut warn: heapless::String<32> = heapless::String::new();
-        let _ = core::fmt::write(
-            &mut warn,
-            format_args!("! {dropped} of {} won't ring", super::events_total()),
-        );
+        // Kept short on purpose: at 6 px/char the 152 px panel takes 25
+        // characters, and `dropped` is a u16 — spelling out the total as
+        // well would run off the edge on a big calendar.  The boot log
+        // carries the full "N events, M armed, K beyond the slots".
+        let mut warn: heapless::String<24> = heapless::String::new();
+        let _ = core::fmt::write(&mut warn, format_args!("! {dropped} can't ring"));
         draw_bold(
             display,
             &warn,
@@ -550,7 +559,7 @@ where
     } else {
         let ev0 = cursor_evs[0];
         let summary = ev0.summary();
-        let mut row: heapless::String<48> = heapless::String::new();
+        let mut row: heapless::String<ROW_BUF> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
             format_args!("{:02}:{:02} {}", ev0.hour, ev0.minute, summary.as_str()),
@@ -681,7 +690,14 @@ where
         // very top edge.
         let anchored = (chosen - 1).clamp(0, 24 - HOURS_VISIBLE);
         top_hour = anchored as u8;
-        DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
+        // Only commit the resolved position once there is a day to
+        // anchor on.  The first frame after the cursor moves can render
+        // before the day cache has been refilled; storing then would
+        // pin the view to a default hour and never auto-scroll to the
+        // events once they arrive.
+        if !day_evs.is_empty() {
+            DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
+        }
     } else if (top_hour as i32) > 24 - HOURS_VISIBLE {
         top_hour = (24 - HOURS_VISIBLE) as u8;
         DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
@@ -797,7 +813,7 @@ where
             // press Execute back.
             let scroll = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed) as usize;
             let scrolled = scroll_chars(summary.as_str(), scroll);
-            let mut row: heapless::String<48> = heapless::String::new();
+            let mut row: heapless::String<ROW_BUF> = heapless::String::new();
             let _ = core::fmt::write(
                 &mut row,
                 format_args!("{:02}:{:02} {}", ev.hour, ev.minute, scrolled),
@@ -947,7 +963,7 @@ where
         }
         let ev = day_evs[idx as usize];
         let summary = ev.summary();
-        let mut row: heapless::String<48> = heapless::String::new();
+        let mut row: heapless::String<ROW_BUF> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
             format_args!(
@@ -1023,6 +1039,64 @@ mod tests {
         // roughly y=1..15; the 13 px envelope has to sit inside it.
         assert!(PM_BADGE_CY - BADGE_W / 2 >= 1);
         assert!(PM_BADGE_CY + BADGE_W / 2 <= 15);
+    }
+
+    /// An event row is `HH:MM-HH:MM ` plus the label.  Labels are stored
+    /// as Latin-1 (one byte per character) but rendered from UTF-8, so a
+    /// full-length accented title doubles in size — and `heapless`
+    /// `push_str` is all-or-nothing, so a row buffer one byte too small
+    /// drops the entire title rather than clipping it.
+    #[test]
+    fn row_buffer_holds_a_full_length_accented_title() {
+        use core::fmt::Write;
+
+        let worst = super::super::CachedEvent {
+            hour: 23,
+            minute: 59,
+            end_hour: 23,
+            end_minute: 59,
+            summary: [0xc6; super::super::ics::SUMMARY_LEN], // 31 x 'Æ'
+        };
+        let label = worst.summary();
+        assert_eq!(label.chars().count(), super::super::ics::SUMMARY_LEN);
+        assert_eq!(label.len(), super::super::ics::SUMMARY_LEN * 2, "two bytes each");
+
+        let mut row: heapless::String<ROW_BUF> = heapless::String::new();
+        write!(
+            row,
+            "{:02}:{:02}-{:02}:{:02} {}",
+            worst.hour,
+            worst.minute,
+            worst.end_hour,
+            worst.end_minute,
+            label.as_str()
+        )
+        .expect("row buffer must hold the widest event row");
+        assert!(row.ends_with('Æ'), "title survived: {row:?}");
+    }
+
+    /// Footer strings are drawn at 6 px/char on a 152 px panel, so 25
+    /// characters is the hard limit.  Both of these interpolate counts
+    /// that can grow, which is exactly how text has run off this panel
+    /// before.
+    #[test]
+    fn footer_warnings_fit_the_panel() {
+        use core::fmt::Write;
+        const MAX_CHARS: usize = 152 / 6;
+
+        let mut warn: heapless::String<24> = heapless::String::new();
+        let _ = write!(warn, "! {} can't ring", u16::MAX);
+        assert!(
+            warn.chars().count() <= MAX_CHARS,
+            "ring warning too wide: {warn:?}"
+        );
+
+        let mut more: heapless::String<24> = heapless::String::new();
+        let _ = write!(more, "+{} more today", u8::MAX);
+        assert!(
+            more.chars().count() <= MAX_CHARS,
+            "overflow note too wide: {more:?}"
+        );
     }
 
     #[test]

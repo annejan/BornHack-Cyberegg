@@ -244,18 +244,26 @@ pub async fn import_alarms_from_fat12() {
     }
 }
 
-/// Set by **Settings → Events → Reload from ICS** to ask
-/// [`ics_reload_task`] for an immediate re-import.  A signal rather than
-/// a direct call because the import is async and menu actions are not.
+/// Wakes [`ics_reload_task`] for either kind of work.  What the work
+/// *is* lives in [`RELOAD_PENDING`] and [`DAY_REQUEST`], because the two
+/// can be raised together and a bare signal can't tell them apart.
 #[cfg(feature = "embassy-base")]
 pub static ICS_RELOAD_SIGNAL: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
 > = embassy_sync::signal::Signal::new();
 
+/// Set by **Settings → Events → Reload from ICS**, cleared once the
+/// re-import runs.  Separate from the signal so a day request arriving
+/// in the same window can't consume the reload and lose it.
+#[cfg(feature = "embassy-base")]
+static RELOAD_PENDING: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 /// Menu action: re-read `ALARMS.ICS` without a reboot.
 #[cfg(feature = "embassy-base")]
 pub fn request_ics_reload() {
+    RELOAD_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
     ICS_RELOAD_SIGNAL.signal(());
 }
 
@@ -273,6 +281,8 @@ pub fn request_ics_reload() {
 #[cfg(feature = "embassy-base")]
 #[embassy_executor::task]
 pub async fn ics_reload_task() {
+    use core::sync::atomic::Ordering;
+
     use embassy_time::{Duration, Timer};
 
     /// How long the host must stay quiet before we treat a copy as done.
@@ -285,29 +295,35 @@ pub async fn ics_reload_task() {
 
     loop {
         // Wait for a trigger: a day the calendar wants cached, a manual
-        // reload, or the host having written to the FAT partition.
+        // reload, or the host having written to the FAT partition.  Day
+        // requests are served first and looped on — they're cheap, and
+        // whoever asked is looking at a blank day right now.
         let manual = loop {
-            if ICS_RELOAD_SIGNAL.signaled() {
-                ICS_RELOAD_SIGNAL.reset();
-                // A pending day request is the cheap case — serve it and
-                // go back to waiting rather than re-importing.
-                let req = DAY_REQUEST.swap(0, core::sync::atomic::Ordering::Relaxed);
-                if req != 0 {
-                    let (y, m, d) = (
-                        (req >> 16) as u16,
-                        ((req >> 8) & 0xff) as u8,
-                        (req & 0xff) as u8,
-                    );
-                    load_day(y, m, d).await;
-                    crate::TOAST_SIGNAL.signal(());
-                    continue;
-                }
+            let req = DAY_REQUEST.swap(0, Ordering::Relaxed);
+            if req != 0 {
+                let (y, m, d) = (
+                    (req >> 16) as u16,
+                    ((req >> 8) & 0xff) as u8,
+                    (req & 0xff) as u8,
+                );
+                load_day(y, m, d).await;
+                crate::TOAST_SIGNAL.signal(());
+                continue;
+            }
+            if RELOAD_PENDING.swap(false, Ordering::Relaxed) {
                 break true;
             }
             if host_write_count() != seen {
                 break false;
             }
-            Timer::after(POLL).await;
+            ICS_RELOAD_SIGNAL.reset();
+            // Wake on the next request, or poll for host writes — MSC
+            // gives no completion notification, so those need polling.
+            let _ = embassy_futures::select::select(
+                ICS_RELOAD_SIGNAL.wait(),
+                Timer::after(POLL),
+            )
+            .await;
         };
 
         if !manual {
@@ -491,9 +507,16 @@ fn index_mark(event: &ics::Event) {
         start
     } else if start_i32 < base {
         // An earlier event than anything seen so far: slide the window
-        // back, dropping whatever falls off the far end. Rare — exports
-        // are chronological — and losing a dot beyond a two-year span is
-        // better than losing the near-term ones.
+        // back so it fits. Rare — exports are chronological.
+        //
+        // Refuse the slide when it would push everything already indexed
+        // out of the window: one stray event from years ago would
+        // otherwise wipe the whole calendar's dots and leave every later
+        // event out of range too. Dropping the outlier loses one day's
+        // dot; honouring it loses all of them.
+        if base as i64 - start >= INDEX_DAYS as i64 {
+            return;
+        }
         index_shift(base as i64 - start);
         INDEX_BASE.store(start_i32, Ordering::Relaxed);
         start
@@ -936,6 +959,25 @@ mod tests {
 
         assert!(day_has_events(2026, 6, 1), "earlier event lost the window");
         assert!(day_has_events(2026, 7, 15), "later event fell out");
+    }
+
+    #[test]
+    fn a_stray_ancient_event_does_not_wipe_the_index() {
+        let _guard = exclusive();
+        // Anchor on a real programme...
+        index_mark(&event((2026, 7, 15), (2026, 7, 18)));
+        // ...then a single event from years earlier turns up. Sliding the
+        // window back that far would push the programme out of range and
+        // leave the calendar with no dots at all.
+        index_mark(&event((2005, 1, 1), (2005, 1, 1)));
+
+        assert!(day_has_events(2026, 7, 15), "the programme must survive");
+        assert!(day_has_events(2026, 7, 18));
+        assert!(
+            !day_has_events(2005, 1, 1),
+            "the outlier is dropped, not honoured"
+        );
+        assert_eq!(first_indexed_day(), Some((2026, 7, 15)));
     }
 
     #[test]

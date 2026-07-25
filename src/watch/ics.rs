@@ -272,7 +272,12 @@ impl Pending {
                 let mut months = (y as i32) * 12 + (m as i32 - 1);
                 for _ in 0..MAX_SEARCH_STEPS {
                     months += interval;
-                    let (ny, nm) = ((months / 12) as u16, (months % 12) as u8 + 1);
+                    // `as u16` would wrap here on a large INTERVAL and
+                    // hand back a year in the past, which then reads as a
+                    // perfectly valid occurrence.  Run off the end of the
+                    // calendar instead.
+                    let ny = u16::try_from(months / 12).ok()?;
+                    let nm = (months % 12) as u8 + 1;
                     if d <= days_in_month(ny, nm) {
                         return Some((ny, nm, d));
                     }
@@ -619,13 +624,20 @@ fn parse_datetime(value: &[u8]) -> Option<ParsedDateTime> {
     Some((year, month, day, hour, minute, is_utc, false))
 }
 
+/// Parse an all-digit byte slice.  `None` on a non-digit, on an empty
+/// slice, or on a value too large for `u32` — `RRULE` parameters are
+/// unbounded in the file, and silently wrapping a 20-digit `COUNT` into
+/// a small number is worse than ignoring the rule.
 fn digits(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() {
+        return None;
+    }
     let mut n = 0u32;
     for &b in bytes {
         if !b.is_ascii_digit() {
             return None;
         }
-        n = n * 10 + (b - b'0') as u32;
+        n = n.checked_mul(10)?.checked_add((b - b'0') as u32)?;
     }
     Some(n)
 }
@@ -1177,6 +1189,78 @@ DTSTART:20250101T090000\n\
 RRULE:FREQ=DAILY\n\
 END:VEVENT\n";
         assert_eq!(Parser::new(doc).count(), MAX_OCCURRENCES as usize);
+    }
+
+    /// `RRULE` values come from a host-writable file, so every numeric
+    /// parameter is attacker-controlled.  None of these may wrap into a
+    /// plausible-looking date or run away.
+    #[test]
+    fn hostile_rrule_parameters_are_rejected_not_wrapped() {
+        // A huge INTERVAL used to wrap the computed year back into the
+        // past via `as u16`, producing occurrences *before* DTSTART.
+        let doc = b"BEGIN:VEVENT\n\
+SUMMARY:Wrap\n\
+DTSTART:20260101T090000\n\
+RRULE:FREQ=MONTHLY;INTERVAL=65535;COUNT=5\n\
+END:VEVENT\n";
+        let evs: std::vec::Vec<_> = Parser::new(doc).collect();
+        for e in &evs {
+            assert!(
+                (e.year, e.month, e.day) >= (2026, 1, 1),
+                "occurrence before DTSTART: {:?}",
+                (e.year, e.month, e.day)
+            );
+        }
+
+        // Digit strings longer than u32 can hold must not wrap into a
+        // small COUNT/INTERVAL.
+        for rule in [
+            &b"FREQ=DAILY;COUNT=99999999999999999999"[..],
+            &b"FREQ=DAILY;INTERVAL=99999999999999999999"[..],
+            &b"FREQ=DAILY;UNTIL=99999999999999999999"[..],
+        ] {
+            let doc = std::format!(
+                "BEGIN:VEVENT\nSUMMARY:X\nDTSTART:20260101T090000\nRRULE:{}\nEND:VEVENT\n",
+                core::str::from_utf8(rule).unwrap()
+            );
+            let n = Parser::new(doc.as_bytes()).count();
+            assert!(
+                n <= MAX_OCCURRENCES as usize,
+                "rule {rule:?} expanded to {n}"
+            );
+        }
+    }
+
+    /// Every occurrence a rule yields must be a real date, whatever the
+    /// file asked for.
+    #[test]
+    fn every_occurrence_is_a_valid_date() {
+        for rule in [
+            "FREQ=DAILY;INTERVAL=400",
+            "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU",
+            "FREQ=MONTHLY;INTERVAL=7",
+            "FREQ=YEARLY;INTERVAL=3",
+        ] {
+            let doc = std::format!(
+                "BEGIN:VEVENT\nSUMMARY:X\nDTSTART:20260131T090000\nRRULE:{rule}\nEND:VEVENT\n"
+            );
+            let mut prev = None;
+            for e in Parser::new(doc.as_bytes()) {
+                assert!((1..=12).contains(&e.month), "{rule}: month {}", e.month);
+                assert!(
+                    e.day >= 1 && e.day <= days_in_month(e.year, e.month),
+                    "{rule}: {}-{}-{} is not a real date",
+                    e.year,
+                    e.month,
+                    e.day
+                );
+                let now = days_from_civil(e.year, e.month, e.day);
+                if let Some(p) = prev {
+                    assert!(now > p, "{rule}: occurrences must move forward");
+                }
+                prev = Some(now);
+            }
+        }
     }
 
     #[test]
