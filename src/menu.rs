@@ -34,6 +34,55 @@ impl ScreenId {
     pub const COUNT: usize = 9;
 }
 
+/// Carousel order — the sequence left/right walks through, as screen
+/// indices.
+///
+/// Screens are *stored* in [`ScreenId`] order; this table decides only the
+/// order you page through them, and its first enabled entry is the boot
+/// screen.  Keeping the two apart means the persisted `SCREEN_*` constants,
+/// NFC jumps and `request_screen` targets stay stable across editions.
+#[cfg(not(feature = "organizer"))]
+const SCREEN_ORDER: [u8; ScreenId::COUNT] = [
+    ScreenId::Game.index(),
+    ScreenId::Main.index(),
+    ScreenId::Pm.index(),
+    ScreenId::Channel.index(),
+    ScreenId::Advert.index(),
+    ScreenId::Watch.index(),
+    ScreenId::Calendar.index(),
+    ScreenId::Name.index(),
+    ScreenId::Qr.index(),
+];
+
+/// Organizer edition: no game, and the badge boots into the calendar so it
+/// reads as a desk clock first and a radio second.  Game stays in the table
+/// (the array is fixed-size) but its enabled bit is never set without the
+/// `game` feature, so navigation skips it.
+#[cfg(feature = "organizer")]
+const SCREEN_ORDER: [u8; ScreenId::COUNT] = [
+    ScreenId::Calendar.index(),
+    ScreenId::Watch.index(),
+    ScreenId::Main.index(),
+    ScreenId::Pm.index(),
+    ScreenId::Channel.index(),
+    ScreenId::Advert.index(),
+    ScreenId::Name.index(),
+    ScreenId::Qr.index(),
+    ScreenId::Game.index(),
+];
+
+/// Position of `screen` in [`SCREEN_ORDER`], or `None` when it isn't listed.
+const fn order_pos(screen: u8) -> Option<usize> {
+    let mut i = 0;
+    while i < SCREEN_ORDER.len() {
+        if SCREEN_ORDER[i] == screen {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 // ── Button identifiers ──────────────────────────────────────────────────────
 
 /// Hardware button / joystick direction.
@@ -384,16 +433,17 @@ pub struct DisplayState<const M: usize> {
 
 impl<const M: usize> DisplayState<M> {
     pub const fn new(screens: [ScreenState; M], enabled: [bool; M]) -> Self {
-        // Start on the first enabled screen (or 0 if none enabled).
+        // Start on the first enabled screen in carousel order (or 0 if none
+        // are enabled).
         let mut first = 0u8;
-        while (first as usize) < M {
-            if enabled[first as usize] {
+        let mut i = 0;
+        while i < SCREEN_ORDER.len() {
+            let s = SCREEN_ORDER[i] as usize;
+            if s < M && enabled[s] {
+                first = SCREEN_ORDER[i];
                 break;
             }
-            first += 1;
-        }
-        if first as usize >= M {
-            first = 0;
+            i += 1;
         }
         Self {
             active_screen: first,
@@ -403,29 +453,35 @@ impl<const M: usize> DisplayState<M> {
     }
 
     fn next_enabled_right(&self, from: u8) -> Option<u8> {
-        let mut s = from as usize + 1;
-        while s < M {
-            if self.enabled[s] {
-                return Some(s as u8);
+        let mut i = match order_pos(from) {
+            Some(i) => i + 1,
+            // Not in the order table — fall off the right-hand end.
+            None => return None,
+        };
+        while i < SCREEN_ORDER.len() {
+            let s = SCREEN_ORDER[i] as usize;
+            if s < M && self.enabled[s] {
+                return Some(SCREEN_ORDER[i]);
             }
-            s += 1;
+            i += 1;
         }
         None
     }
 
     fn next_enabled_left(&self, from: u8) -> Option<u8> {
-        if from == 0 {
-            return None;
-        }
-        let mut s = from as usize - 1;
+        let mut i = match order_pos(from) {
+            Some(0) | None => return None,
+            Some(i) => i - 1,
+        };
         loop {
-            if self.enabled[s] {
-                return Some(s as u8);
+            let s = SCREEN_ORDER[i] as usize;
+            if s < M && self.enabled[s] {
+                return Some(SCREEN_ORDER[i]);
             }
-            if s == 0 {
+            if i == 0 {
                 return None;
             }
-            s -= 1;
+            i -= 1;
         }
     }
 
@@ -2803,6 +2859,81 @@ mod tests {
             label: || "-",
             kind: MenuItemKind::Separator,
         }
+    }
+
+    /// The carousel table has to be a permutation of the screen indices —
+    /// a duplicate would make a screen unreachable from one side, a gap
+    /// would strand it entirely.
+    #[test]
+    fn screen_order_is_a_permutation() {
+        let mut seen = [false; ScreenId::COUNT];
+        for &s in SCREEN_ORDER.iter() {
+            assert!((s as usize) < ScreenId::COUNT, "screen {s} out of range");
+            assert!(!seen[s as usize], "screen {s} listed twice");
+            seen[s as usize] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "not every screen is reachable");
+    }
+
+    #[test]
+    fn order_pos_agrees_with_the_table() {
+        for (i, &s) in SCREEN_ORDER.iter().enumerate() {
+            assert_eq!(order_pos(s), Some(i));
+        }
+        assert_eq!(order_pos(ScreenId::COUNT as u8), None);
+    }
+
+    /// The organizer edition boots into the calendar and pages on to the
+    /// clock — this is the whole point of the edition, so pin it.
+    #[test]
+    #[cfg(feature = "organizer")]
+    fn organizer_leads_with_calendar_then_clock() {
+        assert_eq!(SCREEN_ORDER[0], ScreenId::Calendar.index());
+        assert_eq!(SCREEN_ORDER[1], ScreenId::Watch.index());
+        assert_eq!(SCREEN_ORDER[2], ScreenId::Main.index());
+    }
+
+    #[test]
+    #[cfg(not(feature = "organizer"))]
+    fn stock_order_matches_screen_ids() {
+        for (i, &s) in SCREEN_ORDER.iter().enumerate() {
+            assert_eq!(s as usize, i);
+        }
+    }
+
+    /// Navigation walks the order table, not the raw index, and skips
+    /// disabled screens on the way.
+    #[test]
+    fn screen_nav_follows_the_order_table() {
+        // `enabled` is indexed by screen id, not by carousel position.
+        let enabled = core::array::from_fn(|i| i != ScreenId::Game.index() as usize);
+        let state: DisplayState<{ ScreenId::COUNT }> = DisplayState::new(
+            core::array::from_fn(|_| ScreenState::new(&NAME_ITEMS)),
+            enabled,
+        );
+
+        // Boot lands on the first enabled screen in carousel order.
+        let first = *SCREEN_ORDER
+            .iter()
+            .find(|&&s| s != ScreenId::Game.index())
+            .unwrap();
+        assert_eq!(state.active_screen(), first);
+
+        // Paging right visits every enabled screen in table order, once.
+        let mut visited = vec![first];
+        let mut cur = first;
+        while let Some(next) = state.next_enabled_right(cur) {
+            assert_ne!(next, ScreenId::Game.index(), "disabled screen visited");
+            visited.push(next);
+            cur = next;
+        }
+        assert_eq!(visited.len(), ScreenId::COUNT - 1);
+
+        // And paging left retraces exactly the same path.
+        for pair in visited.windows(2) {
+            assert_eq!(state.next_enabled_left(pair[1]), Some(pair[0]));
+        }
+        assert_eq!(state.next_enabled_left(first), None);
     }
 
     /// `menu_up`/`menu_down` wrap around a menu boundary instead of doing

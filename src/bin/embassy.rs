@@ -314,6 +314,11 @@ async fn main(spawner: Spawner) {
         // after a spin-wait on `INITIAL_BONDS`, which let the meshcore
         // listener load an empty channel set on a fresh-flash boot.
         channels::init().await;
+        // The private SHDW channel exists only to carry BornPets friend
+        // beacons and battle results.  A build without the game neither
+        // sends nor listens for either, so joining would just burn a
+        // channel slot on traffic nothing can read.
+        #[cfg(feature = "game")]
         channels::ensure_shdw_channel().await;
         defmt::info!(
             "channels: store ready ({} active)",

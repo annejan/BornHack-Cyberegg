@@ -628,24 +628,42 @@ cd bornhack-firmware-2026
 
 ### Firmware (nRF52840)
 
-The firmware can be built in four configurations:
+The firmware can be built in five configurations:
 
-| Variant                      | Game | Mesh (LoRa/BLE) | Watch | Use case                                                |
-| ---------------------------- | ---- | --------------- | ----- | ------------------------------------------------------- |
-| Full (`make fw`)             | yes  | yes             | yes   | Production — everything enabled                         |
-| Game only (`make fw-game`)   | yes  | no              | yes   | Game development when full build exceeds flash          |
-| Mesh only (`make fw-mesh`)   | no   | yes             | yes   | Mesh/radio development when full build exceeds flash    |
-| Watch only (`make fw-watch`) | no   | no              | yes   | Minimal ~130 KiB build for watch-face / clock work only |
+| Variant                              | Game | Mesh (LoRa/BLE) | Watch | Use case                                                |
+| ------------------------------------ | ---- | --------------- | ----- | ------------------------------------------------------- |
+| Full (`make fw`)                     | yes  | yes             | yes   | Production — everything enabled                         |
+| Organizer (`make fw-organizer`)      | no   | yes             | yes   | Calendar-first badge — no pet, boots into the schedule  |
+| Game only (`make fw-game`)           | yes  | no              | yes   | Game development when full build exceeds flash          |
+| Mesh only (`make fw-mesh`)           | no   | yes             | yes   | Mesh/radio development when full build exceeds flash    |
+| Watch only (`make fw-watch`)         | no   | no              | yes   | Minimal ~130 KiB build for watch-face / clock work only |
 
 The watch face is part of `embassy-base` and is therefore present in every variant. The watch-only build (`embassy-watch` feature) is the smallest configuration that still drives the EPD.
 
 ```bash
 make fw              # Full debug build (game + mesh + watch)
 make fw-release      # Full release build (optimised for size)
+make fw-organizer    # Organizer edition (calendar-first, no game)
 make fw-game         # Game + watch (no mesh)
 make fw-mesh         # Mesh + watch (no game)
 make fw-watch        # Watch only (no game, no mesh)
 ```
+
+#### Organizer edition
+
+`embassy-organizer` is the full badge minus the pet game: meshcore, USB storage
+(so `.ics` files can be dropped on it) and the whole watch stack, but the screen
+carousel is reordered to lead with the schedule:
+
+```
+Calendar → Clock → MeshCore (main, PMs, channels, contacts) → Name → QR
+```
+
+The badge boots on whichever screen comes first in that order, so it wakes up
+showing the day's schedule. The reorder itself is the `organizer` feature and is
+purely navigational — screens keep their stable `ScreenId` indices, so NFC jumps
+and persisted settings mean the same thing in every edition. Roughly 66 KiB
+smaller than the full build.
 
 All print flash and RAM usage after building. Release builds use full LTO and `opt-level = "z"` for minimum binary size.
 
@@ -658,14 +676,16 @@ make flash              # Build + flash full debug firmware (SWD)
 make flash-release      # Build + flash full release firmware (SWD)
 make flash-game         # Build + flash game-only debug firmware (SWD)
 make flash-mesh         # Build + flash mesh-only debug firmware (SWD)
+make flash-organizer    # Build + flash organizer-edition debug firmware (SWD)
 make flash-watch        # Build + flash watch-only debug firmware (SWD)
 ```
 
 For USB DFU flashing (hold the execute button while powering on to enter DFU mode):
 
 ```bash
-make dfu-flash           # Debug
-make dfu-flash-release   # Release
+make dfu-flash             # Debug
+make dfu-flash-release     # Release
+make dfu-flash-organizer   # Organizer edition (release)
 ```
 
 ### Debug (VS Code + probe-rs)
@@ -710,6 +730,8 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | `make fw-game-release`   | Build game-only release firmware          |
 | `make fw-mesh`           | Build mesh-only debug firmware            |
 | `make fw-mesh-release`   | Build mesh-only release firmware          |
+| `make fw-organizer`      | Build organizer-edition debug firmware    |
+| `make fw-organizer-release` | Build organizer-edition release firmware |
 | `make fw-watch`          | Build watch-only debug firmware           |
 | `make fw-watch-release`  | Build watch-only release firmware         |
 | `make flash`             | Build + flash full debug firmware (SWD)   |
@@ -717,8 +739,10 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | `make flash-game`        | Build + flash game-only firmware (SWD)    |
 | `make flash-mesh`        | Build + flash mesh-only firmware (SWD)    |
 | `make flash-watch`       | Build + flash watch-only firmware (SWD)   |
+| `make flash-organizer`   | Build + flash organizer edition (SWD)     |
 | `make dfu-flash`         | Build + flash debug firmware (USB DFU)    |
 | `make dfu-flash-release` | Build + flash release firmware (USB DFU)  |
+| `make dfu-flash-organizer` | Build + flash organizer edition (USB DFU) |
 | `make sim`               | Build and run the SDL2 simulator          |
 | `make monitor`           | Attach RTT log monitor to running device  |
 | `make bl`                | Build bootloader                          |

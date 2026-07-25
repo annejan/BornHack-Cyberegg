@@ -203,6 +203,13 @@ embassy = ["embassy-base", "game", "mesh", "usb-storage"]
 embassy-game = ["embassy-base", "game", "usb-storage"]
 # Mesh only (no game, no USB storage).
 embassy-mesh = ["embassy-base", "mesh"]
+# Carousel reorder for the organizer edition: boot into the calendar, then the
+# clock, then the meshcore screens, then name + QR.  Pure navigation change —
+# does not pull in or drop any subsystem itself.
+organizer = []
+# Organizer edition: clock/calendar-first badge with meshcore, no game.
+# USB storage stays in so .ics calendar files can be dropped on it.
+embassy-organizer = ["embassy-base", "mesh", "usb-storage", "organizer"]
 # Watch only (no game, no mesh) — `watch` is already pulled in by embassy-base.
 embassy-watch = ["embassy-base"]
 # Factory hardware test — minimal standalone firmware, no bootloader required.
