@@ -1682,13 +1682,15 @@ macro_rules! events_items {
     ($($n:literal),* $(,)?) => {
         [
             MenuItem { label: || "< Back", kind: MenuItemKind::Back },
-            // Drops a "Quick test" event 5 min from now — silently
-            // no-ops without a synced wall clock; the new event shows
-            // up via the Calendar dot + Clock-face bell.
+            // Re-reads ALARMS.ICS now, rather than waiting for the
+            // badge to notice a USB copy settling.
             MenuItem {
                 label: || "Reload from ICS",
                 kind: MenuItemKind::Action(action_reload_ics),
             },
+            // Arms a test alarm 5 min from now — silently no-ops
+            // without a synced wall clock; the Clock-face bell confirms
+            // it landed.  Not on the Calendar: that reads the file.
             MenuItem {
                 label: || "Test alarm +5min",
                 kind: MenuItemKind::Action(action_add_quick_test),

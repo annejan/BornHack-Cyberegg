@@ -204,9 +204,9 @@ refresh) rather than any RAM.
 
 **Import notes:**
 - Re-runs at every boot, **and automatically whenever the file changes**: the badge counts blocks written over USB mass storage and re-imports once the host has been quiet for 2 seconds. Copy a new `ALARMS.ICS` onto the badge, watch the blue LED blink, and the calendar has the new schedule — no reboot
-- Each import clears the previous one first, so a new file *replaces* the schedule instead of merging into it. That also clears any **Quick test** events
+- Each import *replaces* the schedule instead of merging into it: slots are overwritten in place and any left over from a longer previous import are retired at the end. That also retires any **Test alarm** event
 - **Settings → Events → Reload from ICS** forces an immediate re-read if you'd rather not wait for the settle window
-- Only the nearest 159 events get an alarm slot. Everything else still appears on the calendar — that reads the file — but can't ring; the boot log warns and the Calendar grid shows a red `! N of M won't ring` line. The 2026 Bornhack programme is 127 events, so it all rings
+- Only the nearest 159 events get an alarm slot. Everything else still appears on the calendar — that reads the file — but can't ring; the boot log warns and the Calendar grid shows a red `! N can't ring` line. The 2026 Bornhack programme is 127 events, so it all rings
 - A single `RRULE` expands to at most 64 occurrences
 - Multi-day events clamped to 23:59 of the start day
 - Times with `Z` suffix (UTC) are converted using `TIMEZONE_OFFSET`; floating times and `TZID=...:` values are taken at face value

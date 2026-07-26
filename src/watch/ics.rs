@@ -43,9 +43,13 @@ pub const SUMMARY_LEN: usize = 31;
 /// than being allowed to fill the calendar on their own.
 pub const MAX_OCCURRENCES: u16 = 64;
 
-/// Upper bound on how far a rule may search for its next occurrence
-/// before giving up, in steps.  Guards against rules that can never match
-/// again (`BYDAY` with no matching weekday, 29 February yearly, …).
+/// Upper bound on how far `MONTHLY` and `YEARLY` rules may search for
+/// their next occurrence, in interval steps.  Guards against rules whose
+/// day-of-month can never match again — 29 February yearly, or a 31st in
+/// a run of short months.
+///
+/// `DAILY` and `WEEKLY` don't use it: both compute the next occurrence in
+/// closed form, so no interval can exhaust a step budget.
 const MAX_SEARCH_STEPS: u16 = 400;
 
 /// One parsed `VEVENT`.  When `DTEND` is missing in the source, the end
@@ -238,7 +242,9 @@ impl Pending {
     }
 
     /// Start date of the occurrence after `self.cur`, or `None` when the
-    /// rule has no further match within [`MAX_SEARCH_STEPS`].
+    /// rule runs off the end of the calendar — or, for `MONTHLY` and
+    /// `YEARLY`, when its day-of-month finds no match within
+    /// [`MAX_SEARCH_STEPS`] intervals.
     fn advance(&self) -> Option<(u16, u8, u8)> {
         let (y, m, d) = self.cur;
         let interval = self.rule.interval.max(1) as i32;
@@ -353,12 +359,23 @@ fn parse_rrule(value: &[u8]) -> Option<Recur> {
             b"INTERVAL" => rule.interval = digits(val).unwrap_or(1).clamp(1, u16::MAX as u32) as u16,
             b"COUNT" => rule.count = digits(val).map(|n| n.min(u16::MAX as u32) as u16),
             // UNTIL is a full timestamp; only its date matters here.
+            //
+            // An unparsable UNTIL drops the bound and keeps the rest of
+            // the rule, matching how INTERVAL, COUNT and BYDAY treat bad
+            // input.  Propagating the failure out of `parse_rrule` threw
+            // FREQ and COUNT away too, so one off-spec UNTIL — an
+            // ISO-8601 date with dashes, say — turned a twenty-week
+            // series into a single event.
             b"UNTIL" if val.len() >= 8 => {
-                let y = digits(&val[0..4])? as u16;
-                let mo = digits(&val[4..6])? as u8;
-                let d = digits(&val[6..8])? as u8;
-                if (1..=12).contains(&mo) && d >= 1 && d <= days_in_month(y, mo) {
-                    rule.until = Some((y, mo, d));
+                if let (Some(y), Some(mo), Some(d)) = (
+                    digits(&val[0..4]),
+                    digits(&val[4..6]),
+                    digits(&val[6..8]),
+                ) {
+                    let (y, mo, d) = (y as u16, mo as u8, d as u8);
+                    if (1..=12).contains(&mo) && d >= 1 && d <= days_in_month(y, mo) {
+                        rule.until = Some((y, mo, d));
+                    }
                 }
             }
             b"BYDAY" => {
@@ -1295,6 +1312,27 @@ END:VEVENT\n";
                 "rule {rule:?} expanded to {n}"
             );
         }
+    }
+
+    /// A parameter the parser can't read must cost only that parameter.
+    /// An unparsable UNTIL used to propagate out of `parse_rrule` and
+    /// take FREQ, COUNT and BYDAY with it, silently collapsing a series
+    /// to one event.
+    #[test]
+    fn a_bad_until_drops_only_the_bound() {
+        // ISO-8601 with dashes — off-spec, but a plausible hand edit.
+        let doc = b"BEGIN:VEVENT\nSUMMARY:X\nDTSTART:20260105T090000\n\
+RRULE:FREQ=WEEKLY;COUNT=4;BYDAY=MO;UNTIL=2026-03-02\nEND:VEVENT\n";
+        assert_eq!(
+            Parser::new(doc).count(),
+            4,
+            "the rest of the rule must still expand"
+        );
+
+        // A well-formed UNTIL still bounds the series.
+        let doc = b"BEGIN:VEVENT\nSUMMARY:X\nDTSTART:20260105T090000\n\
+RRULE:FREQ=WEEKLY;COUNT=9;BYDAY=MO;UNTIL=20260126T000000Z\nEND:VEVENT\n";
+        assert_eq!(Parser::new(doc).count(), 4, "5, 12, 19, 26 Jan");
     }
 
     /// Every occurrence a rule yields must be a real date, whatever the

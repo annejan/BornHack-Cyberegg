@@ -210,12 +210,14 @@ static ALARM_MELODY: [AtomicU8; N_ALARMS] =
 static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
 static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
-/// Show-but-don't-ring flag.  Set for imported all-day events: they're
-/// real calendar entries the day-view should list, but an all-day entry
-/// nominally starts at 00:00 and waking the camp at midnight for "Camp
-/// build-up" is not a feature.  A silent slot is skipped entirely by
-/// [`check_and_fire_alarm`], which also means it isn't auto-disabled at
-/// its start time and so stays visible for the rest of the day.
+/// Show-but-don't-ring flag.  Set for imported all-day events: an
+/// all-day entry nominally starts at 00:00, and waking the camp at
+/// midnight for "Camp build-up" is not a feature.
+///
+/// A silent slot is skipped by [`check_and_fire_alarm`], and by the
+/// clock-face indicators, which must not promise a sound that won't
+/// come.  Calendar visibility is unrelated — that screen reads the ICS
+/// file, not these slots.
 static ALARM_SILENT: [AtomicBool; N_ALARMS] = [const { AtomicBool::new(false) }; N_ALARMS];
 /// Curated tone choices: (display name, melody index).  Shared between
 /// the alarm-tone stepper (Settings → Alarm → Tone) and the per-event
@@ -321,10 +323,14 @@ pub fn first_empty_event_slot() -> Option<usize> {
     (1..N_ALARMS).find(|&slot| !alarm_enabled_n(slot))
 }
 
-/// Add an event scheduled `minutes_ahead` minutes from the current wall
-/// clock, with the given summary.  Picks the first empty event slot.
-/// Returns the firing `(hour, minute)` on success, or `None` if the
-/// wall clock isn't synced or all event slots are full.
+/// Arm an alarm `minutes_ahead` minutes from the current wall clock, in
+/// the first empty event slot.  Returns the firing `(hour, minute)` on
+/// success, or `None` if the wall clock isn't synced or all event slots
+/// are full.
+///
+/// It carries no title: slots stopped storing one when the calendar
+/// moved to reading `ALARMS.ICS` directly, and this alarm isn't in that
+/// file, so it rings but never appears on the Calendar screen.
 #[cfg(feature = "embassy-core")]
 pub fn add_quick_event(minutes_ahead: u16) -> Option<(u8, u8)> {
     let c = clock::wall_clock()?;
@@ -655,9 +661,13 @@ pub async fn alarm_ring_timeout_task() {
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-/// Returns `true` if any slot has an enabled alarm.
-fn any_alarm_enabled() -> bool {
-    (0..N_ALARMS).any(alarm_enabled_n)
+/// Returns `true` if any slot holds an alarm that will actually ring.
+///
+/// Silent slots don't count: an imported all-day event is enabled so the
+/// calendar lists it, but `check_and_fire_alarm` skips it, so lighting
+/// the clock face's bell for one would promise a sound that never comes.
+fn any_alarm_will_ring() -> bool {
+    (0..N_ALARMS).any(|slot| alarm_enabled_n(slot) && !alarm_silent_n(slot))
 }
 
 /// Find the soonest enabled alarm whose firing is still in the future *today*.
@@ -666,7 +676,8 @@ fn any_alarm_enabled() -> bool {
 fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
     let mut earliest: Option<(u8, u8)> = None;
     for slot in 0..N_ALARMS {
-        if !alarm_enabled_n(slot) {
+        // Same gate as `check_and_fire_alarm`: only slots that will ring.
+        if !alarm_enabled_n(slot) || alarm_silent_n(slot) {
             continue;
         }
         let active_today = if alarm_is_one_shot_n(slot) {
@@ -760,7 +771,7 @@ where
     // (x=56) is in the free zone between the title and the battery icon
     // at x=128.
     let mut alarm_time_end_x: i32 = bell_cx + 10;
-    if any_alarm_enabled() {
+    if any_alarm_will_ring() {
         draw_bell(display, bell_cx, bell_cy)?;
         if let Some(c) = clock::wall_clock()
             && let Some((h, m)) = next_alarm_today(&c)

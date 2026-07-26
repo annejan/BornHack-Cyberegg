@@ -1,8 +1,13 @@
-//! Calendar screen — month-grid view of every enabled one-shot alarm
-//! slot, with a movable cursor and a per-day detail mode.  Sits in the
-//! icon grid right after the Clock screen; reads the same alarm-slot
-//! state that fires the buzzer, so any event you load via `ALARMS.ICS`
-//! automatically shows up here.
+//! Calendar screen — month-grid view of the whole `ALARMS.ICS` file,
+//! with a movable cursor and a per-day detail mode.  Sits in the icon
+//! grid right after the Clock screen.
+//!
+//! Nothing here reads alarm slots.  The grid's has-events dots come from
+//! the one-bit-per-day index (`super::day_has_events`) and the day views
+//! from the single-day cache (`super::with_day_cache`, refilled by
+//! `super::request_day` when the cursor moves), both of which cover
+//! every event in the file however big it is.  The alarm slots hold only
+//! the near future, because ringing is all they are for.
 //!
 //! Three modes — same shape as the Clock face's "consume arrows only
 //! when needed" pattern, so the user can scroll past Calendar with
@@ -334,8 +339,8 @@ fn dispatch_day_list(btn: ButtonId) -> bool {
         ButtonId::Down => {
             let cur = DAY_LIST_SCROLL.load(Ordering::Relaxed);
             // Loose cap — the renderer just leaves rows blank past the
-            // end of the day's events.  N_ALARMS is the absolute upper
-            // bound on events ever importable.
+            // end of the day's events.  `DAY_CACHE_MAX` is the most the
+            // day cache holds, so no day can list more than that.
             DAY_LIST_SCROLL.store(
                 cur.saturating_add(1).min(super::DAY_CACHE_MAX as u8),
                 Ordering::Relaxed,

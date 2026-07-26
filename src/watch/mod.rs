@@ -148,10 +148,12 @@ pub fn events_dropped() -> u16 {
 /// value, since the badge ships no tzdata.
 ///
 /// Runs at boot and again whenever [`ics_reload_task`] sees the file
-/// change, clearing the previous import first so a new file replaces the
-/// schedule rather than merging into it.  The default melody (`ALARM`
-/// beep-beep) is applied; the trigger auto-disables each one-shot slot
-/// after firing, so old events stop alarming themselves at midnight.
+/// change.  Slots are overwritten in place and the leftovers retired at
+/// the end, so a new file replaces the schedule rather than merging into
+/// it — without the window of empty slots that clearing up front would
+/// leave across the rescan.  The default melody (`ALARM` beep-beep) is
+/// applied; the trigger auto-disables each one-shot slot after firing,
+/// so old events stop alarming themselves at midnight.
 #[cfg(feature = "embassy-core")]
 pub async fn import_alarms_from_fat12() {
     use core::sync::atomic::Ordering;
@@ -196,8 +198,11 @@ pub async fn import_alarms_from_fat12() {
         total = total.saturating_add(1);
         index_mark(event, tz_offset);
         // Multi-day events keep ringing until their last day is behind
-        // us, so compare against the end date.
-        let end = ics::days_from_civil(event.end_year, event.end_month, event.end_day);
+        // us, so compare against the end date — in local time, like the
+        // horizon it is measured against.  Using the raw parsed date here
+        // dropped an event whose UTC end fell a day before its local one.
+        let end_local = local_span(event, tz_offset).end;
+        let end = ics::days_from_civil(end_local.0, end_local.1, end_local.2);
         if end < horizon {
             return core::ops::ControlFlow::Continue(());
         }
@@ -211,17 +216,26 @@ pub async fn import_alarms_from_fat12() {
     })
     .await;
 
-    if !found {
-        led::set_led(&LED_BLUE, LedState::Off);
-        return;
-    }
     // Retire whatever the previous, longer import left behind: a shorter
     // new file would otherwise strand its tail on the calendar as events
     // no ICS file mentions.  Also drops any Settings → Events test alarm.
+    //
+    // This runs even when the scan failed.  `index_clear` above has
+    // already emptied the day index, so returning early here left the
+    // calendar blank while the old slots stayed armed — alarms ringing
+    // for events the screen could no longer show.  A missing or
+    // unreadable file means no schedule, and both halves must agree.
     for stale in slot..alarm::N_ALARMS {
         alarm::set_alarm_enabled_n(stale, false);
         alarm::set_alarm_date_n(stale, 0, 0, 0);
         alarm::set_alarm_silent_n(stale, false);
+    }
+
+    if !found {
+        EVENTS_TOTAL.store(0, Ordering::Relaxed);
+        EVENTS_DROPPED.store(0, Ordering::Relaxed);
+        led::set_led(&LED_BLUE, LedState::Off);
+        return;
     }
     EVENTS_TOTAL.store(total, Ordering::Relaxed);
 
@@ -282,9 +296,9 @@ pub fn request_ics_reload() {
 ///     lazily, so the settle window is the only reliable signal;
 ///   * the user picked **Settings → Events → Reload from ICS**.
 ///
-/// Either way the import clears the old event slots first, so dropping a
-/// new calendar on the badge replaces the schedule rather than merging
-/// into it.
+/// Either way the import replaces the schedule rather than merging into
+/// it: slots are overwritten in place and any left over from a longer
+/// previous import are retired at the end.
 #[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn ics_reload_task() {
@@ -1023,6 +1037,28 @@ mod tests {
             assert!(day_has_events(2026, 7, day), "missing day {day}");
         }
         assert!(!day_has_events(2026, 7, 19));
+    }
+
+    /// The alarm-slot horizon drops events already behind us.  It is
+    /// measured against the *local* day, so the event's end must be too:
+    /// comparing a raw UTC end date against it dropped an event whose
+    /// local end was still today.
+    #[test]
+    fn the_horizon_uses_the_local_end_date() {
+        const TZ: i8 = 2;
+        // Ends 23:00 UTC on the 17th, i.e. 01:00 local on the 18th.
+        let ev = utc_event((2026, 7, 17), (22, 0), (2026, 7, 17), (23, 0));
+
+        let raw = ics::days_from_civil(ev.end_year, ev.end_month, ev.end_day);
+        let local_end = local_span(&ev, TZ).end;
+        let local = ics::days_from_civil(local_end.0, local_end.1, local_end.2);
+        assert_eq!(local, raw + 1, "the two disagree — that was the bug");
+
+        // With "today" being the 18th, the raw date would have been
+        // judged as past and the event dropped from the slots.
+        let horizon = ics::days_from_civil(2026, 7, 18);
+        assert!(raw < horizon, "raw end reads as already over");
+        assert!(local >= horizon, "local end is still today, so it must be kept");
     }
 
     /// The month grid reads the day index; opening a day reads the day
