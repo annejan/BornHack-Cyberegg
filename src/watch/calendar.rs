@@ -200,20 +200,47 @@ fn add_days(year: u16, month: u8, day: u8, delta_days: i64) -> (u16, u8, u8) {
 fn ensure_cursor() -> (u16, u8, u8) {
     let y = CURSOR_YEAR.load(Ordering::Relaxed);
     if y != 0 {
+        // A cursor placed before the wall clock synced is a guess, not a
+        // choice — re-anchor it on today the moment a real date exists.
+        // A mesh badge syncs its clock well after boot, and the organizer
+        // edition *boots on this screen*, so without this the calendar
+        // opens on the wrong month and stays there until the user
+        // navigates away by hand.
+        if CURSOR_IS_GUESS.load(Ordering::Relaxed)
+            && let Some(t) = today()
+        {
+            set_cursor(t);
+            return t;
+        }
         return (
             y,
             CURSOR_MONTH.load(Ordering::Relaxed),
             CURSOR_DAY.load(Ordering::Relaxed),
         );
     }
-    let init = today()
-        .or_else(super::first_indexed_day)
-        .unwrap_or((2026, 7, 15));
-    set_cursor(init);
-    init
+    match today() {
+        Some(t) => {
+            set_cursor(t);
+            t
+        }
+        None => {
+            let guess = super::first_indexed_day().unwrap_or((2026, 7, 15));
+            set_cursor(guess);
+            CURSOR_IS_GUESS.store(true, Ordering::Relaxed);
+            guess
+        }
+    }
 }
 
+/// True while the cursor holds a date picked without a wall clock.
+/// Cleared as soon as anything sets a real one — including the user
+/// moving it, which makes the placement their choice rather than a
+/// guess to be overridden later.
+static CURSOR_IS_GUESS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 fn set_cursor(ymd: (u16, u8, u8)) {
+    CURSOR_IS_GUESS.store(false, Ordering::Relaxed);
     CURSOR_YEAR.store(ymd.0, Ordering::Relaxed);
     CURSOR_MONTH.store(ymd.1, Ordering::Relaxed);
     CURSOR_DAY.store(ymd.2, Ordering::Relaxed);
@@ -516,10 +543,14 @@ where
                     centered,
                 )?;
 
-                // Has-events dot in the top-right corner.
+                // Has-events dot in the top-right corner.  White on
+                // today, whose cell is already filled red — the day
+                // number takes the same treatment a few lines up, and a
+                // red dot on red was invisible on exactly the day you
+                // most want it.
                 if super::day_has_events(cell_date.0, cell_date.1, cell_date.2) {
                     Circle::new(Point::new(cell_x + COL_W - 5, cell_y + 1), 3)
-                        .into_styled(PrimitiveStyle::with_fill(RED))
+                        .into_styled(PrimitiveStyle::with_fill(fg))
                         .draw(display)?;
                 }
             }
@@ -991,14 +1022,12 @@ where
         let mut row: heapless::String<ROW_BUF> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
-            format_args!(
-                "{:02}:{:02}-{:02}:{:02} {}",
-                ev.hour,
-                ev.minute,
-                ev.end_hour,
-                ev.end_minute,
-                summary.as_str()
-            ),
+            // Start time only.  The end time cost six characters of
+            // title, which left this mode showing *less* of a name than
+            // the timeline it exists to expand on — and unlike the
+            // timeline, it can't scroll.  Durations are what the
+            // timeline draws; this view is for reading names.
+            format_args!("{:02}:{:02} {}", ev.hour, ev.minute, summary.as_str()),
         );
         let y = ROW_TOP_Y + r * ROW_H + ROW_H / 2;
         Text::with_text_style(&row, Point::new(ROW_LEFT_X, y), row_style, left_align)
@@ -1102,6 +1131,64 @@ mod tests {
         )
         .expect("row buffer must hold the widest event row");
         assert!(row.ends_with('Æ'), "title survived: {row:?}");
+    }
+
+    /// The day-list exists to show names the timeline was too cramped
+    /// for, so it must not show *fewer* characters of one than the
+    /// timeline does.
+    #[test]
+    fn day_list_shows_more_title_than_the_timeline() {
+        const PANEL_W: i32 = 152;
+        const CHAR_W: i32 = 6; // FONT_6X13_BOLD, used by both rows
+
+        // Timeline row: drawn at TL_LEFT_X + 2, prefixed "HH:MM ".
+        const TIMELINE_X: i32 = 22 + 2;
+        const TIMELINE_PREFIX: i32 = 6;
+        let timeline_chars = (PANEL_W - TIMELINE_X) / CHAR_W - TIMELINE_PREFIX;
+
+        // Day-list row: drawn at ROW_LEFT_X, same "HH:MM " prefix.
+        const LIST_X: i32 = 2;
+        const LIST_PREFIX: i32 = 6;
+        let list_chars = (PANEL_W - LIST_X) / CHAR_W - LIST_PREFIX;
+
+        assert!(
+            list_chars > timeline_chars,
+            "day-list shows {list_chars} title chars, timeline shows {timeline_chars}"
+        );
+        // Concretely: 19 characters against the timeline's 15. It still
+        // can't show a full 31-character label — it cannot scroll, so
+        // that is the honest ceiling of this layout.
+        assert_eq!((list_chars, timeline_chars), (19, 15));
+    }
+
+    /// A cursor placed before the wall clock synced is a guess. Once a
+    /// real date arrives it must be replaced — a mesh badge syncs late,
+    /// and the organizer edition boots straight onto this screen.
+    #[test]
+    fn a_guessed_cursor_is_replaced_once_the_clock_arrives() {
+        let Some(today) = today() else {
+            return; // no wall clock in this build — nothing to re-anchor to
+        };
+
+        // A cursor left over from a clockless frame is a guess, and the
+        // next draw with a real date must replace it.
+        set_cursor((2026, 3, 4));
+        CURSOR_IS_GUESS.store(true, Ordering::Relaxed);
+        assert_eq!(
+            ensure_cursor(),
+            today,
+            "a guessed cursor must re-anchor on today"
+        );
+        assert!(
+            !CURSOR_IS_GUESS.load(Ordering::Relaxed),
+            "and stop being a guess once it has"
+        );
+
+        // The user moving the cursor makes it their choice; a later
+        // clock sync must not drag it back to today.
+        set_cursor((2026, 3, 4));
+        assert!(!CURSOR_IS_GUESS.load(Ordering::Relaxed));
+        assert_eq!(ensure_cursor(), (2026, 3, 4));
     }
 
     /// Every button in every mode, in every order, from every starting
