@@ -146,6 +146,11 @@ const N_ROWS: i32 = 6;
 const FOOTER_Y: i32 = 130; // baseline middle of the first footer line
 const FOOTER_Y_2: i32 = 144;
 
+/// Baseline of the day-list "+N more today" note.  `Baseline::Middle` on
+/// a 10 px font puts the glyph rows at `y - 4 ..= y + 5`, so on a
+/// 152-row panel (0..=151) this is the lowest value that isn't clipped.
+const OVERFLOW_NOTE_Y: i32 = 146;
+
 const DAY_NAMES_SHORT: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const DAY_NAMES_LONG: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTH_ABBR: [&str; 12] = [
@@ -393,21 +398,15 @@ where
         // A cache miss is transient — the task is already loading the
         // day and will signal a redraw.  Render the empty day rather
         // than a spinner; on a fast day-load the placeholder is never
-        // even seen.
-        let day: &[super::CachedEvent] = if cache.date == cursor {
-            cache.valid()
-        } else {
-            &[]
-        };
-        let overflow = if cache.date == cursor {
-            cache.overflow
-        } else {
-            0
-        };
+        // even seen.  `loaded` distinguishes that from a real day that
+        // simply has nothing on it, which the views must not confuse.
+        let loaded = cache.date == cursor;
+        let day: &[super::CachedEvent] = if loaded { cache.valid() } else { &[] };
+        let overflow = if loaded { cache.overflow } else { 0 };
 
         match MODE.load(Ordering::Relaxed) {
             MODE_DAY_LIST => draw_day_list(display, cursor, day, overflow),
-            MODE_DAY_DETAIL => draw_day_detail(display, cursor, day),
+            MODE_DAY_DETAIL => draw_day_detail(display, cursor, day, loaded),
             MODE_ACTIVE => draw_grid(display, cursor, day, true),
             _ => draw_grid(display, cursor, day, false),
         }
@@ -627,6 +626,7 @@ fn draw_day_detail<D>(
     display: &mut D,
     cursor: (u16, u8, u8),
     day_evs: &[super::CachedEvent],
+    loaded: bool,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -695,12 +695,17 @@ where
         // very top edge.
         let anchored = (chosen - 1).clamp(0, 24 - HOURS_VISIBLE);
         top_hour = anchored as u8;
-        // Only commit the resolved position once there is a day to
-        // anchor on.  The first frame after the cursor moves can render
-        // before the day cache has been refilled; storing then would
-        // pin the view to a default hour and never auto-scroll to the
-        // events once they arrive.
-        if !day_evs.is_empty() {
+        // Only commit the resolved position once the cache actually
+        // holds this day.  The first frame after the cursor moves can
+        // render before the day cache has been refilled; storing then
+        // would pin the view to a default hour and never auto-scroll to
+        // the events once they arrive.
+        //
+        // The test is "is this day loaded", not "does it have events" —
+        // an empty day is loaded, and leaving its sentinel unresolved
+        // made the next Up/Down read 0xFF as hour 0 and jump the
+        // timeline instead of stepping it.
+        if loaded {
             DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
         }
     } else if (top_hour as i32) > 24 - HOURS_VISIBLE {
@@ -1004,7 +1009,11 @@ where
         draw_bold(
             display,
             &warn,
-            Point::new(76, ROW_BOT_Y + 2),
+            // Centred FONT_6X10 spans 4 px above and 5 below its anchor,
+            // so 146 is the lowest baseline that stays inside the 152-row
+            // panel.  Anything lower clipped the message that exists to
+            // say events are hidden.
+            Point::new(76, OVERFLOW_NOTE_Y),
             MonoTextStyle::new(&FONT_6X10, RED),
             centered,
         )?;
@@ -1078,6 +1087,34 @@ mod tests {
         )
         .expect("row buffer must hold the widest event row");
         assert!(row.ends_with('Æ'), "title survived: {row:?}");
+    }
+
+    /// Text is anchored by its vertical middle, so a 10 px font reaches
+    /// 4 px above its baseline and 5 below.  Every such anchor has to
+    /// leave both ends inside the 152-row panel — the day-list overflow
+    /// note used to sit 2 px too low and lose its bottom rows, which is
+    /// a poor look for the one message that exists to say something is
+    /// hidden.
+    #[test]
+    fn bottom_anchored_text_stays_on_the_panel() {
+        const PANEL_H: i32 = 152;
+        const FONT_H: i32 = 10;
+        // embedded-graphics: baseline_offset(Middle) = (height - 1) / 2.
+        const ABOVE: i32 = (FONT_H - 1) / 2;
+        const BELOW: i32 = FONT_H - 1 - ABOVE;
+
+        for (name, y) in [
+            ("overflow note", OVERFLOW_NOTE_Y),
+            ("footer line 1", FOOTER_Y),
+            ("footer line 2", FOOTER_Y_2),
+        ] {
+            assert!(y - ABOVE >= 0, "{name} clipped at the top");
+            assert!(
+                y + BELOW <= PANEL_H - 1,
+                "{name} clipped at the bottom: reaches row {}",
+                y + BELOW
+            );
+        }
     }
 
     /// Footer strings are drawn at 6 px/char on a 152 px panel, so 25
