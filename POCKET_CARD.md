@@ -67,7 +67,7 @@ Plug USB-C. Badge appears as **`CYBR<4 hex>`** drive.
 | `PETS.CFG`                          | add / rename pets (PREFIX=NAME) |
 | `LUT.CFG`                           | custom e-paper waveform         |
 
-Reboot the badge after dropping files.
+Reboot after dropping the `.PCX` / `.CFG` files. `ALARMS.ICS` re-imports itself ~2 s after the copy finishes (or **Settings → Events → Reload from ICS**).
 
 ## Firmware update (DFU mode)
 

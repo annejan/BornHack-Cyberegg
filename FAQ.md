@@ -74,6 +74,7 @@ BLE pairing.
 
 ## How does someone add me as a mesh contact?
 
-Open **Config → MeshCore → My QR** (or press **Left** a few times from Main to
-reach the QR screen). They scan the code with the MeshCore app and you're added
+Open **Main → Settings → MeshCore → My QR** (or press **Right** a few times
+from Main — My QR is the last screen in the carousel, and the carousel does
+not wrap). They scan the code with the MeshCore app and you're added
 — no key typing.

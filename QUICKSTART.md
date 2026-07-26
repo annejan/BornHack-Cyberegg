@@ -21,7 +21,7 @@ Sequence of LEDs at every boot:
 2. Pulsing **blue** — display + LoRa coming up (about 13 seconds)
 3. Single **green** flash — ready
 
-You land on the **Main** screen. Push **Left / Right** to flip through the top-level screens (see below).
+You land on the **Game** screen — or the **Calendar** screen on an organizer-edition badge, which has no game. Push **Left / Right** to flip through the top-level screens (see below).
 
 ## Controls
 
@@ -34,7 +34,7 @@ Two thumb buttons on the right and a 5-way joystick on the left:
 
 ## Top-level screens
 
-The badge is a carousel. Left/Right cycles through ten screens:
+The badge is a carousel. Left/Right cycles through nine screens — eight on the organizer edition, which drops the Game screen. It does not wrap: Left stops at the first, Right at the last.
 
 | Screen        | What it is                                            |
 | ------------- | ----------------------------------------------------- |
@@ -97,7 +97,9 @@ When the badge is plugged in via USB-C it appears on your computer as a small dr
 | `PETS.CFG`                    | Add / rename pets (with their sprite PCX files) — see [USER_GAMES.md](USER_GAMES.md) |
 | `LUT.CFG`                     | Custom e-paper waveform — see [LUT.md](LUT.md)         |
 
-Reboot the badge after dropping files (re-plug or hold power if no power switch — pull the strap and replug USB).
+Reboot the badge after dropping the `.PCX` and `.CFG` files (re-plug or hold power if no power switch — pull the strap and replug USB).
+
+`ALARMS.ICS` needs no reboot: about two seconds after the copy settles the badge re-reads it by itself (blue LED while it works). **Settings → Events → Reload from ICS** forces it.
 
 ## Firmware update
 

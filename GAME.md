@@ -214,8 +214,10 @@ replace it.
 
 ## Friends & the SHDW Channel
 
-Every badge running this firmware auto-joins a private mesh channel
-called **SHDW** — no setup needed. While your pet is active, the badge
+Badges running a firmware build that includes the game auto-join a private
+mesh channel called **SHDW** — no setup needed. Game-less builds (the
+organizer edition, mesh-only builds) never join it, so they can't be met
+as friends or battled. While your pet is active, the badge
 quietly broadcasts a small presence beacon on it every 15 minutes. When
 another SHDW badge is in LoRa range and its beacon comes in, your pet
 "meets" theirs:

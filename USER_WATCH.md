@@ -4,7 +4,7 @@ Three apps share the "watch" carousel slots: **Clock**, **Alarm** (entered from 
 
 ## Clock
 
-Two switchable watch faces — digital and analog. A small bell icon in the header lights up if any alarm is armed.
+Two switchable watch faces — digital and analog. A small bell icon in the header lights up if any alarm is set that will actually ring. Imported all-day events are held silently: they show on the calendar but never ring, and they do not light the bell.
 
 **Open** — push Left/Right until you land on the **Clock** screen.
 
@@ -49,7 +49,7 @@ When an alarm fires the buzzer plays the chosen tone up to five times, 8 seconds
 
 Month grid with a per-day timeline of imported iCalendar events.
 
-**Open** — Left/Right to the **Calendar** screen (right of Clock).
+**Open** — Left/Right to the **Calendar** screen (right of Clock in the standard edition; on an organizer badge Calendar is the screen you boot onto, with Clock to its right).
 
 ### Passive view
 
@@ -111,8 +111,11 @@ You can use the official BornHack programme `.ics` straight from
 
 ### Remaining quirks
 
-- **A single day can only ring 159 events.** Not a limit you will meet with
-  a conference programme, and the grid warns in red if you do.
+- **Only 159 events can ring in total**, not per day — it is one budget
+  shared across the whole upcoming schedule, so a busy tomorrow eats into
+  what is left for the days after it. Everything past that still *shows*
+  on the calendar; the grid warns in red (`! N can't ring`). Not a limit
+  you will meet with a conference programme.
 - **A day shows at most 24 events.** Busier days list the first 24 and add
   `+N more today`.
 - **Multi-day events** appear on every day they cover, but each day shows

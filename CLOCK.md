@@ -2,7 +2,7 @@
 
 > **See also:** [README.md](README.md) for project overview, [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) for the meshcore chat UI (contacts list, PM inbox + threads), [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol, [HWTEST.md](HWTEST.md) for the factory hardware-test firmware, [License.md](License.md) for licensing.
 
-The badge includes a full-featured watch application with two switchable faces, a 32-slot alarm system, and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
+The badge includes a full-featured watch application with two switchable faces, a 160-slot alarm system (slot 0 plus 159 one-shot calendar slots), and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
 
 ---
 
@@ -74,7 +74,7 @@ The current face survives reboots — it is persisted to the `"watch"` KV namesp
 
 ## Alarm System
 
-Up to **32 alarm slots** (`N_ALARMS = 32`):
+Up to **160 alarm slots** (`N_ALARMS = 160`):
 
 | Slot range | Purpose |
 | ----------- | ------- |
@@ -140,7 +140,7 @@ The alarm melody is a curated subset of `MELODIES`:
 
 ### Calendar Events (Slots 1–159)
 
-One-shot alarms bound to a specific date (`year-month-day`). These are **populated from `ALARMS.ICS`** at boot (see Calendar section below) or manually via the **Quick test +5min** action in **Settings → Events**.
+One-shot alarms bound to a specific date (`year-month-day`). These are **populated from `ALARMS.ICS`** at boot (see Calendar section below) or manually via the **Test alarm +5min** action in **Settings → Events**, which arms a titleless alarm that rings but never shows on the Calendar.
 
 One-shot slots auto-disable after firing so they don't re-alarm on reboot. All-day events are the exception: they're marked *silent*, so they show on the calendar all day but never ring and never auto-disable.
 
@@ -172,7 +172,7 @@ Reachable from the icon grid right after Clock. Browse imported events on a mont
 
 ### Timeline view (Day-detail)
 
-- Fixed 18-hour window (6 AM–12 AM) with 18 px/hour scaling
+- Scrollable 6-hour window at 18 px/hour, auto-anchored one hour before the current time (on today) or before the day's first event, stepped an hour at a time with Up/Down
 - Events render as filled black blocks (red if currently happening), height proportional to duration
 - Zero-duration events (missing `DTEND`) render as thin 4px markers
 - The event title shows inside the block if it is tall enough (≥13 px); titles longer than the block width scroll with Left/Right

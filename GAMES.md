@@ -215,5 +215,6 @@ Fire to close.  Score-scaled inspiration is awarded on close
 ## Footnote — feature gating
 
 The whole `game` module is behind `#[cfg(feature = "game")]`.  The
-`embassy-game` and `embassy` (full) builds include it; the
-`embassy-watch` and `embassy-mesh` builds don't.
+`embassy`, `embassy-game`, `embassy-1680-full` and `embassy-1680-game`
+include it; `embassy-watch`, `embassy-mesh`, `embassy-1680-mesh`,
+`embassy-organizer` and `embassy-1680-organizer` don't.

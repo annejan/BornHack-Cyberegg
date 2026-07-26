@@ -47,8 +47,10 @@ See [GAME.md](GAME.md) for full player-facing rules.
 
 ### Mesh social features
 
-- **Friends** — every badge auto-joins a private `SHDW` mesh channel and
-  broadcasts a presence beacon every 15 minutes. Meeting another SHDW
+- **Friends** — badges built with the game auto-join a private `SHDW`
+  mesh channel and broadcast a presence beacon every 15 minutes.
+  Game-less builds such as the organizer edition never join it.
+  Meeting another SHDW
   badge for the first time (or again after a few hours apart) boosts
   your pet's happiness. **Stats > Friends** is a clickable menu, sorted
   most-recently-seen-first — pick a friend to see how long you've known
@@ -201,7 +203,7 @@ All project documentation is in markdown files at the repository root and in `ve
 | **[GAME.md](GAME.md)** | Player-facing game instructions, controls, stats, mini-games |
 | **[GAMES.md](GAMES.md)** | Developer reference for all five mini-games, controls, scoring |
 | **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)** | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache |
-| **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
+| **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (160 slots), calendar browser, ICS parser |
 | **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
 | **[HWTEST.md](HWTEST.md)** | Hardware test firmware — factory diagnostics, beep codes |
 | **[SUBMODULES.md](SUBMODULES.md)** | How `vendor/` git submodules work — cloning, updating pins, hacking on vendor libs, sibling read-only checkouts |
@@ -212,6 +214,7 @@ Vendor library documentation:
 | Document | Description |
 | -------- | ----------- |
 | **[vendor/ssd1675/README.md](vendor/ssd1675/README.md)** | SSD1675/SSD1675B ePaper display driver |
+| **[vendor/ssd1680/README.md](vendor/ssd1680/README.md)** | SSD1680 ePaper display driver (the `embassy-1680-*` builds) |
 | **[vendor/meshcore/README.md](vendor/meshcore/README.md)** | MeshCore LoRa packet protocol — `no_std` Rust port |
 | **[vendor/meshcore-companion/README.md](vendor/meshcore-companion/README.md)** | MeshCore companion protocol — BLE NUS commands/responses |
 
@@ -248,6 +251,7 @@ The bootloader exports `APP_START = 0x00010000` for the post-boot jump.
 | `meshcore`           | `vendor/meshcore/`           | MeshCore packet codec (no_std)                                                                                        |
 | `meshcore-companion` | `vendor/meshcore-companion/` | BLE companion protocol encoder/decoder (no_std)                                                                       |
 | `ssd1675`            | `vendor/ssd1675/`            | Async Embassy SSD1675 driver with OTP LUT readback, variant detection (A/B), `UpdateMode`, `BorderWaveform`, fast LUT |
+| `ssd1680`            | `vendor/ssd1680/`            | Async Embassy SSD1680 driver — the `ssd1680-driver` feature behind every `embassy-1680-*` build |
 
 ## Connecting with MeshCore
 
@@ -395,19 +399,20 @@ All alarm state — hour, minute, day mask, and enabled flag — is persisted to
 
 #### Calendar events
 
-Beyond the single recurring alarm in slot 0, the watch carries up to **31 one-shot calendar event slots** (slots 1..31 of `N_ALARMS = 32`). Each event has a date (year/month/day), a time, an enabled flag, a 31-byte ASCII summary, and shares slot 0's currently-selected ringtone when it fires.
+Beyond the single recurring alarm in slot 0, the watch carries up to **159 one-shot calendar event slots** (slots 1..159 of `N_ALARMS = 160`). A slot holds only a date (year/month/day), a time, an enabled flag and a show-but-don't-ring *silent* flag, and shares slot 0's currently-selected ringtone when it fires. Titles are not stored in slots — the Calendar reads them back out of `ALARMS.ICS`.
 
-**Calendar screen.** Reachable from the icon grid right after Clock. Three modes:
+**Calendar screen.** Reachable from the icon grid right after Clock (and the boot screen on the organizer edition). Four modes:
 
 - **Passive** (default on entry): month grid with today highlighted in red, days-with-events get a small red dot, no cursor visible. All buttons fall through so you can scroll past Calendar with Left/Right just like any other screen. Fire/Execute enters Active.
 - **Active**: cursor border becomes visible. Up/Down/Left/Right move the cursor a cell (crosses month boundaries automatically). Fire/Execute drills into Day-detail. Cancel returns to Passive.
-- **Day-detail**: full-screen list of every event on the cursor day, scrollable. Cancel returns to Active.
+- **Day-detail**: a timeline of the cursor day — an hour axis with event blocks proportional to duration. Up/Down scroll the visible hour window, Left/Right scroll long titles in 3-char steps. Fire/Execute opens Day-list; Cancel returns to Active.
+- **Day-list**: full-screen list of the day's events with untruncated summaries, for short events whose blocks were too small to fit a title. Cancel returns to Day-detail.
 
-**Clock-face indicator.** Whenever any alarm slot is enabled, a small red bell appears in the Clock face's header. If a future-firing event is scheduled for later today, its `HH:MM` is drawn in black next to the bell.
+**Clock-face indicator.** Whenever any alarm slot is enabled *and not silent*, a small red bell appears in the Clock face's header. Imported all-day events are silent, so they never light it. If a future-firing event is scheduled for later today, its `HH:MM` is drawn in black next to the bell.
 
-**Populate event slots by dropping `ALARMS.ICS` onto the FAT12 partition.** At boot the firmware reads the file, parses each `BEGIN:VEVENT` block (extracting `DTSTART`, `DTEND` and `SUMMARY`), and populates slots 1..N. Slot 0 (the manual recurring alarm) is left untouched. The Bornhack programme export from <https://bornhack.dk/.../program/ics/> works directly — the parser handles `TZID=…:` parameters and CRLF line endings. Import limits: a 4 KiB read buffer (≈15–25 events depending on `SUMMARY` length) and the 31-slot cap, whichever hits first. Re-runs only at boot — edits while running don't take effect until next reboot. An example file (Bornhack 2026 opening + closing) ships at [`assets/to-badge/ALARMS.ICS`](assets/to-badge/ALARMS.ICS).
+**Populate event slots by dropping `ALARMS.ICS` onto the FAT12 partition.** The firmware walks the file through an 8 KiB sliding window — file size is not a limit — parsing each `BEGIN:VEVENT` block (`DTSTART`, `DTEND`, `RRULE`, `SUMMARY`, expanding recurrences to at most 64 occurrences per rule) and filling slots 1..N with the nearest upcoming events. Slot 0 (the manual recurring alarm) is left untouched. The Bornhack programme export from <https://bornhack.dk/.../program/ics/> works directly — the parser handles `TZID=…:` parameters and CRLF line endings. Events beyond the 159 slots still show on the calendar but cannot ring; the grid says so in red. The import re-runs automatically about two seconds after a USB copy settles, on demand from Settings → Events → Reload from ICS, at local midnight, and when the wall clock first syncs — no reboot needed. An example file (Bornhack 2026 opening + closing) ships at [`assets/to-badge/ALARMS.ICS`](assets/to-badge/ALARMS.ICS).
 
-Imported events live in RAM only — they're not persisted to flash, so a reboot re-imports from the FAT12 partition. Settings → Events lists every populated slot read-only (`<n>: HH:MM MM-DD`) plus two actions: **Quick test +5min** (drops a `Quick test` event 5 minutes from now in the first empty slot — handy for verifying the alarm path without USB; silently no-ops if the wall clock isn't synced or all slots are taken) and a destructive **Clear all** that disables and zeros slots 1..31 immediately. Empty slots are auto-hidden — you only scroll past the events that actually exist.
+Alarm slots live in RAM only — they're not persisted to flash, so every import rebuilds them from the FAT12 partition. Settings → Events lists every populated slot read-only (`<n>: HH:MM MM-DD`) plus three actions: **Reload from ICS** (re-read the file now), **Test alarm +5min** (arms a titleless alarm 5 minutes out — handy for verifying the ring path without USB; it does not appear on the Calendar, which reads the file rather than the slots; silently no-ops if the wall clock isn't synced or all slots are taken) and a destructive **Clear all** that disables and zeros slots 1..159 immediately. Empty slots are auto-hidden — you only scroll past the events that actually exist.
 
 When the wall clock matches an event's date+time, the buzzer plays the user's currently-selected ringtone (the same Settings → Alarm → Tone choice that recurring slot 0 uses), and the slot auto-disables to prevent re-firing.
 
@@ -637,7 +642,7 @@ included, and **which EPD controller** the panel uses.
 | Organizer (`make fw-organizer`)      | no   | yes             | yes   | Calendar-first badge — no pet, boots into the schedule  |
 | Game only (`make fw-game`)           | yes  | no              | yes   | Game development when full build exceeds flash          |
 | Mesh only (`make fw-mesh`)           | no   | yes             | yes   | Mesh/radio development when full build exceeds flash    |
-| Watch only (`make fw-watch`)         | no   | no              | yes   | Minimal ~130 KiB build for watch-face / clock work only |
+| Watch only (`make fw-watch`)         | no   | no              | yes   | Smallest build (~332 KiB flash) for watch-face / clock work only |
 
 The watch face is part of `embassy-core` and is therefore present in every variant. The watch-only build (`embassy-watch` feature) is the smallest configuration that still drives the EPD.
 
@@ -743,7 +748,9 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | Backspace  | Cancel button  | Cancel / close modal           |
 | Escape     | —              | Quit simulator                 |
 
-### All make targets
+### Make targets
+
+The SSD1680 twins (`fw-1680`, `fw-1680-organizer`, `flash-1680*`, `dfu-flash-1680*`) mirror the SSD1675 targets below; see [Panel choice](#panel-choice--ssd1675-or-ssd1680).
 
 | Command                  | Description                               |
 | ------------------------ | ----------------------------------------- |
@@ -756,7 +763,7 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | `make fw-organizer`      | Build organizer-edition debug firmware    |
 | `make fw-organizer-release` | Build organizer-edition release firmware |
 | `make fw-watch`          | Build watch-only debug firmware           |
-| `make fw-watch-release`  | Build watch-only release firmware         |
+| `cargo fw-watch-release` | Build watch-only release firmware (no make target) |
 | `make flash`             | Build + flash full debug firmware (SWD)   |
 | `make flash-release`     | Build + flash full release firmware (SWD) |
 | `make flash-game`        | Build + flash game-only firmware (SWD)    |

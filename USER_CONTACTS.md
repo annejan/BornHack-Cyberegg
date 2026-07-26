@@ -1,6 +1,6 @@
 # Contacts — User Guide
 
-The **Contacts** list (under **Main → Bornagotchi → Contacts** or jump there from the **Adverts** screen) shows everyone your badge has heard or knows: nearby strangers, saved friends, repeaters and rooms.
+The **Contacts** list (the **Adverts** carousel screen) shows everyone your badge has heard or knows: nearby strangers, saved friends, repeaters and rooms.
 
 ## List view
 
