@@ -278,6 +278,23 @@ fn dispatch_active(btn: ButtonId) -> bool {
     true
 }
 
+/// The timeline's current top hour, or `None` while there is nothing to
+/// scroll yet.
+///
+/// `DAY_VIEW_TOP_HOUR` holds `0xFF` until the renderer has resolved where
+/// to anchor the view, and it only resolves once the day cache actually
+/// holds the cursor day. Stepping from an unresolved sentinel used to
+/// substitute hour 0, which turned the next Up or Down into a jump to
+/// midnight — and, worse, destroyed the sentinel, so the view never
+/// auto-scrolled to the day's events when they finally arrived.
+///
+/// Scroll presses during that window are swallowed instead: there is no
+/// rendered position to step from, and the day is about to place itself.
+fn scrollable_top_hour() -> Option<u8> {
+    let top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+    if top == 0xFF { None } else { Some(top) }
+}
+
 fn dispatch_day_detail(btn: ButtonId) -> bool {
     // Up/Down:        scroll the timeline by an hour.
     // Left/Right:     scroll all event titles left/right in 3-char steps so
@@ -292,18 +309,16 @@ fn dispatch_day_detail(btn: ButtonId) -> bool {
     // Cancel:         back to the grid (title scroll resets to 0).
     match btn {
         ButtonId::Up => {
-            let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
-            // Treat sentinel as 0 for the bounds-check; renderer will
-            // resolve the new value into the visible range.
-            let resolved = if cur_top == 0xFF { 0 } else { cur_top };
-            DAY_VIEW_TOP_HOUR.store(resolved.saturating_sub(1), Ordering::Relaxed);
+            if let Some(cur_top) = scrollable_top_hour() {
+                DAY_VIEW_TOP_HOUR.store(cur_top.saturating_sub(1), Ordering::Relaxed);
+            }
             true
         }
         ButtonId::Down => {
-            let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
-            let resolved = if cur_top == 0xFF { 0 } else { cur_top };
-            // Cap at 23 so the user can't scroll past the end of the day.
-            DAY_VIEW_TOP_HOUR.store(resolved.saturating_add(1).min(23), Ordering::Relaxed);
+            if let Some(cur_top) = scrollable_top_hour() {
+                // Cap at 23 so the user can't scroll past the end of the day.
+                DAY_VIEW_TOP_HOUR.store(cur_top.saturating_add(1).min(23), Ordering::Relaxed);
+            }
             true
         }
         ButtonId::Right => {
@@ -1087,6 +1102,42 @@ mod tests {
         )
         .expect("row buffer must hold the widest event row");
         assert!(row.ends_with('Æ'), "title survived: {row:?}");
+    }
+
+    /// The timeline scroll must never step from the unresolved sentinel.
+    /// Doing so read `0xFF` as hour 0 — turning the next press into a
+    /// jump to midnight — and overwrote the sentinel, so the view never
+    /// auto-anchored on the day's events once they loaded.
+    #[test]
+    fn scroll_does_nothing_until_the_view_has_a_position() {
+        DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
+        assert_eq!(scrollable_top_hour(), None, "sentinel is not a position");
+
+        // Up and Down must both leave the sentinel intact.
+        for (name, btn) in [("Up", ButtonId::Up), ("Down", ButtonId::Down)] {
+            assert!(dispatch_day_detail(btn), "the press is still consumed");
+            assert_eq!(
+                DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed),
+                0xFF,
+                "{name} clobbered the sentinel"
+            );
+        }
+
+        // Once the renderer has anchored the view, stepping works.
+        DAY_VIEW_TOP_HOUR.store(9, Ordering::Relaxed);
+        assert_eq!(scrollable_top_hour(), Some(9));
+        dispatch_day_detail(ButtonId::Down);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 10);
+        dispatch_day_detail(ButtonId::Up);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 9);
+
+        // And it still clamps at both ends of the day.
+        DAY_VIEW_TOP_HOUR.store(0, Ordering::Relaxed);
+        dispatch_day_detail(ButtonId::Up);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 0);
+        DAY_VIEW_TOP_HOUR.store(23, Ordering::Relaxed);
+        dispatch_day_detail(ButtonId::Down);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 23);
     }
 
     /// Text is anchored by its vertical middle, so a 10 px font reaches
