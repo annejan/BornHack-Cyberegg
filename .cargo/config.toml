@@ -34,3 +34,14 @@ fw-organizer-release = "build --bin embassy --no-default-features --features emb
 fw-hwtest = "build --bin hwtest --no-default-features --features hwtest --target thumbv7em-none-eabihf --profile release-hwtest"
 fw-watch = "build --bin embassy --no-default-features --features embassy-watch --target thumbv7em-none-eabihf"
 fw-watch-release = "build --bin embassy --no-default-features --features embassy-watch --target thumbv7em-none-eabihf --release"
+# SSD1680 panel builds (mutually exclusive with the ssd1675 `fw*` aliases).
+fw-1680 = "build --bin embassy --no-default-features --features embassy-1680-full --target thumbv7em-none-eabihf"
+fw-1680-release = "build --bin embassy --no-default-features --features embassy-1680-full --target thumbv7em-none-eabihf --release"
+# `probe-rs run` decodes RTT logs — mirrors `fw-flash` for the ssd1680 build.
+flash-1680 = "run --bin embassy --no-default-features --features embassy-1680-full --target thumbv7em-none-eabihf"
+fw-1680-game = "build --bin embassy --no-default-features --features embassy-1680-game --target thumbv7em-none-eabihf"
+fw-1680-game-release = "build --bin embassy --no-default-features --features embassy-1680-game --target thumbv7em-none-eabihf --release"
+fw-1680-mesh = "build --bin embassy --no-default-features --features embassy-1680-mesh --target thumbv7em-none-eabihf"
+fw-1680-mesh-release = "build --bin embassy --no-default-features --features embassy-1680-mesh --target thumbv7em-none-eabihf --release"
+fw-1680-organizer = "build --bin embassy --no-default-features --features embassy-1680-organizer --target thumbv7em-none-eabihf"
+fw-1680-organizer-release = "build --bin embassy --no-default-features --features embassy-1680-organizer --target thumbv7em-none-eabihf --release"

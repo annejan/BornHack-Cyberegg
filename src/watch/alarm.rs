@@ -325,7 +325,7 @@ pub fn first_empty_event_slot() -> Option<usize> {
 /// clock, with the given summary.  Picks the first empty event slot.
 /// Returns the firing `(hour, minute)` on success, or `None` if the
 /// wall clock isn't synced or all event slots are full.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn add_quick_event(minutes_ahead: u16) -> Option<(u8, u8)> {
     let c = clock::wall_clock()?;
     let slot = first_empty_event_slot()?;
@@ -487,7 +487,7 @@ fn step_melody(delta: i32) {
     let idx = TONES[next].1;
     ALARM_MELODY[0].store(idx, Ordering::Relaxed);
     super::signal_settings_dirty();
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::fw::buzzer::play(idx as usize);
 }
 
@@ -501,7 +501,7 @@ pub fn alarm_dec_melody() {
 
 // ── KV load / persist (called by the watch coordinator) ─────────────────────
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     let mut b = [0u8; 1];
     if let Ok(1) = ns.get("alarm_h", &mut b).await
@@ -527,7 +527,7 @@ pub(super) async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     }
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) async fn persist(ns: &crate::fw::kv::KvNamespace) {
     let _ = ns.set("alarm_h", &[alarm_hour()], true).await;
     let _ = ns.set("alarm_m", &[alarm_minute()], true).await;
@@ -540,10 +540,10 @@ pub(super) async fn persist(ns: &crate::fw::kv::KvNamespace) {
 
 /// True while the alarm melody is playing and the user hasn't yet dismissed
 /// it. Cleared by [`dismiss_alarm_if_ringing`] or after a short timeout.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static ALARM_RINGING: AtomicBool = AtomicBool::new(false);
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
@@ -563,7 +563,7 @@ static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
 /// two melodies on top of each other would just sound bad (slot 0 wins ties).
 /// Every *other* matching one-shot slot still auto-disables, though, so a
 /// colliding calendar alarm doesn't linger enabled and mis-fire on a later day.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn check_and_fire_alarm() {
     let Some(c) = clock::wall_clock() else {
         return;
@@ -614,7 +614,7 @@ pub fn check_and_fire_alarm() {
 /// Returns `true` if there was an active alarm to silence; in that case the
 /// buzzer is stopped and the ringing flag cleared. Called by the menu dispatch
 /// before any other button handling.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn dismiss_alarm_if_ringing() -> bool {
     if ALARM_RINGING.swap(false, Ordering::Relaxed) {
         crate::fw::buzzer::stop();
@@ -632,7 +632,7 @@ pub fn dismiss_alarm_if_ringing() -> bool {
 /// the repeats and the final cleanup.  The repeat melody is whichever slot's
 /// tone is currently set on slot 0 — close enough; chaining the
 /// originating-slot index through the ring task is overkill for now.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn alarm_ring_timeout_task() {
     const ALARM_REPEATS: u8 = 4; // total plays = 1 initial + 4 repeats

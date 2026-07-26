@@ -66,18 +66,18 @@
 // or simulator. Other binaries (e.g. `hwtest`) build against an empty
 // library so their builds don't drag in the full graphics/menu stack.
 #![cfg_attr(not(feature = "simulator"), no_std)]
-#![cfg_attr(feature = "embassy-base", no_main)]
-#![cfg(any(feature = "embassy-base", feature = "simulator"))]
+#![cfg_attr(feature = "embassy-core", no_main)]
+#![cfg(any(feature = "embassy-core", feature = "simulator"))]
 
 #[derive(Debug, PartialEq)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum ScreenError {
     NotFound,
     OutOfBounds,
     InvalidScreen,
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub mod fw;
 // `fw::emoji` is pure embedded-graphics glyph rendering (no embassy/HAL deps)
 // and is shared with the `watch` face, which the simulator also compiles.
@@ -85,7 +85,7 @@ pub mod fw;
 // so expose just this one submodule there to keep `crate::fw::emoji::*`
 // resolving. Guarded against `embassy-base` so the two `mod fw` blocks are
 // mutually exclusive.
-#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+#[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
 pub mod fw {
     pub mod emoji;
 
@@ -133,6 +133,12 @@ pub mod fw {
 }
 #[cfg(feature = "game")]
 pub mod game;
+/// Unified EPD pixel colour (`EpdColor`; `TriColor` alias) shared by every panel
+/// driver and the simulator.
+pub mod color;
+/// Panel-agnostic e-paper driver trait implemented by each controller adapter.
+#[cfg(feature = "embassy-core")]
+pub mod epd_driver;
 pub mod display_flush;
 pub mod menu;
 pub mod lut_file;
@@ -150,69 +156,28 @@ pub mod watch;
 use core::cell::RefCell;
 use core::result::Result;
 use core::result::Result::Ok;
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use core::sync::atomic::Ordering;
 use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use heapless::format;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
-// Embassy: re-export Color from ssd1675 hardware driver
-#[cfg(feature = "embassy-base")]
-mod embassy_colors {
-    pub use ssd1675::graphics::Color as TriColor;
-    pub const BLACK: TriColor = TriColor::Black;
-    pub const WHITE: TriColor = TriColor::White;
-    pub const RED: TriColor = TriColor::Red;
-}
-#[cfg(feature = "embassy-base")]
-pub use embassy_colors::*;
-
-// Simulator: define TriColor locally
-#[cfg(feature = "simulator")]
-mod tricolor {
-    use embedded_graphics::pixelcolor::Rgb888;
-    use embedded_graphics::pixelcolor::raw::RawU2;
-    use embedded_graphics::prelude::PixelColor;
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub enum TriColor {
-        Black,
-        White,
-        Chromatic,
-    }
-
-    impl PixelColor for TriColor {
-        type Raw = RawU2;
-    }
-
-    pub const WHITE: TriColor = TriColor::White;
-    pub const BLACK: TriColor = TriColor::Black;
-    pub const RED: TriColor = TriColor::Chromatic;
-
-    impl From<TriColor> for Rgb888 {
-        fn from(c: TriColor) -> Self {
-            match c {
-                TriColor::White => Rgb888::new(255, 255, 255),
-                TriColor::Black => Rgb888::new(0, 0, 0),
-                TriColor::Chromatic => Rgb888::new(255, 0, 0),
-            }
-        }
-    }
-}
+// Unified EPD pixel colour shared by every panel driver and the simulator.
+// `TriColor` is a back-compat alias of `EpdColor`, so every existing
+// `DrawTarget<Color = TriColor>` bound keeps resolving unchanged.
+pub use color::{BLACK, EpdColor, RED, TriColor, WHITE};
 
 // Conditional imports based on feature
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::signal::Signal;
-#[cfg(feature = "simulator")]
-pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
 /// Player-menu song indices into `crate::fw::buzzer::MELODIES`.
 /// Defined here, not in `fw::buzzer`, so the `game::modal` music menu
@@ -253,7 +218,7 @@ pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(true);
 pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(2);
 
 /// Fired when `TIMEZONE_OFFSET` changes so the BLE task can persist it.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// LoRa radio parameters stored on-device.
@@ -261,7 +226,7 @@ pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new(
 /// Serialisation to/from the 12-byte `"settings:radio"` KV record lives in
 /// [`fw::mesh::settings`], which re-exports this type.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub struct RadioParams {
     /// Carrier frequency in Hz (e.g. 869_618_000).
     pub freq_hz: u32,
@@ -341,7 +306,7 @@ pub static ADVERT_INTERVAL_HOURS: AtomicU8 = AtomicU8::new(16);
 /// Fired by the menu when advert scheduling changes (toggle or interval).
 /// The BLE task persists the new config; the advert ticker task wakes up and
 /// re-reads the interval for its next sleep.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static ADVERT_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired when the menu or BLE companion changes the LoRa radio params so
@@ -349,7 +314,7 @@ pub static ADVERT_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::
 /// `persister::lora_radio_loop` waits on this.  After the persister
 /// finishes the flash write it fans out to `LORA_RADIO_APPLY_SIGNAL` so
 /// the listener task can reprogram the SX1262 live (no reboot needed).
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static LORA_RADIO_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired by `persister::lora_radio_loop` after a successful flash write
@@ -359,25 +324,25 @@ pub static LORA_RADIO_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Sign
 /// required because `embassy_sync::signal::Signal` only wakes a single
 /// waiter per signal — having two consumers race for the same signal
 /// is how the persister kept winning and the listener never reprogrammed.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static LORA_RADIO_APPLY_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired when the menu changes `OtherParams` fields (advert_loc / multi_acks)
 /// so the BLE task can persist them.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static OTHER_PARAMS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired when the menu changes `PATH_HASH_MODE`.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static PATH_HASH_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired by the menu's Factory Reset action — wipes the entire KV store and
 /// resets the device.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired when the menu's text entry submits a new node name.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// One-shot request for the next EPD refresh to use the slow full
@@ -416,7 +381,7 @@ pub static BOOT_CHIME_ENABLED: AtomicBool = AtomicBool::new(true);
 pub static LORA_DISABLED: AtomicBool = AtomicBool::new(false);
 
 /// Fired when `LORA_DISABLED` changes so the meshcore task wakes up.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static LORA_DISABLED_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// When true, the BLE task stops advertising and waits until re-enabled.
@@ -424,11 +389,11 @@ pub static BLE_DISABLED: AtomicBool = AtomicBool::new(false);
 
 /// Fired when `BLE_DISABLED` changes, waking the BLE task out of its
 /// disabled-wait loop or persisting the new state.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static BLE_DISABLED_CHANGED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired by the menu to clear all stored BLE bond/pairing data and reboot.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static CLEAR_BONDS_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // Re-export mesh types and statics so existing `crate::SomeType` paths keep
@@ -449,31 +414,31 @@ pub static PM_UNREAD: AtomicBool = AtomicBool::new(false);
 
 /// Fired by the BLE task whenever the pairing passkey changes (new passkey or
 /// cleared).
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired when something off-screen needs the display to redraw — e.g.
 /// `game::show_toast` posting a station bonus from the NFC task.
 /// The display loop wakes on this and the active screen renderer
 /// picks up the new state.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static TOAST_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired every minute by `minute_tick_task` so the display redraws the clock.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static MINUTE_TICK: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // ---------------------------------------------------------------------------
 // Wall clock
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 struct WallClock {
     unix_base: u32,
     ticks_base: u64,
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static WALL_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<WallClock>>> =
     Mutex::new(RefCell::new(None));
 
@@ -482,7 +447,7 @@ static WALL_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<WallClock>>> =
 /// for both the initial seed and later refinements.  Does NOT latch
 /// `BLE_TIME_LOCKED` on its own — the BLE caller sets that flag
 /// explicitly after calling here.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn set_wall_clock(unix_secs: u32) {
     WALL_CLOCK.lock(|cell| {
         *cell.borrow_mut() = Some(WallClock {
@@ -497,11 +462,11 @@ pub fn set_wall_clock(unix_secs: u32) {
 /// stops refining once true — BLE is authoritative.  Never cleared
 /// until reboot — a BLE disconnect does NOT re-enable on-air
 /// refinement.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static BLE_TIME_LOCKED: AtomicBool = AtomicBool::new(false);
 
 /// Current unix time in seconds, or `None` if the clock has never been synced.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn unix_now() -> Option<u32> {
     WALL_CLOCK.lock(|cell| {
         cell.borrow().as_ref().map(|wc| {
@@ -518,7 +483,7 @@ pub fn unix_now() -> Option<u32> {
 /// renderer. Populated by the BLE task at startup (after reading from flash)
 /// and on every SET_ADVERT_NAME update.  Empty until the BLE task has
 /// initialized.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31>>> =
     Mutex::new(RefCell::new(heapless::String::new()));
 
@@ -531,7 +496,7 @@ pub static NODE_NAME: std::sync::Mutex<RefCell<heapless::String<31>>> =
 /// Read by the "My QR" screen to build the meshcore contact URL; all zeros
 /// before mesh init runs (the QR screen treats that as "key not ready yet"
 /// and shows a placeholder).
-#[cfg(all(feature = "embassy-base", feature = "mesh"))]
+#[cfg(all(feature = "embassy-core", feature = "mesh"))]
 pub static MY_PUB_KEY: Mutex<CriticalSectionRawMutex, RefCell<[u8; 32]>> =
     Mutex::new(RefCell::new([0u8; 32]));
 
@@ -578,7 +543,7 @@ pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
 
 /// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is
 /// ignored.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn update_node_name(name: &[u8]) {
     if let Ok(s) = core::str::from_utf8(name) {
         NODE_NAME.lock(|cell| {
@@ -606,7 +571,7 @@ pub fn update_node_name(name: &[u8]) {
 // Macro for embassy - immutable access
 /// Access the shared `DisplayState` immutably.
 /// Usage: `with_display_state!(|s| s.active_screen())`
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[macro_export]
 macro_rules! with_display_state {
     ($f:expr) => {
@@ -620,7 +585,7 @@ macro_rules! with_display_state {
 
 /// Access the shared `DisplayState` mutably.
 /// Usage: `with_display_state_mut!(|s| s.dispatch_button(btn))`
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[macro_export]
 macro_rules! with_display_state_mut {
     ($f:expr) => {
@@ -678,7 +643,7 @@ where
 {
     // Text entry: full-screen text input takes priority over all screens.
     if text_entry::is_active() {
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         return text_entry::TEXT_ENTRY.lock(|cell| {
             let borrow = cell.borrow();
             if let Some(ref entry) = *borrow {
@@ -732,7 +697,7 @@ where
     // embassy display loop drives this (timed stages + refreshes); the simulator
     // has no such loop, so it renders the current frame here. Takes priority over
     // the battle result card below.
-    #[cfg(all(feature = "game", feature = "simulator", not(feature = "embassy-base")))]
+    #[cfg(all(feature = "game", feature = "simulator", not(feature = "embassy-core")))]
     if game::battle_anim_active() {
         if game::battle_anim_stage() == game::BattleStage::Done {
             game::clear_battle_anim();
@@ -790,7 +755,7 @@ where
 /// Does nothing when no pairing is in progress (`BLE_PASSKEY == u32::MAX`).
 /// The double-border box signals urgency and renders on top of all other
 /// content.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn draw_ble_pin_overlay<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -936,9 +901,9 @@ where
     // drawn as inverted pixels — WHITE where fill is BLACK, BLACK
     // where the interior is empty (WHITE).  Visible regardless of
     // current charge level.
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     let charging = fw::battery::is_charging();
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     let charging = false;
 
     if charging {
@@ -996,7 +961,7 @@ where
     }
 
     // Build the device ID string for the header title.
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     let device_id = {
         let id = fw::device_id::get_bytes();
         let mut s: heapless::String<15> = heapless::String::new();
@@ -1007,7 +972,7 @@ where
         let _ = s.push_str(core::str::from_utf8(&id).unwrap_or("????"));
         s
     };
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     let device_id: heapless::String<15> = {
         let mut s = heapless::String::new();
         let _ = s.push_str("Cyber \u{00C6}gg A3F7");
@@ -1015,7 +980,7 @@ where
     };
 
     // Build the footer: node name + time
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     let footer_text = {
         let mut f: heapless::String<24> = heapless::String::new();
         NODE_NAME.lock(|cell| {
@@ -1046,7 +1011,7 @@ where
         }
         f
     };
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     let footer_text: heapless::String<24> = heapless::String::new();
 
     let footer = if footer_text.is_empty() {

@@ -27,7 +27,7 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 use crate::{RED, TriColor, WHITE};
 
 /// How long the padlock stays on screen after each key touch.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const OVERLAY_SECS: u64 = 5;
 
 /// True while input is locked (persists until the next unlock hold).
@@ -90,7 +90,7 @@ where
 /// Fired by `run_buttons` on every lock-relevant event (lock, unlock, or a key
 /// touched while locked). The [`overlay_task`] wakes on it and re-evaluates the
 /// overlay from [`is_active`].
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static POKE: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
@@ -98,7 +98,7 @@ static POKE: embassy_sync::signal::Signal<
 
 /// Nudge the overlay task: show/refresh the padlock while locked, or hide it on
 /// unlock. Cheap and non-blocking — safe to call from the button task.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn poke() {
     POKE.signal(());
 }
@@ -109,7 +109,7 @@ pub fn poke() {
 /// for `OVERLAY_SECS`, restarting that window on each further poke; after the
 /// window elapses it hides the padlock but leaves the keys locked. A poke that
 /// arrives while unlocked simply hides the padlock at once.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn overlay_task() {
     use embassy_futures::select::{Either, select};

@@ -13,18 +13,16 @@
 //! Supports arbitrary sizes and screen positions with clipping.
 //! Uses the display's work buffer as scratch for RLE decoding.
 
-#[cfg(feature = "embassy-base")]
-use crate::fw::epd::EpdGfx;
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use crate::fw::fat12;
 
 /// Display dimensions.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const DISP_WIDTH: usize = 152;
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const DISP_HEIGHT: usize = 152;
 /// Display buffer bytes per row.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const DISP_ROW_STRIDE: usize = DISP_WIDTH / 8;
 
 /// PCX header size.
@@ -47,7 +45,7 @@ const PCX_HEADER_SIZE: usize = 128;
 /// [`crate::game::pet_registry::MAX_PET_PREFIX`].  Kept small (paired with a
 /// u16 presence cell below) because the debug build is RAM-tight — growing
 /// this table overflows the stack and corrupts adjacent statics.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const PP_MAX: usize = 8;
 /// Anim-id range covered.  Anim ids go 0x00..=0x14 (start screen + 20
 /// lifecycle anims), plus 0x23-0x28 (Exercising/Medicating/Drinking/
@@ -61,16 +59,16 @@ const PP_MAX: usize = 8;
 /// the sprite files are on flash but the catalog can't see far enough to
 /// notice them, so the game falls back to the no-artwork debug-text
 /// path.  Keep this at least one past the highest `anim_id`.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const AA_MAX: usize = 41;
 /// Maximum frame index per animation (bit position in the u16 presence cell).
 /// No animation exceeds a handful of frames; 16 is ample.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const FF_MAX: u8 = 16;
 
 // AtomicU16 (not U32): 8×41×2 B keeps the table small so the RAM-tight
 // debug build doesn't overflow the stack into adjacent statics.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
     [const { [const { core::sync::atomic::AtomicU16::new(0) }; AA_MAX] }; PP_MAX];
 
@@ -82,7 +80,7 @@ static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8:
 // ---------------------------------------------------------------------------
 
 /// Decode `b"AB"` (two ASCII hex digits) into a 0..=255 byte.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn parse_hex_pair(hi: u8, lo: u8) -> Option<u8> {
     fn d(c: u8) -> Option<u8> {
         match c {
@@ -98,7 +96,7 @@ fn parse_hex_pair(hi: u8, lo: u8) -> Option<u8> {
 /// Discover PCX files on the FAT12 partition and record per-animation
 /// presence in `ANIM_PRESENCE`.  Walks the entire directory — no
 /// catalogue size cap.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn init() {
     let mut dir = match fat12::DirReader::open().await {
         Ok(d) => d,
@@ -173,7 +171,7 @@ pub fn frame_count() -> u8 {
 ///
 /// Frame `00` missing → returns 0 (no animation available).
 pub fn count_anim_frames(prefix: &[u8; 4]) -> u8 {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     {
         let pp = match parse_hex_pair(prefix[0], prefix[1]) {
             Some(v) if (v as usize) < PP_MAX => v as usize,
@@ -186,7 +184,7 @@ pub fn count_anim_frames(prefix: &[u8; 4]) -> u8 {
         let bitmap = ANIM_PRESENCE[pp][aa].load(core::sync::atomic::Ordering::Relaxed);
         bitmap.trailing_ones().min(FF_MAX as u32) as u8
     }
-    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    #[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
     {
         const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
         const MAX_ANIM_FRAMES: u8 = 32;
@@ -214,7 +212,7 @@ pub fn count_anim_frames(prefix: &[u8; 4]) -> u8 {
         }
         count
     }
-    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
+    #[cfg(not(any(feature = "embassy-core", feature = "simulator")))]
     {
         let _ = prefix;
         0
@@ -323,12 +321,15 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 /// one scanline at a time, and writes 2bpp pixels into the black and red
 /// framebuffers.  No size limit: file can exceed any on-device buffer.
 /// Clips to display bounds.  Transparent pixels (index 3) are skipped.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 /// Blit a PCX sprite from FAT12 at `(x, y)`. When `mirror` is true the image is
 /// drawn horizontally flipped (right-facing) — the source is read normally and
 /// only the destination column is reversed, so transparency is preserved. Used
 /// for the right-hand combatant in the battle animation.
-pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, y: i32, mirror: bool) {
+pub async fn blit_file<D>(display: &mut D, file: &fat12::FileRef, x: i32, y: i32, mirror: bool)
+where
+    D: crate::epd_driver::PlaneAccess,
+{
     let file_size = file.size as usize;
     if file_size < PCX_HEADER_SIZE {
         defmt::warn!("sprite: PCX too small ({}B)", file_size);
@@ -382,7 +383,7 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
 
     // We only need black/red framebuffers now — the work buffer is no
     // longer used for sprite decoding.
-    let (black, red, _work) = display.all_buffers_mut();
+    let (black, red) = display.planes_mut();
 
     for pcx_row in 0..pcx_h {
         // Worst-case compressed bytes per scanline is `2 * bpl`: when every

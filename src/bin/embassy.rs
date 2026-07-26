@@ -4,6 +4,7 @@
 use bornhack_aegg::fw::battery::{self, battery_task, init as init_battery};
 use bornhack_aegg::fw::button::{BTN_WATCH, run_buttons};
 use bornhack_aegg::fw::buzzer::{Buzzer, buzzer_task};
+#[cfg(feature = "ssd1675-driver")]
 use bornhack_aegg::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd};
 #[cfg(feature = "mesh")]
 use bornhack_aegg::fw::mesh::{
@@ -33,7 +34,9 @@ use embassy_nrf::pwm::SimplePwm;
 use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
 use embassy_time::Timer;
 use panic_probe as _;
+#[cfg(feature = "ssd1675-driver")]
 use ssd1675::UpdateMode;
+#[cfg(feature = "ssd1675-driver")]
 use ssd1675::graphics::Color;
 use static_cell::StaticCell;
 
@@ -155,14 +158,22 @@ async fn main(spawner: Spawner) {
     // every passed test plus the broken-step name *without* its PASS,
     // pinpointing the failure for factory-floor triage with zero error
     // handling.
+    // ── SSD1675 (shipping panel) display init ─────────────────────────────
+    // Only compiled for the SSD1675 driver build. The SSD1680 build wires its
+    // own SPI bus + planes further down and skips this LUT-patch / partial-
+    // state / boot tri-colour setup entirely.
+    #[cfg(feature = "ssd1675-driver")]
     static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    #[cfg(feature = "ssd1675-driver")]
     static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    #[cfg(feature = "ssd1675-driver")]
     static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
     // Boot-time escape hatch for a bad custom LUT: sample Fire (joy_fire =
     // P1_02, see board.rs) before init_epd. Held → force the safe OTP
     // waveform and ignore LUT.CFG. `steal` is sound here: this is a
     // one-shot read that completes before the button task claims the pin
     // (board!(p, joy_fire) at spawn time below).
+    #[cfg(feature = "ssd1675-driver")]
     let force_otp_lut = {
         use embassy_nrf::gpio::{Input, Pull};
         let fire = Input::new(unsafe { embassy_nrf::peripherals::P1_02::steal() }, Pull::Up);
@@ -170,6 +181,7 @@ async fn main(spawner: Spawner) {
         drop(fire);
         held
     };
+    #[cfg(feature = "ssd1675-driver")]
     let mut display: EpdGfx<'_> = init_epd(
         board!(p, epd_spi),
         board!(p, epd_sck).into(),
@@ -186,24 +198,29 @@ async fn main(spawner: Spawner) {
     )
     .await
     .unwrap();
+    #[cfg(feature = "ssd1675-driver")]
     defmt::info!("EPD initialized");
     // EPD tuning is persisted via the mesh settings KV store; non-mesh builds
     // boot with the compiled-in defaults (LUT speed 100, temp bias 0).
-    #[cfg(feature = "mesh")]
+    #[cfg(all(feature = "ssd1675-driver", feature = "mesh"))]
     {
         bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
         bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
     }
     // A `speed=` in LUT.CFG (a calibration bundle) takes precedence over
     // the persisted value — apply it last.
+    #[cfg(feature = "ssd1675-driver")]
     bornhack_aegg::fw::epd::apply_lut_file_speed();
 
     // Host-side partial-refresh state — lazily allocates ~46 KB
     // .bss buffers (shadow + pending + sent_pending + dirty + 2
     // plane scratches).  Initialised to all-White to match the
     // post-boot panel-clear refresh below.
+    #[cfg(feature = "ssd1675-driver")]
     let dims = EpdConfig::to_dimensions();
+    #[cfg(feature = "ssd1675-driver")]
     let mut partial_state = bornhack_aegg::fw::epd::partial_state_take(dims.rows, dims.cols);
+    #[cfg(feature = "ssd1675-driver")]
     partial_state.clear_to(ssd1675::graphics::Color::White);
 
     // Boot breadcrumb #2 — switch from orange to blue while the boot
@@ -222,17 +239,20 @@ async fn main(spawner: Spawner) {
     // after) must pick the panel's real LUT band, not the 20 °C default — a
     // cold default over-drives a warm panel.  Safe to read TEMP directly here:
     // MPSL / SoftDevice isn't up yet, so it owns nothing.
-    let _ = bornhack_aegg::fw::temperature::read_and_cache().await;
-    let panel_c10 = bornhack_aegg::fw::epd::panel_temp_c10(display.variant());
-    if panel_c10 != i16::MIN {
-        display.set_active_temperature(panel_c10);
-    }
+    #[cfg(feature = "ssd1675-driver")]
+    {
+        let _ = bornhack_aegg::fw::temperature::read_and_cache().await;
+        let panel_c10 = bornhack_aegg::fw::epd::panel_temp_c10(display.variant());
+        if panel_c10 != i16::MIN {
+            display.set_active_temperature(panel_c10);
+        }
 
-    display.clear(Color::White);
-    let _ = display.reset().await;
-    let _ = display
-        .update_tc(bornhack_aegg::fw::epd::current_lut_speed())
-        .await;
+        display.clear(Color::White);
+        let _ = display.reset().await;
+        let _ = display
+            .update_tc(bornhack_aegg::fw::epd::current_lut_speed())
+            .await;
+    }
 
     // USB mass storage — spawn BEFORE the first-boot interactive
     // gate so the factory-floor "one plug-cycle per badge" workflow
@@ -257,11 +277,101 @@ async fn main(spawner: Spawner) {
     // First-boot interactive sign-off path — only on a virgin badge.
     // Paints test status on `display` via the write-name-then-test
     // pattern so a hang leaves a forensic record on the e-paper.
+    // SSD1675 only (drives the raw `EpdGfx`); the 1680 build skips it.
+    #[cfg(feature = "ssd1675-driver")]
     if !bornhack_aegg::fw::factory_test::is_passed().await {
         bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw, &mut display).await;
     }
 
+    #[cfg(feature = "ssd1675-driver")]
     let _ = display.deep_sleep().await;
+
+    // ── Unified EPD driver ────────────────────────────────────────────────
+    // Wrap the panel into the shared `EpdDriver` so the whole UI (battery-
+    // critical, the display loop) renders through one trait. The SSD1675
+    // adapter owns the freshly-seeded `PartialState`; the SSD1680 path builds
+    // its own SPI bus + planes here.
+    #[cfg(feature = "ssd1675-driver")]
+    let mut driver = bornhack_aegg::fw::epd_1675_driver::Ssd1675Driver::new(display, partial_state);
+
+    #[cfg(feature = "ssd1680-driver")]
+    let mut driver = {
+        use ssd1680::{Display, Interface};
+        use embassy_nrf::spim::{Config, Frequency, Spim};
+        use embedded_hal_bus::spi::ExclusiveDevice;
+
+        // 152×152 badge panel: 152/8 * 152 = 2888 bytes per plane.
+        const PLANE_N: usize = 2888;
+        static BLACK_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static PREV_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static PREV_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static CODE_BW_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static CODE_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        // 152×152 UI canvas planes (the driver scales these into the panel).
+        use bornhack_aegg::fw::epd_1680_driver::CANVAS_BYTES;
+        static CANVAS_BW_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
+        static CANVAS_RED_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
+
+        // Read the panel's OWN OTP full waveform back over cmd 0x33 and halve
+        // its shake repeats. Runs BEFORE the display Spim is built (it borrows
+        // SPI3 + the EPD pins, restores TX-only, then forgets them), and is
+        // installed as the full() LUT just after Display::new below.
+        let otp_full_lut = halve_shake_rp_1680(probe_otp_full_lut_1680().await);
+
+        // SPI3 bus + control pins (mirrors `epd::init_epd`).
+        let mut cfg = Config::default();
+        cfg.frequency = Frequency::M16;
+        let bus = Spim::new_txonly(
+            board!(p, epd_spi),
+            Irqs1680,
+            board!(p, epd_sck),
+            board!(p, epd_mosi),
+            cfg,
+        );
+        let csn = Output::new(board!(p, epd_csn), Level::High, OutputDrive::Standard);
+        let rst = Output::new(board!(p, epd_reset), Level::Low, OutputDrive::Standard);
+        let dc = Output::new(board!(p, epd_dc), Level::Low, OutputDrive::Standard);
+        let busy = Input::new(board!(p, epd_busy), Pull::Down);
+        let spi_dev = ExclusiveDevice::new(bus, csn, embassy_time::Delay)
+            .expect("ExclusiveDevice::new is infallible for an OutputPin CS");
+        let iface = Interface::new(spi_dev, busy, dc, rst);
+        // x_offset = 8: the panel's leftmost visible pixel sits at controller
+        // source 8, not 0 (SSD1680 has 176 sources; this module uses 152 of
+        // them starting one byte in). Without it the image sits 8 px left.
+        let mut display = Display::new(iface, 152, 152, 8);
+        // Install the boot-probed OTP full waveform (shake repeats halved).
+        display.set_full_lut(otp_full_lut);
+
+        bornhack_aegg::fw::epd_1680_driver::Driver::new(
+            display,
+            152,
+            152,
+            CANVAS_BW_1680.init([0xFF; CANVAS_BYTES]),
+            CANVAS_RED_1680.init([0x00; CANVAS_BYTES]),
+            BLACK_1680.init([0xFF; PLANE_N]),
+            RED_1680.init([0x00; PLANE_N]),
+            PREV_1680.init([0xFF; PLANE_N]),
+            PREV_RED_1680.init([0x00; PLANE_N]),
+            CODE_BW_1680.init([0xFF; PLANE_N]),
+            CODE_RED_1680.init([0xFF; PLANE_N]),
+            false, // scale_fill: canvas matches the 152×152 panel 1:1
+        )
+    };
+
+    // Boot paint on the unified driver (SSD1680 only — the SSD1675 boot clear
+    // already ran on the raw panel above so the factory-test forensic trail and
+    // the temperature-compensated tri-colour wipe stay intact).
+    #[cfg(feature = "ssd1680-driver")]
+    {
+        use bornhack_aegg::epd_driver::{EpdDriver, RefreshMode};
+        use embedded_graphics::draw_target::DrawTarget;
+        let _ = EpdDriver::init(&mut driver).await;
+        let _ = driver.clear(bornhack_aegg::color::EpdColor::White);
+        let _ = driver.refresh(RefreshMode::Full).await;
+        // No deep_sleep: the SSD1680 driver intentionally keeps the controller
+        // awake between refreshes (see `Driver::refresh`).
+    }
 
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
@@ -499,7 +609,7 @@ async fn main(spawner: Spawner) {
         Ok(m) => m,
         Err(e) => {
             defmt::error!("Battery init failed: {:?}", e);
-            show_battery_critical(&mut display, &e).await;
+            show_battery_critical(&mut driver, &e).await;
             return;
         }
     };
@@ -552,7 +662,10 @@ async fn main(spawner: Spawner) {
     );
     spawner.must_spawn(keyboard_task(qwiic_bus));
 
-    let main_loop = display_loop(&mut display, &mut button_rcvr, &mut partial_state);
+    #[cfg(feature = "ssd1675-driver")]
+    let main_loop = display_loop(&mut driver, &mut button_rcvr);
+    #[cfg(feature = "ssd1680-driver")]
+    let main_loop = display_loop_1680(&mut driver, &mut button_rcvr);
 
     // USB mass storage is a separately-spawned task (see above), so it's
     // not in these joins.
@@ -595,16 +708,17 @@ static KBD_REDRAW: embassy_sync::signal::Signal<
     (),
 > = embassy_sync::signal::Signal::new();
 
+#[cfg(feature = "ssd1675-driver")]
 async fn display_loop(
-    display: &mut EpdGfx<'_>,
+    driver: &mut bornhack_aegg::fw::epd_1675_driver::Ssd1675Driver<'_>,
     button_rcvr: &mut embassy_sync::watch::Receiver<
         '_,
         embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
         u8,
         2,
     >,
-    partial_state: &mut ssd1675::partial::PartialState,
 ) {
+    use bornhack_aegg::EpdColor;
     use embassy_futures::select::{Either, select};
 
     #[cfg(feature = "game")]
@@ -653,11 +767,18 @@ async fn display_loop(
                 bornhack_aegg::game::BattleStage::Standing,
                 bornhack_aegg::game::BattleStage::Result,
             ] {
-                display.clear(Color::White);
-                let _ = display.reset().await;
-                bornhack_aegg::game::battle_view::render_anim(display, stage).await;
-                let _ = display.update_tc(anim_speed).await;
-                let _ = display.deep_sleep().await;
+                use embedded_graphics::draw_target::DrawTarget;
+                let _ = driver.clear(EpdColor::White);
+                {
+                    let (display, _ps) = driver.staged_parts_mut();
+                    let _ = display.reset().await;
+                }
+                bornhack_aegg::game::battle_view::render_anim(driver, stage).await;
+                {
+                    let (display, _ps) = driver.staged_parts_mut();
+                    let _ = display.update_tc(anim_speed).await;
+                    let _ = display.deep_sleep().await;
+                }
                 Timer::after_millis(5_000).await;
             }
             bornhack_aegg::game::clear_battle_anim();
@@ -671,6 +792,7 @@ async fn display_loop(
             let _deghost_boost = bornhack_aegg::fw::power::boost(
                 bornhack_aegg::fw::power::Source::Epd,
             );
+            let (display, _ps) = driver.staged_parts_mut();
             display.clear(Color::Black);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
@@ -682,7 +804,10 @@ async fn display_loop(
             bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
-        display.clear(Color::White);
+        {
+            use embedded_graphics::draw_target::DrawTarget;
+            let _ = driver.clear(EpdColor::White);
+        }
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 
         // ── Game cycle: update engine, render animation ────────────────
@@ -697,7 +822,7 @@ async fn display_loop(
                 last_anim_id = id;
                 sprite_frame = 0;
             }
-            bornhack_aegg::game::render(display, sprite_frame).await;
+            bornhack_aegg::game::render(driver, sprite_frame).await;
         }
 
         #[cfg(feature = "mesh")]
@@ -708,7 +833,7 @@ async fn display_loop(
 
         let health_str = with_health!(|f| f.to_string());
         let bat_str = battery::read_pct();
-        if draw_graphics(display, &health_str, &bat_str).is_err() {
+        if draw_graphics(driver, &health_str, &bat_str).is_err() {
             health_err!(epd, "Failed to draw graphics");
         }
 
@@ -725,6 +850,12 @@ async fn display_loop(
         let mark_all = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
             || screen_changed;
+
+        // UI content is now composed into the adapter's `EpdGfx` buffers. Drop
+        // to the raw panel + host delta ledger for the SSD1675-specific drive
+        // (variant probe, plane sync, partial/tri-colour waveform selection);
+        // this borrow holds until the end of the iteration.
+        let (display, partial_state) = driver.staged_parts_mut();
 
         // Feed the SSD1675's per-temperature LUT lookup from the nRF52840
         // die sensor (the chip itself has no on-die sensor — datasheet pg 6).
@@ -903,6 +1034,268 @@ async fn display_loop(
         #[cfg(not(feature = "game"))]
         let _ = sprite_advance;
     }
+}
+
+/// SSD1680 display loop — renders the same UI through the panel-agnostic
+/// [`EpdDriver`]/[`PlaneAccess`] surface. The SSD1680 de-ghosts on its own
+/// non-blink delta waveform, so every runtime update uses [`RefreshMode::Fast`]
+/// (the boot paint in `main` is the only full refresh) and screen switches ride
+/// the same delta path.
+#[cfg(feature = "ssd1680-driver")]
+async fn display_loop_1680<D>(
+    display: &mut D,
+    button_rcvr: &mut embassy_sync::watch::Receiver<
+        '_,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        u8,
+        2,
+    >,
+) where
+    D: bornhack_aegg::epd_driver::EpdDriver
+        + bornhack_aegg::epd_driver::PlaneAccess
+        + embedded_graphics::geometry::OriginDimensions,
+{
+    use bornhack_aegg::epd_driver::RefreshMode;
+
+    #[cfg(feature = "game")]
+    let mut sprite_frame: u8 = 0;
+    #[cfg(feature = "game")]
+    let mut last_anim_id: u8 = 0xFF;
+
+    loop {
+        let _ = display.clear(bornhack_aegg::color::EpdColor::White);
+        let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
+
+        #[cfg(feature = "game")]
+        if active_screen == bornhack_aegg::SCREEN_GAME {
+            let anim = bornhack_aegg::game::lifecycle::display_anim();
+            let id = bornhack_aegg::game::engine::anim_files::anim_id_for(anim);
+            if id != last_anim_id {
+                last_anim_id = id;
+                sprite_frame = 0;
+            }
+            bornhack_aegg::game::render(display, sprite_frame).await;
+        }
+
+        #[cfg(feature = "mesh")]
+        if active_screen == SCREEN_PM {
+            bornhack_aegg::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
+            led::set_led(&led::LED_BLUE, led::LedState::Off);
+        }
+
+        let health_str = with_health!(|f| f.to_string());
+        let bat_str = battery::read_pct();
+        if draw_graphics(display, &health_str, &bat_str).is_err() {
+            health_err!(epd, "Failed to draw graphics");
+        }
+
+        // The SSD1680 de-ghosts on the non-blink delta, so screen switches use
+        // the fast windowed delta too — consume any pending full-refresh request
+        // so the flag doesn't leak.
+        let _ = bornhack_aegg::FULL_REFRESH_PENDING
+            .swap(false, core::sync::atomic::Ordering::Relaxed);
+        let mode = RefreshMode::Fast;
+
+        // Drive to completion (not wrapped in a cancelling `select` — a dropped
+        // mid-SPI refresh future could desync the controller). A button pressed
+        // during the drive is latched in the watch channel and returns from the
+        // wait below immediately after.
+        let _ = display.refresh(mode).await;
+
+        led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
+
+        let sprite_advance = wait_display_event(button_rcvr, active_screen, true).await;
+
+        #[cfg(feature = "game")]
+        if sprite_advance {
+            let anim = bornhack_aegg::game::lifecycle::display_anim();
+            let kind = bornhack_aegg::game::lifecycle::pet_kind();
+            let count = bornhack_aegg::game::engine::anim_files::frame_count(kind, anim);
+            if count > 0 {
+                let next = sprite_frame + 1;
+                let is_hatching = matches!(
+                    anim,
+                    bornhack_aegg::game::engine::DisplayAnim::Hatching { .. }
+                );
+                sprite_frame = if is_hatching {
+                    next.min(count - 1)
+                } else {
+                    next % count
+                };
+            }
+        }
+        #[cfg(not(feature = "game"))]
+        let _ = sprite_advance;
+    }
+}
+
+// SSD1680 SPI3 interrupt binding. The SSD1675 path binds its own handler in
+// `fw::epd`, which is not compiled on the 1680 build, so there is no conflict.
+#[cfg(feature = "ssd1680-driver")]
+embassy_nrf::bind_interrupts!(struct Irqs1680 {
+    SPIM3 => embassy_nrf::spim::InterruptHandler<embassy_nrf::peripherals::SPI3>;
+});
+
+/// Halve every group's RP (repeat) byte in a 153-byte SSD1680 waveform LUT,
+/// leaving TP drive-frame counts untouched — "fewer shake repeats, same drive".
+///
+/// Timing block = bytes 60..=143, 7 per group `[TP_A, TP_B, SR_AB, TP_C, TP_D,
+/// SR_CD, RP]`; RP of group `g` is byte `66 + 7*g` (g = 0..11). Halving RP keeps
+/// each phase's drive length (TP) but runs it half as many times.
+#[cfg(feature = "ssd1680-driver")]
+fn halve_shake_rp_1680(mut lut: [u8; 153]) -> [u8; 153] {
+    for g in 0..12usize {
+        lut[66 + 7 * g] /= 2;
+    }
+    lut
+}
+
+/// Boot-probe the SSD1680's OTP full-refresh waveform (register `0x32`, 153 B).
+///
+/// Loads the temperature-appropriate OTP band into the controller's LUT RAM
+/// (`0x22 = 0xB1`: LoadTemp | LoadOTP | Mode1, then `0x20`), then reads it back
+/// over cmd `0x33`: `0x33` is clocked out on MOSI (TX), the same data line is
+/// flipped to input (`new_rxonly`) to clock the reply in, then TX-only is
+/// restored — the single-wire read trick used by `fw::epd::probe_lut` on the
+/// SSD1675. Pins are stolen by number (board.rs: sck P0_08, mosi P0_27, busy
+/// P0_14, rst P0_11, dc P0_12, csn P1_09) and the GPIO wrappers `mem::forget`'d
+/// so the real display Spim re-owns them.
+///
+/// ⚠ UNVALIDATED on this panel: the raw bytes are logged over defmt so the OTP
+/// structure can be confirmed and the load/read sequence fixed on hardware if
+/// the reply comes back empty/garbage.
+#[cfg(feature = "ssd1680-driver")]
+async fn probe_otp_full_lut_1680() -> [u8; 153] {
+    use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
+    use embassy_nrf::peripherals;
+    use embassy_nrf::spim::{Config, Frequency, Spim};
+
+    // board.rs EPD pin numbers (port 1 = 32 + n).
+    const SCK: u8 = 8;
+    const MOSI: u8 = 27;
+    const BUSY: u8 = 14;
+    const RST: u8 = 11;
+    const DC: u8 = 12;
+    const CSN: u8 = 32 + 9;
+
+    let mut cs = Output::new(unsafe { AnyPin::steal(CSN) }, Level::High, OutputDrive::Standard);
+    let mut dc = Output::new(unsafe { AnyPin::steal(DC) }, Level::Low, OutputDrive::Standard);
+    let mut rst = Output::new(unsafe { AnyPin::steal(RST) }, Level::Low, OutputDrive::Standard);
+    let busy = Input::new(unsafe { AnyPin::steal(BUSY) }, Pull::Down);
+
+    let mut cfg = Config::default();
+    cfg.frequency = Frequency::M16;
+
+    // Hardware reset — flat 100 ms settle.
+    Timer::after_millis(10).await;
+    rst.set_high();
+    Timer::after_millis(100).await;
+
+    // Phase 1: soft reset, select the internal temp sensor, load the OTP band.
+    cs.set_low();
+    {
+        let mut tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        dc.set_low();
+        tx.write(&[0x12]).await.ok(); // SoftReset
+        dc.set_high();
+        core::mem::forget(tx);
+    }
+    cs.set_high();
+    for _ in 0..100u8 {
+        if !busy.is_high() {
+            break;
+        }
+        Timer::after_millis(10).await;
+    }
+    cs.set_low();
+    {
+        let mut tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        dc.set_low();
+        tx.write(&[0x18]).await.ok(); // TempSensorControl
+        dc.set_high();
+        tx.write(&[0x80]).await.ok(); // internal sensor
+        dc.set_low();
+        tx.write(&[0x22]).await.ok(); // UpdateDisplayOption2
+        dc.set_high();
+        tx.write(&[0xB1]).await.ok(); // LoadTemp | LoadOTP | Mode1
+        dc.set_low();
+        tx.write(&[0x20]).await.ok(); // MasterActivation
+        core::mem::forget(tx);
+    }
+    cs.set_high();
+    for _ in 0..100u8 {
+        if !busy.is_high() {
+            break;
+        }
+        Timer::after_millis(10).await;
+    }
+
+    // Phase 2: read 153 bytes from the LUT register (cmd 0x33).
+    let mut lut = [0u8; 153];
+    cs.set_low();
+    {
+        let mut tx = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        dc.set_low();
+        tx.write(&[0x33]).await.ok();
+        dc.set_high();
+        core::mem::forget(tx);
+    }
+    {
+        // Same data pin, now clocked as input.
+        let mut rx = Spim::new_rxonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg.clone(),
+        );
+        rx.read(&mut lut).await.ok();
+        drop(rx);
+    }
+    cs.set_high();
+
+    // Restore SPI3 to TX-only so the display Spim built next can transmit.
+    {
+        let restore = Spim::new_txonly(
+            unsafe { peripherals::SPI3::steal() },
+            Irqs1680,
+            unsafe { AnyPin::steal(SCK) },
+            unsafe { AnyPin::steal(MOSI) },
+            cfg,
+        );
+        core::mem::forget(restore);
+    }
+
+    defmt::info!("1680 OTP full LUT read-back (153 B):");
+    for (i, chunk) in lut.chunks(16).enumerate() {
+        defmt::info!("  [{=usize:03}] {=[u8]:02x}", i * 16, chunk);
+    }
+
+    // Keep the GPIO pin config — the real display Output/Input own these next.
+    core::mem::forget(cs);
+    core::mem::forget(dc);
+    core::mem::forget(rst);
+    core::mem::forget(busy);
+
+    lut
 }
 
 /// Background task owning the Qwiic bus (TWISPI0).  Polls the optional I2C
@@ -1274,13 +1667,17 @@ async fn pet_watchdog_task(mut handle: embassy_nrf::wdt::WatchdogHandle) {
 /// Called from the main battery-init error path before main() returns.
 /// The EPD retains the image after deep_sleep, so the message stays visible
 /// until the operator intervenes.
-async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryError) {
+async fn show_battery_critical<D>(display: &mut D, err: &battery::BatteryError)
+where
+    D: bornhack_aegg::epd_driver::EpdDriver,
+{
+    use bornhack_aegg::EpdColor as Color;
     use embedded_graphics::mono_font::MonoTextStyle;
     use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
     use embedded_graphics::prelude::*;
     use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-    display.clear(Color::White);
+    let _ = display.clear(Color::White);
 
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
@@ -1307,11 +1704,12 @@ async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryE
         Text::with_text_style("Check / replace", Point::new(76, 114), font, centered).draw(display);
     let _ = Text::with_text_style("battery", Point::new(76, 130), font, centered).draw(display);
 
-    let _ = display.reset().await;
     let _ = bornhack_aegg::fw::power::boosted(
         bornhack_aegg::fw::power::Source::Epd,
-        display.update_bw(UpdateMode::Mode1, bornhack_aegg::fw::epd::current_lut_speed()),
+        bornhack_aegg::epd_driver::EpdDriver::refresh(
+            display,
+            bornhack_aegg::epd_driver::RefreshMode::Full,
+        ),
     )
     .await;
-    let _ = display.deep_sleep().await;
 }

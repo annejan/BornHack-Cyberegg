@@ -582,7 +582,7 @@ impl<const M: usize> DisplayState<M> {
         // A ringing alarm eats the first button press anywhere in the UI:
         // silence the buzzer and consume the event so the user has to press
         // again to actually navigate.
-        #[cfg(all(feature = "watch", feature = "embassy-base"))]
+        #[cfg(all(feature = "watch", feature = "embassy-core"))]
         if crate::watch::dismiss_alarm_if_ringing() {
             return;
         }
@@ -590,7 +590,7 @@ impl<const M: usize> DisplayState<M> {
         // Text entry intercepts all input when active.
         if crate::text_entry::is_active() {
             let done = {
-                #[cfg(feature = "embassy-base")]
+                #[cfg(feature = "embassy-core")]
                 {
                     crate::text_entry::TEXT_ENTRY.lock(|cell| {
                         let mut borrow = cell.borrow_mut();
@@ -613,7 +613,7 @@ impl<const M: usize> DisplayState<M> {
                 }
             };
             if done {
-                #[cfg(feature = "embassy-base")]
+                #[cfg(feature = "embassy-core")]
                 crate::text_entry::TEXT_ENTRY.lock(|cell| cell.replace(None));
                 #[cfg(feature = "simulator")]
                 crate::text_entry::TEXT_ENTRY.lock().unwrap().replace(None);
@@ -827,7 +827,7 @@ fn action_reset_contacts() {
 }
 
 fn action_factory_reset() {
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::FACTORY_RESET_SIGNAL.signal(());
 }
 
@@ -843,7 +843,7 @@ fn action_tx_power_inc() {
     let v = crate::LORA_TX_POWER.load(Ordering::Relaxed);
     if v < 22 {
         crate::LORA_TX_POWER.store(v + 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
         crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
     }
 }
@@ -852,7 +852,7 @@ fn action_tx_power_dec() {
     let v = crate::LORA_TX_POWER.load(Ordering::Relaxed);
     if v > -9 {
         crate::LORA_TX_POWER.store(v - 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
         crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
     }
 }
@@ -870,7 +870,7 @@ fn label_client_repeat() -> &'static str {
 fn action_client_repeat_toggle() {
     let cur = crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed);
     crate::LORA_CLIENT_REPEAT.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
@@ -887,7 +887,7 @@ fn label_advert_loc() -> &'static str {
 fn action_advert_loc() {
     let cur = crate::ADVERT_LOC_POLICY.load(Ordering::Relaxed);
     crate::ADVERT_LOC_POLICY.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
 }
 
@@ -904,7 +904,7 @@ fn action_multi_acks_inc() {
     let v = crate::MULTI_ACKS.load(Ordering::Relaxed);
     if v < 2 {
         crate::MULTI_ACKS.store(v + 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
         crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
     }
 }
@@ -913,7 +913,7 @@ fn action_multi_acks_dec() {
     let v = crate::MULTI_ACKS.load(Ordering::Relaxed);
     if v > 1 {
         crate::MULTI_ACKS.store(v - 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
         crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
     }
 }
@@ -940,7 +940,7 @@ fn action_path_hash_inc() {
         let v = crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed);
         if v < 2 {
             crate::fw::mesh::PATH_HASH_MODE.store(v + 1, Ordering::Relaxed);
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             crate::PATH_HASH_CHANGED_SIGNAL.signal(());
         }
     }
@@ -952,7 +952,7 @@ fn action_path_hash_dec() {
         let v = crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed);
         if v > 0 {
             crate::fw::mesh::PATH_HASH_MODE.store(v - 1, Ordering::Relaxed);
-            #[cfg(feature = "embassy-base")]
+            #[cfg(feature = "embassy-core")]
             crate::PATH_HASH_CHANGED_SIGNAL.signal(());
         }
     }
@@ -969,9 +969,12 @@ fn action_path_hash_dec() {
 // persister loop in fw/mesh/persister.rs writes the new value to the
 // "settings" KV namespace alongside every other persisted setting.
 
+#[cfg(feature = "ssd1675-driver")]
 const EPD_LUT_SPEED_STEP: u8 = 5;
+#[cfg(feature = "ssd1675-driver")]
 const EPD_LUT_SPEED_MAX: u8 = 200;
 
+#[cfg(feature = "ssd1675-driver")]
 fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
@@ -980,6 +983,7 @@ fn fmt_epd_lut_speed(buf: &mut heapless::String<24>) {
 
 /// Read-only row: e-paper panel variant + which waveform LUT is live.
 /// e.g. `SSD1675B custom LUT` or `SSD1675A OTP LUT`.
+#[cfg(feature = "ssd1675-driver")]
 fn fmt_epd_panel_info(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
     let panel = if crate::fw::epd::EPD_VARIANT_IS_B.load(Ordering::Relaxed) {
@@ -995,16 +999,18 @@ fn fmt_epd_panel_info(buf: &mut heapless::String<24>) {
     let _ = write!(buf, "{} {}", panel, lut);
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_lut_speed_inc() {
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
     let new = v.saturating_add(EPD_LUT_SPEED_STEP).min(EPD_LUT_SPEED_MAX);
     if new != v {
         crate::fw::epd::EPD_LUT_SPEED.store(new, Ordering::Relaxed);
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::fw::epd::EPD_LUT_SPEED_DIRTY.signal(());
     }
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_lut_speed_dec() {
     let v = crate::fw::epd::EPD_LUT_SPEED.load(Ordering::Relaxed);
     let new = v
@@ -1012,7 +1018,7 @@ fn action_epd_lut_speed_dec() {
         .max(crate::fw::epd::EPD_LUT_SPEED_MIN);
     if new != v {
         crate::fw::epd::EPD_LUT_SPEED.store(new, Ordering::Relaxed);
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::fw::epd::EPD_LUT_SPEED_DIRTY.signal(());
     }
 }
@@ -1024,6 +1030,7 @@ fn action_epd_lut_speed_dec() {
 // Negative = treat panel as colder (picks a warmer / stronger WS),
 // positive = treat panel as warmer (picks a milder WS).
 
+#[cfg(feature = "ssd1675-driver")]
 fn fmt_epd_temp_bias(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
     let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed) as i16;
@@ -1033,6 +1040,7 @@ fn fmt_epd_temp_bias(buf: &mut heapless::String<24>) {
     let _ = write!(buf, "EPD bias: {}{}.{} C", sign, whole.abs(), frac);
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_temp_bias_inc() {
     let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed);
     let new = v
@@ -1040,11 +1048,12 @@ fn action_epd_temp_bias_inc() {
         .min(crate::fw::epd::EPD_TEMP_BIAS_MAX);
     if new != v {
         crate::fw::epd::EPD_TEMP_BIAS_C10.store(new, Ordering::Relaxed);
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::fw::epd::EPD_TEMP_BIAS_DIRTY.signal(());
     }
 }
 
+#[cfg(feature = "ssd1675-driver")]
 fn action_epd_temp_bias_dec() {
     let v = crate::fw::epd::EPD_TEMP_BIAS_C10.load(Ordering::Relaxed);
     let new = v
@@ -1052,7 +1061,7 @@ fn action_epd_temp_bias_dec() {
         .max(crate::fw::epd::EPD_TEMP_BIAS_MIN);
     if new != v {
         crate::fw::epd::EPD_TEMP_BIAS_C10.store(new, Ordering::Relaxed);
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::fw::epd::EPD_TEMP_BIAS_DIRTY.signal(());
     }
 }
@@ -1070,7 +1079,7 @@ fn label_advert_enabled() -> &'static str {
 fn action_advert_toggle() {
     let cur = crate::ADVERT_ENABLED.load(Ordering::Relaxed);
     crate::ADVERT_ENABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::ADVERT_CHANGED_SIGNAL.signal(());
 }
 
@@ -1102,7 +1111,7 @@ fn action_advert_interval_inc() {
     let i = advert_interval_idx();
     if i + 1 < ADVERT_INTERVAL_STEPS.len() {
         crate::ADVERT_INTERVAL_HOURS.store(ADVERT_INTERVAL_STEPS[i + 1], Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
         crate::ADVERT_CHANGED_SIGNAL.signal(());
     }
 }
@@ -1111,7 +1120,7 @@ fn action_advert_interval_dec() {
     let i = advert_interval_idx();
     if i > 0 {
         crate::ADVERT_INTERVAL_HOURS.store(ADVERT_INTERVAL_STEPS[i - 1], Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
         crate::ADVERT_CHANGED_SIGNAL.signal(());
     }
 }
@@ -1119,7 +1128,7 @@ fn action_advert_interval_dec() {
 /// Send an advert immediately (flood-routed) regardless of the
 /// scheduled interval.  Useful at events for quickly making yourself
 /// visible to nearby badges without waiting up to 16 hours.
-#[cfg(all(feature = "mesh", feature = "embassy-base"))]
+#[cfg(all(feature = "mesh", feature = "embassy-core"))]
 fn action_advert_send_now() {
     let _ = crate::fw::mesh::tx_send(crate::fw::mesh::TxRequest::Advert(
         crate::fw::mesh::meshcore::AdvertMode::Flood,
@@ -1127,7 +1136,7 @@ fn action_advert_send_now() {
     defmt::info!("menu: manual flood advert queued");
 }
 
-#[cfg(not(all(feature = "mesh", feature = "embassy-base")))]
+#[cfg(not(all(feature = "mesh", feature = "embassy-core")))]
 fn action_advert_send_now() {}
 
 // ── Telemetry share ────────────────────────────────────────────────────────
@@ -1194,7 +1203,7 @@ fn label_boot_chime() -> &'static str {
 fn action_boot_chime_toggle() {
     let cur = crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed);
     crate::BOOT_CHIME_ENABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "embassy-base", feature = "watch"))]
+    #[cfg(all(feature = "embassy-core", feature = "watch"))]
     crate::watch::SETTINGS_DIRTY_SIGNAL.signal(());
 }
 
@@ -1254,7 +1263,7 @@ fn label_ignore_blink() -> &'static str {
 fn action_ignore_blink() {
     let cur = crate::IGNORE_BLINK.load(Ordering::Relaxed);
     crate::IGNORE_BLINK.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
 }
 
@@ -1263,7 +1272,7 @@ fn action_telemetry_toggle() {
     let cur = crate::TELEMETRY_MODE_BASE.load(Ordering::Relaxed);
     let next = (cur + 1) % 3;
     crate::TELEMETRY_MODE_BASE.store(next, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
 }
 
@@ -1286,7 +1295,7 @@ static BLE_NAME_INIT: AtomicBool = AtomicBool::new(false);
 
 fn label_ble_name() -> &'static str {
     if !BLE_NAME_INIT.load(Ordering::Relaxed) {
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         {
             let id = crate::fw::device_id::get_bytes();
             let buf = unsafe { &mut *BLE_NAME_BUF.0.get() };
@@ -1316,12 +1325,12 @@ fn label_ble_enabled() -> &'static str {
 fn action_ble_toggle() {
     let cur = crate::BLE_DISABLED.load(Ordering::Relaxed);
     crate::BLE_DISABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::BLE_DISABLED_CHANGED.signal(());
 }
 
 fn action_clear_bonds() {
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::CLEAR_BONDS_SIGNAL.signal(());
 }
 
@@ -1339,7 +1348,7 @@ fn label_lora_enabled() -> &'static str {
 
 fn on_name_complete(name: &[u8]) {
     crate::update_node_name(name);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
     crate::NODE_NAME_CHANGED_SIGNAL.signal(());
 }
 
@@ -1356,7 +1365,7 @@ fn action_show_qr() {
 }
 
 fn action_set_name() {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     let prefill = crate::NODE_NAME.lock(|cell| {
         let s = cell.borrow();
         let mut buf = [0u8; 31];
@@ -1385,7 +1394,7 @@ fn action_set_name() {
 fn action_lora_toggle() {
     let cur = crate::LORA_DISABLED.load(Ordering::Relaxed);
     crate::LORA_DISABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::LORA_DISABLED_CHANGED.signal(());
 }
 
@@ -1401,7 +1410,7 @@ fn action_tz_inc() {
     let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
     if v < 14 {
         crate::TIMEZONE_OFFSET.store(v + 1, Ordering::Relaxed);
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::TZ_CHANGED_SIGNAL.signal(());
     }
 }
@@ -1410,7 +1419,7 @@ fn action_tz_dec() {
     let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
     if v > -12 {
         crate::TIMEZONE_OFFSET.store(v - 1, Ordering::Relaxed);
-        #[cfg(feature = "embassy-base")]
+        #[cfg(feature = "embassy-core")]
         crate::TZ_CHANGED_SIGNAL.signal(());
     }
 }
@@ -1638,11 +1647,11 @@ fn slot_alarm_visible(slot: u8) -> bool {
 /// reboot.  The badge does this by itself once a host copy settles, so
 /// this is the manual fallback for when you'd rather not wait — or when
 /// the file changed some other way.
-#[cfg(all(feature = "watch", feature = "embassy-base"))]
+#[cfg(all(feature = "watch", feature = "embassy-core"))]
 fn action_reload_ics() {
     crate::watch::request_ics_reload();
 }
-#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+#[cfg(all(feature = "watch", not(feature = "embassy-core")))]
 fn action_reload_ics() {}
 
 /// Action: arm a test alarm 5 minutes from now in the first empty slot.
@@ -1653,11 +1662,11 @@ fn action_reload_ics() {}
 /// It does *not* appear on the Calendar: that screen reads the ICS file
 /// on flash, not the alarm slots, so anything not in the file has
 /// nothing to show.
-#[cfg(all(feature = "watch", feature = "embassy-base"))]
+#[cfg(all(feature = "watch", feature = "embassy-core"))]
 fn action_add_quick_test() {
     let _ = crate::watch::add_quick_event(5);
 }
-#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+#[cfg(all(feature = "watch", not(feature = "embassy-core")))]
 fn action_add_quick_test() {}
 
 /// Expand a literal list of slot indices into menu rows wrapped by
@@ -1718,7 +1727,7 @@ static EVENTS_ITEMS: [MenuItem; 165] = events_items!(
 
 #[cfg(feature = "game")]
 fn play_melody(_index: usize) {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::fw::buzzer::play(_index);
     crate::game::lifecycle::play();
 }
@@ -1934,8 +1943,10 @@ static SOUNDS_ITEMS: [MenuItem; 4] = [
     },
 ];
 
-const SETTINGS_ITEMS_LEN: usize =
-    12 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
+const SETTINGS_ITEMS_LEN: usize = 9
+    + if cfg!(feature = "ssd1675-driver") { 3 } else { 0 }
+    + if cfg!(feature = "watch") { 2 } else { 0 }
+    + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1977,6 +1988,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             dec: action_tz_dec,
         },
     },
+    #[cfg(feature = "ssd1675-driver")]
     MenuItem {
         label: || "",
         kind: MenuItemKind::ValueStepper {
@@ -1985,6 +1997,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             dec: action_epd_lut_speed_dec,
         },
     },
+    #[cfg(feature = "ssd1675-driver")]
     MenuItem {
         label: || "",
         kind: MenuItemKind::ValueStepper {
@@ -1993,6 +2006,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
             dec: action_epd_temp_bias_dec,
         },
     },
+    #[cfg(feature = "ssd1675-driver")]
     MenuItem {
         label: || "",
         kind: MenuItemKind::Info {
@@ -2276,7 +2290,7 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_BW_HZ.store(p.bw_hz, Ordering::Relaxed);
     crate::LORA_SF.store(p.sf, Ordering::Relaxed);
     crate::LORA_CR.store(p.cr, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
@@ -2396,10 +2410,10 @@ const WATCH_ENABLED: bool = false;
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 type DisplayMutex = Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>>;
 #[cfg(feature = "simulator")]
 type DisplayMutex = Mutex<RefCell<DisplayState<SCREEN_COUNT>>>;

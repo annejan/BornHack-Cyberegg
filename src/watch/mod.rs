@@ -38,7 +38,7 @@ pub use alarm::{
     alarm_minute, alarm_minute_n, alarm_month_n, alarm_toggle_day, alarm_toggle_enabled,
     alarm_tone_label, alarm_year_n, clear_imported_alarms, first_empty_event_slot,
 };
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub use alarm::{
     add_quick_event, alarm_ring_timeout_task, check_and_fire_alarm, dismiss_alarm_if_ringing,
 };
@@ -54,18 +54,18 @@ use crate::{TriColor, draw_frame};
 // signal and persists both submodules' state to the shared `"watch"` KV
 // namespace.
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static SETTINGS_DIRTY_SIGNAL: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
 > = embassy_sync::signal::Signal::new();
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(crate) fn signal_settings_dirty() {
     SETTINGS_DIRTY_SIGNAL.signal(());
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub(crate) fn signal_settings_dirty() {}
 
 // ── Button dispatch ─────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
 /// + per-event notification sound preferences) from the `"watch"`
 /// kv namespace.  Call once at boot, after `kv::init()`.  Silently
 /// leaves defaults in place if a key is missing or invalid.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_settings_from_kv() {
     use core::sync::atomic::Ordering;
     let ns = crate::fw::kv::namespace("watch");
@@ -102,7 +102,7 @@ pub async fn load_settings_from_kv() {
 /// Embassy task that persists watch settings (alarm + face + boot
 /// chime + per-event sound preferences) whenever a setter signals
 /// `SETTINGS_DIRTY_SIGNAL`.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn settings_persister_task() {
     use core::sync::atomic::Ordering;
@@ -152,7 +152,7 @@ pub fn events_dropped() -> u16 {
 /// schedule rather than merging into it.  The default melody (`ALARM`
 /// beep-beep) is applied; the trigger auto-disables each one-shot slot
 /// after firing, so old events stop alarming themselves at midnight.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn import_alarms_from_fat12() {
     use core::sync::atomic::Ordering;
 
@@ -247,7 +247,7 @@ pub async fn import_alarms_from_fat12() {
 /// Wakes [`ics_reload_task`] for either kind of work.  What the work
 /// *is* lives in [`RELOAD_PENDING`] and [`DAY_REQUEST`], because the two
 /// can be raised together and a bare signal can't tell them apart.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub static ICS_RELOAD_SIGNAL: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
@@ -256,12 +256,12 @@ pub static ICS_RELOAD_SIGNAL: embassy_sync::signal::Signal<
 /// Set by **Settings → Events → Reload from ICS**, cleared once the
 /// re-import runs.  Separate from the signal so a day request arriving
 /// in the same window can't consume the reload and lose it.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static RELOAD_PENDING: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 /// Menu action: re-read `ALARMS.ICS` without a reboot.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn request_ics_reload() {
     RELOAD_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
     ICS_RELOAD_SIGNAL.signal(());
@@ -278,7 +278,7 @@ pub fn request_ics_reload() {
 /// Either way the import clears the old event slots first, so dropping a
 /// new calendar on the badge replaces the schedule rather than merging
 /// into it.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 #[embassy_executor::task]
 pub async fn ics_reload_task() {
     use core::sync::atomic::Ordering;
@@ -360,7 +360,7 @@ pub async fn ics_reload_task() {
 /// Always zero in builds without `usb-storage`: there is no host write
 /// path at all, so the auto-reload trigger never fires and
 /// [`ics_reload_task`] runs on the manual signal alone.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn host_write_count() -> u32 {
     #[cfg(feature = "usb-storage")]
     {
@@ -395,7 +395,7 @@ fn host_write_count() -> u32 {
 /// any `VEVENT` that straddles a boundary, so file size is not a limit.
 /// Returns `false` if the file is missing or unreadable — distinct from
 /// "read fine and contained no events".
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 async fn scan_ics<F>(mut visit: F) -> bool
 where
     F: FnMut(&ics::Event) -> core::ops::ControlFlow<()>,
@@ -641,7 +641,7 @@ impl CachedDay {
     }
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 type DayCacheMutex = embassy_sync::blocking_mutex::Mutex<
     embassy_sync::blocking_mutex::raw::ThreadModeRawMutex,
     core::cell::RefCell<CachedDay>,
@@ -654,7 +654,7 @@ type DayCacheMutex = std::sync::Mutex<core::cell::RefCell<CachedDay>>;
 /// Written by [`ics_reload_task`] after a rescan, read by the calendar
 /// renderer. Holding a single day rather than the whole file is what
 /// lets the badge show a calendar with more events than fit in RAM.
-#[cfg(any(feature = "embassy-base", feature = "simulator"))]
+#[cfg(any(feature = "embassy-core", feature = "simulator"))]
 pub static DAY_CACHE: DayCacheMutex = DayCacheMutex::new(core::cell::RefCell::new(CachedDay {
     date: (0, 0, 0),
     events: [CachedEvent::EMPTY; DAY_CACHE_MAX],
@@ -663,11 +663,11 @@ pub static DAY_CACHE: DayCacheMutex = DayCacheMutex::new(core::cell::RefCell::ne
 }));
 
 /// Run `f` against the day cache.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn with_day_cache<R>(f: impl FnOnce(&CachedDay) -> R) -> R {
     DAY_CACHE.lock(|cell| f(&cell.borrow()))
 }
-#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+#[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
 pub fn with_day_cache<R>(f: impl FnOnce(&CachedDay) -> R) -> R {
     let guard = DAY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     f(&guard.borrow())
@@ -675,7 +675,7 @@ pub fn with_day_cache<R>(f: impl FnOnce(&CachedDay) -> R) -> R {
 
 /// Date the calendar wants cached, packed as `y << 16 | m << 8 | d`.
 /// Zero means "nothing requested".
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 static DAY_REQUEST: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Ask for `(year, month, day)` to be loaded into [`DAY_CACHE`].
@@ -683,7 +683,7 @@ static DAY_REQUEST: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU3
 /// Called from the calendar's button handling, which is synchronous —
 /// the actual rescan happens in [`ics_reload_task`]. A no-op when the
 /// day is already cached, so holding an arrow key doesn't queue work.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub fn request_day(year: u16, month: u8, day: u8) {
     use core::sync::atomic::Ordering;
 
@@ -698,11 +698,11 @@ pub fn request_day(year: u16, month: u8, day: u8) {
 /// The simulator has no filesystem to read, so the calendar renders
 /// against an empty cache and an empty index — enough for laying screens
 /// out.  The index accessors work either way; only the loading does not.
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub fn request_day(_year: u16, _month: u8, _day: u8) {}
 
 /// Rescan the file for one day and publish it to [`DAY_CACHE`].
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 async fn load_day(year: u16, month: u8, day: u8) {
     use core::sync::atomic::Ordering;
 
@@ -774,7 +774,7 @@ async fn load_day(year: u16, month: u8, day: u8) {
 /// Local start/end of `event`, applying the UTC offset where the source
 /// asked for it.  Shared by the slot importer and the day cache so the
 /// two can't disagree about what time an event happens.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn local_times(event: &ics::Event, tz_offset: i8) -> (u16, u8, u8, u8, u8, u8, u8) {
     // All-day events carry no meaningful clock time, so there is nothing
     // to shift — and shifting would push them onto the wrong day.
@@ -834,7 +834,7 @@ pub fn first_indexed_day() -> Option<(u16, u8, u8)> {
 }
 
 /// Today as a day number, or `None` when the wall clock isn't synced.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn today_day_number() -> Option<i64> {
     let c = clock::wall_clock()?;
     Some(ics::days_from_civil(c.year, c.month, c.day))
@@ -842,7 +842,7 @@ fn today_day_number() -> Option<i64> {
 
 /// Write one parsed event into an alarm slot, converting UTC timestamps
 /// to local time on the way in.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn store_event(slot: usize, event: &ics::Event, tz_offset: i8) {
     let (sy, sm, sd, sh, smi, _, _) = local_times(event, tz_offset);
     alarm::set_alarm_time_n(slot, sh, smi);
@@ -858,7 +858,7 @@ fn store_event(slot: usize, event: &ics::Event, tz_offset: i8) {
 /// arithmetic.  Returns the input unchanged if the date is outside
 /// fasttime's representable range (shouldn't happen for any realistic
 /// value).
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn shift_utc_to_local(
     year: u16,
     month: u8,

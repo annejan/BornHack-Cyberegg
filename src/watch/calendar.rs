@@ -352,12 +352,12 @@ fn dispatch_day_list(btn: ButtonId) -> bool {
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn battery_pct() -> u8 {
     crate::fw::battery::read_pct()
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 fn battery_pct() -> u8 {
     100
 }

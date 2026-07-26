@@ -31,7 +31,7 @@ pub use to_display::DisplayAnim;
 /// generation in `anim_files` and the selection screen will pick
 /// them up automatically.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 ///
 /// Represented as a single byte — the sprite-prefix (`PP` in `PPAAFF.PCX`).
 /// The three built-ins are consts; extra pets can be installed at runtime
@@ -76,7 +76,7 @@ impl PetKind {
 
 /// Lifecycle phase of the pet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum Phase {
     /// Waiting to hatch (countdown running).
     Hatching,
@@ -124,7 +124,7 @@ pub const ONLYPETS_BROKE_REWARD: u32 = 100;
 
 /// Active user action (mutually exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum Action {
     Feed,
     Heal,
@@ -190,7 +190,7 @@ impl Action {
 /// Mini-games each track their own post-win cooldown so winning one
 /// doesn't lock the player out of the others — nudges variety.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum MiniGame {
     TicTacToe,
     LightsOut,
@@ -1595,7 +1595,7 @@ impl GameState {
 /// Obtain via [`GameState::stats()`] which triggers a state update first.
 /// The result is cached — calling `stats()` again at the same tick is free.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub struct PetStats {
     /// How well-fed the pet is (100 = full, 0 = starving).
     pub hunger: u8,

@@ -99,7 +99,7 @@ pub fn build_url<'a>(buf: &'a mut [u8], name: &str, pub_key: &[u8; 32]) -> Optio
 // Reading badge state
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn read_name(buf: &mut heapless::String<31>) {
     crate::NODE_NAME.lock(|cell| {
         let _ = buf.push_str(cell.borrow().as_str());
@@ -112,7 +112,7 @@ fn read_name(buf: &mut heapless::String<31>) {
     let _ = buf.push_str(guard.borrow().as_str());
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 fn read_pub_key() -> [u8; 32] {
     crate::MY_PUB_KEY.lock(|cell| *cell.borrow())
 }
@@ -130,9 +130,9 @@ pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     let bat = crate::fw::battery::read_pct();
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     let bat: u8 = 0;
 
     crate::draw_frame(display, Some(("Scan to add me", &bat)), None)?;

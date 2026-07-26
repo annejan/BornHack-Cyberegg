@@ -70,7 +70,7 @@ use crate::fw::flash;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 pub enum FatError {
     /// No valid FAT12 boot sector found (bad jump byte or zero sector size).
     NoFilesystem,

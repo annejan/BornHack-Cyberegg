@@ -129,7 +129,7 @@ dependencies = [
  "embassy-futures",
  "embassy-nrf",
  "embassy-sync 0.7.2",
- "embassy-time",
+ "embassy-time 0.5.1",
  "embassy-usb",
  "embedded-graphics",
  "embedded-graphics-simulator",
@@ -147,6 +147,7 @@ dependencies = [
  "rand_core 0.6.4",
  "sha2",
  "ssd1675",
+ "ssd1680",
  "static_cell",
  "sx126x",
  "trouble-host",
@@ -579,7 +580,7 @@ dependencies = [
  "embassy-futures",
  "embassy-hal-internal",
  "embassy-sync 0.7.2",
- "embassy-time",
+ "embassy-time 0.5.1",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -671,7 +672,7 @@ dependencies = [
  "embassy-embedded-hal",
  "embassy-hal-internal",
  "embassy-sync 0.7.2",
- "embassy-time",
+ "embassy-time 0.5.1",
  "embassy-time-driver",
  "embassy-time-queue-utils",
  "embassy-usb-driver",
@@ -715,6 +716,22 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "heapless 0.9.3",
+]
+
+[[package]]
+name = "embassy-time"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f820157f198ada183ad62e0a66f554c610cdcd1a9f27d4b316358103ced7a1f8"
+dependencies = [
+ "cfg-if",
+ "critical-section",
+ "document-features",
+ "embassy-time-driver",
+ "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "futures-util",
 ]
 
 [[package]]
@@ -763,7 +780,7 @@ dependencies = [
  "embassy-futures",
  "embassy-net-driver-channel",
  "embassy-sync 0.8.0",
- "embassy-time",
+ "embassy-time 0.5.1",
  "embassy-usb-driver",
  "embedded-io-async 0.7.0",
  "heapless 0.9.3",
@@ -1764,11 +1781,23 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 name = "ssd1675"
 version = "0.6.0"
 dependencies = [
- "embassy-time",
+ "embassy-time 0.5.1",
  "embedded-graphics",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "static_cell",
+]
+
+[[package]]
+name = "ssd1680"
+version = "0.3.0"
+dependencies = [
+ "defmt 1.1.1",
+ "embassy-futures",
+ "embassy-time 0.4.0",
+ "embedded-graphics",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]
@@ -1857,7 +1886,7 @@ dependencies = [
  "defmt 1.1.1",
  "embassy-futures",
  "embassy-sync 0.7.2",
- "embassy-time",
+ "embassy-time 0.5.1",
  "embedded-io 0.7.1",
  "futures",
  "heapless 0.9.3",

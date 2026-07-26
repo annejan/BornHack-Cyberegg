@@ -331,7 +331,7 @@ static FRIENDS_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 
 /// Load the friends list from flash. Call once at startup, same as
 /// `lifecycle::init`'s Unicorn Realm load.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn init() {
     use crate::fw::kv;
     let ns = kv::namespace("friends");
@@ -346,12 +346,12 @@ pub async fn init() {
     }
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub async fn init() {}
 
 /// Persist the friends list if it changed since the last save. Called
 /// from `lifecycle::save_if_needed` alongside the Unicorn Realm save.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn save_if_needed() {
     use core::sync::atomic::Ordering;
     if !FRIENDS_DIRTY.swap(false, Ordering::Relaxed) {
@@ -366,7 +366,7 @@ pub async fn save_if_needed() {
     }
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub async fn save_if_needed() {}
 
 /// Number of known friends.
@@ -451,12 +451,12 @@ pub fn reset_all_battle_records() {
 /// actually invoked from mesh code, which in every real build combination
 /// implies `embassy-base`, so the simulator stub value is simply dead code
 /// kept around to type-check.
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub(super) fn local_device_id() -> [u8; 2] {
     crate::fw::device_id::get()
 }
 
-#[cfg(not(feature = "embassy-base"))]
+#[cfg(not(feature = "embassy-core"))]
 pub(super) fn local_device_id() -> [u8; 2] {
     [0, 0]
 }

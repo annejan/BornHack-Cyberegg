@@ -73,9 +73,9 @@ fn play_idx(idx: usize) {
         return;
     }
     let song = TONES[idx - 1].1;
-    #[cfg(feature = "embassy-base")]
+    #[cfg(feature = "embassy-core")]
     crate::fw::buzzer::play(song as usize);
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(not(feature = "embassy-core"))]
     let _ = song;
 }
 
@@ -113,14 +113,14 @@ pub fn tone_step(event: SoundEvent, delta: i8) {
 // `alarm_*`, and `boot_chime`.  Same load-on-boot, persist-on-signal
 // pattern.
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 const KV_KEYS: [(&str, &AtomicU8); 3] = [
     ("pm_tone", &PM_TONE),
     ("ch_tone", &CHANNEL_TONE),
     ("disc_tone", &CONTACT_TONE),
 ];
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     for (key, atomic) in KV_KEYS {
         let mut buf = [0u8; 1];
@@ -137,7 +137,7 @@ pub async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     }
 }
 
-#[cfg(feature = "embassy-base")]
+#[cfg(feature = "embassy-core")]
 pub async fn persist(ns: &crate::fw::kv::KvNamespace) {
     for (key, atomic) in KV_KEYS {
         let _ = ns.set(key, &[atomic.load(Ordering::Relaxed)], true).await;

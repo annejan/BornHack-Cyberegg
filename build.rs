@@ -14,11 +14,15 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn main() {
-    let embassy = std::env::var_os("CARGO_FEATURE_EMBASSY_BASE").is_some();
+    // `embassy-core` is the controller-agnostic embedded runtime shared by both
+    // the SSD1675 (`embassy-base`) and SSD1680 (`embassy-1680`) firmware builds,
+    // so key the firmware memory-map / linker-script wiring off it — otherwise
+    // the 1680 build (which never enables `embassy-base`) would skip memory-fw.x.
+    let embassy = std::env::var_os("CARGO_FEATURE_EMBASSY_CORE").is_some();
     let simulator = std::env::var_os("CARGO_FEATURE_SIMULATOR").is_some();
     let hwtest = std::env::var_os("CARGO_FEATURE_HWTEST").is_some();
 
-    let embedded_features = [("embassy-base", embassy), ("hwtest", hwtest)]
+    let embedded_features = [("embassy-core", embassy), ("hwtest", hwtest)]
         .iter()
         .filter(|(_, on)| *on)
         .count();
@@ -26,7 +30,7 @@ fn main() {
         panic!("Feature `simulator` is mutually exclusive with embedded firmware features.");
     }
     if embedded_features > 1 {
-        panic!("Features `embassy-base` and `hwtest` are mutually exclusive.");
+        panic!("Features `embassy-core` and `hwtest` are mutually exclusive.");
     }
 
     let memory_script: Option<&[u8]> = if hwtest {

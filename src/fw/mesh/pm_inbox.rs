@@ -686,7 +686,7 @@ where
         let name = s.peer_name.as_str();
         let name = if name.is_empty() { "(unknown)" } else { name };
         let name_short = crate::truncate_str(name, 14);
-        Text::with_text_style(name_short, Point::new(2, row_mid - 1), txt, bottom).draw(display)?;
+        ui::draw_text(display, name_short, Point::new(2, row_mid - 1), txt, bottom)?;
         if s.unread > 0 {
             let mut badge: heapless::String<8> = heapless::String::new();
             let _ = core::fmt::Write::write_fmt(&mut badge, format_args!("({})", s.unread));
@@ -704,8 +704,7 @@ where
         let _ = combined.push_str(arrow);
         let _ = combined.push(' ');
         let _ = combined.push_str(preview_short);
-        Text::with_text_style(combined.as_str(), Point::new(2, row_mid + 8), small, bottom)
-            .draw(display)?;
+        ui::draw_text(display, combined.as_str(), Point::new(2, row_mid + 8), small, bottom)?;
     }
 
     // Scroll indicators in the right margin when more peers than fit.
@@ -809,8 +808,7 @@ where
                 while hdr.len() < HEADER_CHARS_FIRST.saturating_sub(1) {
                     let _ = hdr.push(' ');
                 }
-                Text::with_text_style(hdr.as_str(), Point::new(2, row_y), arrow_style, bottom)
-                    .draw(display)?;
+                ui::draw_text(display, hdr.as_str(), Point::new(2, row_y), arrow_style, bottom)?;
             }
 
             if let Some(&(s, e)) = lines.get(chunk_i)

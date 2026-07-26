@@ -54,6 +54,10 @@ defmt-rtt = { version = "1.3.0", features = [
 ], optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 ssd1675 = { version = "0.6", path = "./vendor/ssd1675", optional = true }
+ssd1680 = { path = "./vendor/ssd1680", optional = true, default-features = false, features = [
+    "graphics",
+    "defmt",
+] }
 sx126x = { version = "0.3.0", optional = true }
 embedded-hal = { version = "1.0", optional = true }
 embedded-hal-bus = { version = "0.3", features = ["async"], optional = true }
@@ -176,8 +180,16 @@ simulator = [
     "watch",
     "signed-channel",
 ]
-# Base nRF52840 embassy runtime (display, buttons, LEDs, buzzer — no radio/BLE).
-embassy-base = [
+# EPD driver selection (mutually exclusive — pick exactly one). The shipping
+# panel uses the SSD1675; `embassy-1680` swaps in the SSD1680 driver. Building
+# with BOTH `ssd1675-driver` and `ssd1680-driver` enabled is unsupported: the
+# `embassy` binary wires a single `init_epd` for one controller at a time.
+ssd1675-driver = ["dep:ssd1675"]
+ssd1680-driver = ["dep:ssd1680"]
+# Controller-agnostic nRF52840 embassy runtime (display stack, buttons, LEDs,
+# buzzer — no radio/BLE, no EPD driver). Each concrete build layers exactly one
+# EPD driver on top via `embassy-base` (SSD1675) or `embassy-1680` (SSD1680).
+embassy-core = [
     "cortex-m",
     "cortex-m-rt",
     "defmt",
@@ -192,17 +204,26 @@ embassy-base = [
     "embedded-hal-bus",
     "heapless",
     "panic-probe",
-    "ssd1675",
     "static_cell",
     "watch",
     "signed-channel",
 ]
+# Base nRF52840 embassy runtime on the shipping SSD1675 panel.
+embassy-base = ["embassy-core", "ssd1675-driver"]
+# Base nRF52840 embassy runtime on the SSD1680 panel.
+embassy-1680 = ["embassy-core", "ssd1680-driver"]
 # Full build: game + mesh + USB storage.
 embassy = ["embassy-base", "game", "mesh", "usb-storage"]
+# Full build on the SSD1680 panel: game + mesh + USB storage.
+embassy-1680-full = ["embassy-1680", "game", "mesh", "usb-storage"]
 # Game + USB storage (no LoRa/BLE mesh stack).
 embassy-game = ["embassy-base", "game", "usb-storage"]
+# Game + USB storage on the SSD1680 panel.
+embassy-1680-game = ["embassy-1680", "game", "usb-storage"]
 # Mesh only (no game, no USB storage).
 embassy-mesh = ["embassy-base", "mesh"]
+# Mesh only on the SSD1680 panel.
+embassy-1680-mesh = ["embassy-1680", "mesh"]
 # Carousel reorder for the organizer edition: boot into the calendar, then the
 # clock, then the meshcore screens, then name + QR.  Pure navigation change —
 # does not pull in or drop any subsystem itself.
@@ -210,6 +231,8 @@ organizer = []
 # Organizer edition: clock/calendar-first badge with meshcore, no game.
 # USB storage stays in so .ics calendar files can be dropped on it.
 embassy-organizer = ["embassy-base", "mesh", "usb-storage", "organizer"]
+# Organizer edition on the SSD1680 panel.
+embassy-1680-organizer = ["embassy-1680", "mesh", "usb-storage", "organizer"]
 # Watch only (no game, no mesh) — `watch` is already pulled in by embassy-base.
 embassy-watch = ["embassy-base"]
 # Factory hardware test — minimal standalone firmware, no bootloader required.
@@ -246,7 +269,7 @@ required-features = ["simulator"]
 [[bin]]
 name = "embassy"
 path = "src/bin/embassy.rs"
-required-features = ["embassy-base"]
+required-features = ["embassy-core"]
 harness = false
 
 [[bin]]

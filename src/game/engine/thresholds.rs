@@ -370,7 +370,7 @@ impl Thresholds {
 
 /// Game-balance preset.  Selected via the badge menu and persisted in KV.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
 #[repr(u8)]
 pub enum Mode {
     Classic = 0,
