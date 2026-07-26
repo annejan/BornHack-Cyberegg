@@ -628,7 +628,8 @@ cd bornhack-firmware-2026
 
 ### Firmware (nRF52840)
 
-The firmware can be built in five configurations:
+The firmware is built from two independent choices: **which subsystems** are
+included, and **which EPD controller** the panel uses.
 
 | Variant                              | Game | Mesh (LoRa/BLE) | Watch | Use case                                                |
 | ------------------------------------ | ---- | --------------- | ----- | ------------------------------------------------------- |
@@ -638,7 +639,7 @@ The firmware can be built in five configurations:
 | Mesh only (`make fw-mesh`)           | no   | yes             | yes   | Mesh/radio development when full build exceeds flash    |
 | Watch only (`make fw-watch`)         | no   | no              | yes   | Minimal ~130 KiB build for watch-face / clock work only |
 
-The watch face is part of `embassy-base` and is therefore present in every variant. The watch-only build (`embassy-watch` feature) is the smallest configuration that still drives the EPD.
+The watch face is part of `embassy-core` and is therefore present in every variant. The watch-only build (`embassy-watch` feature) is the smallest configuration that still drives the EPD.
 
 ```bash
 make fw              # Full debug build (game + mesh + watch)
@@ -647,6 +648,28 @@ make fw-organizer    # Organizer edition (calendar-first, no game)
 make fw-game         # Game + watch (no mesh)
 make fw-mesh         # Mesh + watch (no game)
 make fw-watch        # Watch only (no game, no mesh)
+```
+
+#### Panel choice — SSD1675 or SSD1680
+
+The shipping panel uses the SSD1675. `embassy-core` holds everything that
+doesn't depend on the controller; each concrete build layers exactly one
+driver on top:
+
+| Feature         | Panel   |
+| --------------- | ------- |
+| `embassy-base`  | SSD1675 (shipping) |
+| `embassy-1680`  | SSD1680 |
+
+Building with both driver features at once is unsupported — the `embassy`
+binary wires a single `init_epd` for one controller at a time. Every
+subsystem combination above has an SSD1680 twin:
+
+```bash
+make fw-1680             # Full build on the SSD1680 panel
+make fw-1680-organizer   # Organizer edition, SSD1680
+make fw-1680-game        # Game only, SSD1680
+make fw-1680-mesh        # Mesh only, SSD1680
 ```
 
 #### Organizer edition

@@ -29,6 +29,10 @@ One-page badge cheat sheet. Print and tuck under the strap.
 
 `Game → Main → PMs → Channel → Adverts → Clock → Calendar → Name → My QR`
 
+Organizer edition (no game, boots on the schedule):
+
+`Calendar → Clock → Main → PMs → Channel → Adverts → Name → My QR`
+
 ## LED meanings
 
 | Colour                   | Meaning                                     |

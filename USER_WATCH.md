@@ -77,46 +77,48 @@ Shows one day's events as a vertical strip.
 
 ### Loading events
 
-The badge imports iCalendar events at boot from a file called **`ALARMS.ICS`** in the root of the USB drive.
+The badge reads iCalendar events from a file called **`ALARMS.ICS`** in the root of the USB drive.
 
 1. Plug USB-C cable into your computer.
 2. Open the drive labelled `CYBR<4 hex>`.
 3. Drop your `.ics` file (rename to `ALARMS.ICS`) in the root.
 4. Eject the drive.
-5. Reboot the badge (unplug USB or reset).
 
-You can use the official BornHack programme `.ics` straight from `https://bornhack.dk/`.
+No reboot. A couple of seconds after the copy finishes the badge notices,
+blinks the blue LED while it reads the file, and the calendar has the new
+schedule. **Settings → Events → Reload from ICS** forces a re-read if you
+would rather not wait.
 
-> Cap: 31 events stored. Multi-day events get clamped to start day 23:59 (e-paper doesn't draw events spanning days). All events are RAM-only and re-imported on every boot from `ALARMS.ICS`.
+You can use the official BornHack programme `.ics` straight from
+`https://bornhack.dk/` — no trimming, no size limit.
 
-### Import limits & quirks
+> The badge does not store your events; it reads them back out of the file
+> whenever it needs them. That is why the file size doesn't matter, and why
+> replacing the file replaces the schedule.
 
-The parser is deliberately minimal. If events are missing or look odd,
-one of these is usually why:
+### What the parser handles
 
-- **File size: 16 KiB max.** The file is read in one go into a fixed
-  buffer; anything past 16 KiB is silently cut off mid-event. A full
-  conference programme easily exceeds this — trim it first with
-  `scripts/strip_ics.py` (drops DESCRIPTION/UID/etc. and supports
-  `--from` / `--to` / `--max` to select a range).
-- **31 events max.** Import stops quietly at the cap; later events in
-  the file never appear.
-- **No recurrence.** `RRULE` is ignored — a repeating event imports as
-  its first occurrence only. Export "expanded" / per-occurrence ICS
-  instead (the BornHack programme already is).
-- **No all-day events.** A DATE-only `DTSTART` (`;VALUE=DATE:YYYYMMDD`)
-  is dropped without warning. Give the event a real start time.
-- **ASCII only.** Non-ASCII characters in titles are stripped, not
-  transliterated (`Æ`, accents, emoji simply vanish). Edit the SUMMARY
-  to plain ASCII if the spelling matters.
-- **Timezones.** Only `Z`-suffixed (UTC) timestamps are shifted to
-  local time — and always by the built-in default of **UTC+2** (right
-  for BornHack), because the import runs before your persisted timezone
-  setting is applied. Floating times and `TZID=`-zoned times are taken
-  as-is, zone discarded. When in doubt, export in UTC.
-- **Fired events disappear from the Calendar until reboot.** Imported
-  events are one-shot alarms: once one has fired, its slot is disabled
-  and it no longer shows on the grid or day view. Rebooting re-imports
-  everything.
-- **Edits apply at boot only.** Replace `ALARMS.ICS`, eject the drive
-  properly (so the write is flushed), then power-cycle the badge.
+| | |
+| --- | --- |
+| **File size** | No limit. The file is read through a sliding window, so a whole year of events is fine |
+| **Events shown** | Every event in the file appears on the calendar |
+| **Events that ring** | The nearest 159 upcoming. Anything beyond that shows but cannot ring, and the grid says so in red |
+| **Repeating events** | `RRULE` with `FREQ=DAILY`/`WEEKLY`/`MONTHLY`/`YEARLY`, plus `INTERVAL`, `COUNT`, `UNTIL` and `BYDAY`. Capped at 64 occurrences per rule |
+| **All-day events** | Supported. They fill the day on the calendar and stay silent — no alarm at midnight |
+| **Accents** | `Æ`, `é`, `ø` and the rest of Latin-1 render as written. Beyond that (`Š`, `—`, `…`) gets an ASCII spelling; anything with no sensible spelling shows as `?` |
+| **Titles** | First 31 characters |
+| **Timezones** | `Z`-suffixed (UTC) timestamps are shifted using your configured offset. Floating and `TZID=`-zoned times are taken as-is, zone discarded — the badge ships no timezone database. When in doubt, export in UTC |
+
+### Remaining quirks
+
+- **A single day can only ring 159 events.** Not a limit you will meet with
+  a conference programme, and the grid warns in red if you do.
+- **A day shows at most 24 events.** Busier days list the first 24 and add
+  `+N more today`.
+- **Multi-day events** appear on every day they cover, but each day shows
+  them as running the whole day — the timeline has no "continues tomorrow".
+- **Alarms need the clock set.** If the badge has rebooted and you haven't
+  paired or heard a time advert, nothing rings — pair first.
+- **Not handled:** `EXDATE` / `RDATE` exceptions, positional `BYDAY`
+  (`2MO`, `-1FR`), and line folding of the properties the badge reads.
+  Ordinary exports don't use these.

@@ -27,7 +27,7 @@ their own:
 
 | Screen | Refreshes on its own? | Power |
 | ------ | --------------------- | ----- |
-| **My QR**, **Name**, **Token**, **Calendar** | No — drawn once, then idle until you press a button | **Lowest** |
+| **My QR**, **Name**, **Calendar** | No — drawn once, then idle until you press a button | **Lowest** |
 | Messages / Channels / Contacts | Only when relevant mesh traffic arrives | Low |
 | **Main**, **Watch** | Once a minute (to update the clock) | Medium |
 | **BornPet** | Every few seconds (idle animation) | **Highest** |

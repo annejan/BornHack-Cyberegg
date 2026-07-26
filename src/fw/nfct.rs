@@ -440,12 +440,15 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
 
 /// Classify a completed NDEF write and apply its side effects.
 ///
-/// The rule is: **only `token:` (and, when opted in, station phrases) are
-/// transient — everything else you write becomes your persisted broadcast
-/// profile.** So a URL tag, a vCard business card, a Wi-Fi record, or any
-/// other NDEF message sticks (stored verbatim and re-broadcast until
-/// changed), while a pushed token never persists — the buffer just
-/// reverts after [`REVERT_SECS`].
+/// The rule is: **only an opted-in station phrase is transient —
+/// everything else you write becomes your persisted broadcast profile.**
+/// So a URL tag, a vCard business card, a Wi-Fi record, or any other NDEF
+/// message sticks (stored verbatim and re-broadcast until changed), while
+/// a station phrase applies its effect and the buffer reverts after
+/// [`REVERT_SECS`].
+///
+/// `token:` records are not special-cased here and persist like anything
+/// else; the prefix survives only in `nfc_ndef`'s tests.
 ///
 /// Special case: a Well-Known text record `set:<url>` is rewritten into a
 /// clean URI record before persisting, so you can set a vanity URL from a

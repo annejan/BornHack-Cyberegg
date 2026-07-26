@@ -254,7 +254,7 @@ anyone with NFC to drive the badge. Enable it only for events that hand
 out buffs via plain NFC-writable tags rather than the authenticated
 reader. The signed channel is the secured path for trusted readers.
 
-The `token:` UPDATE BINARY path is unaffected by this feature and stays
+The plaintext UPDATE BINARY path is unaffected by this feature and stays
 on regardless.
 
 The dispatcher (`src/fw/nfct.rs`) selects between paths purely on
@@ -267,14 +267,18 @@ The dispatcher (`src/fw/nfct.rs`) selects between paths purely on
 ### 5.1 Settable broadcast profile + write revert
 
 Every completed NDEF write (UPDATE BINARY) is classified in
-`nfct::handle_ndef_write`. The rule is simple: **only `token:` (and, when
-opted in, station phrases) are transient — everything else you write
-becomes your persisted broadcast profile.**
+`nfct::handle_ndef_write`. The rule is simple: **only an opted-in station
+phrase is transient — everything else you write becomes your persisted
+broadcast profile.**
+
+> `token:` records used to be a transient case of their own. The
+> classifier no longer special-cases them: a `token:` text record now
+> falls through and persists like any other record, and no screen
+> displays one. The prefix survives only in `nfc_ndef`'s tests.
 
 | Written record | Effect | Persistence |
 |---|---|---|
-| Text `token:<v>` | Reverts without persisting (no on-badge display) | Transient |
-| Station phrase (opt-in `nfc-plaintext-station`) | Applies the buff | Transient |
+| Station phrase (opt-in `nfc-plaintext-station`, game builds) | Applies the buff, then reverts | Transient |
 | Text `set:<url>` | Rebuilt into a clean URI record, then broadcast | **Persisted** to KV (`nfc/profile`) |
 | A URL / URI record | Broadcast verbatim | **Persisted** |
 | A vCard business card | Broadcast verbatim | **Persisted** |
@@ -284,7 +288,7 @@ A **transient** write leaves its bytes in the broadcast buffer only
 briefly: after `REVERT_SECS` (10 s) the badge reverts to the persisted
 profile. The revert is applied lazily on the next APDU, so a reader that
 taps within the window still sees the written record. This keeps a
-pushed `token:` from clobbering your profile.
+transient station write from clobbering your profile.
 
 A **profile** write sticks and survives reboot (loaded from KV at boot).
 To set your own data, write with any phone NFC-writer app — a plain URL
