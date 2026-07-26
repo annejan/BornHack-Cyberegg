@@ -21,7 +21,7 @@ Sequence of LEDs at every boot:
 2. Pulsing **blue** — display + LoRa coming up (about 13 seconds)
 3. Single **green** flash — ready
 
-You land on the **Main** screen. Push **Left / Right** to flip through the top-level screens (see below).
+You land on the **Game** screen — or the **Calendar** screen on an organizer-edition badge, which has no game. Push **Left / Right** to flip through the top-level screens (see below).
 
 ## Controls
 
@@ -34,20 +34,23 @@ Two thumb buttons on the right and a 5-way joystick on the left:
 
 ## Top-level screens
 
-The badge is a carousel. Left/Right cycles through ten screens:
+The badge is a carousel. Left/Right cycles through nine screens — eight on the organizer edition, which drops the Game screen. It does not wrap: Left stops at the first, Right at the last.
 
 | Screen        | What it is                                            |
 | ------------- | ----------------------------------------------------- |
 | **Game**      | BornPets — virtual pet, mini-games, hatchery          |
-| **Main**      | Root menu: Bornagotchi · Settings · About             |
+| **Main**      | Root menu: Bornagotchi · Settings · About (no Bornagotchi entry in game-less builds) |
 | **PMs**       | Private mesh messages inbox                           |
 | **Channel**   | Group / room mesh chat                                |
 | **Adverts**   | Recently heard mesh adverts                           |
-| **Tokens**    | Tokens collected via NFC / mesh, kept until reboot    |
 | **Clock**     | Digital / analog watch face + alarm                   |
 | **Calendar**  | Month grid + per-day timeline                         |
 | **Name**      | Big conference-badge name view                        |
 | **My QR**     | Your mesh identity QR (share with other badges)       |
+
+Left / Right cycles through them in that order. The **organizer edition**
+drops the Game screen and leads with the schedule instead:
+`Calendar → Clock → Main → PMs → Channel → Adverts → Name → My QR`.
 
 Per-app user guides:
 
@@ -94,7 +97,9 @@ When the badge is plugged in via USB-C it appears on your computer as a small dr
 | `PETS.CFG`                    | Add / rename pets (with their sprite PCX files) — see [USER_GAMES.md](USER_GAMES.md) |
 | `LUT.CFG`                     | Custom e-paper waveform — see [LUT.md](LUT.md)         |
 
-Reboot the badge after dropping files (re-plug or hold power if no power switch — pull the strap and replug USB).
+Reboot the badge after dropping the `.PCX` and `.CFG` files (re-plug or hold power if no power switch — pull the strap and replug USB).
+
+`ALARMS.ICS` needs no reboot: about two seconds after the copy settles the badge re-reads it by itself (blue LED while it works). **Settings → Events → Reload from ICS** forces it.
 
 ## Firmware update
 
@@ -171,15 +176,12 @@ The factory test runs again on the next boot.
 ### NFC
 
 - **My vanity URL / vCard doesn't stick.** Write it with an NFC-writer app
-  as a normal **URL/URI**, **vCard**, or **Wi-Fi** record — anything you
-  write (except a `token:` record) becomes your broadcast profile and
-  persists across reboot. A `token:` write is collected on the Tokens
-  screen instead and is transient (reverts after ~10 s). See
+  as a normal **URL/URI**, **vCard**, or **Wi-Fi** record — what you write
+  becomes your broadcast profile and persists across reboot. See
   [USER_NFC.md](USER_NFC.md).
-- **A token I received disappeared / a URL I tapped reverted.** A `token:`
-  write is intentionally transient — it lands on the **Tokens** screen
-  (kept until reboot) and the broadcast reverts to your profile after
-  ~10 s.
+- **A URL I tapped reverted after a few seconds.** Only an (opt-in)
+  station phrase is transient: it applies its effect and the broadcast
+  reverts to your profile after ~10 s. Everything else persists.
 - **A station tap did nothing — no toast, pet unaffected.** Station
   commands only apply while you have an active game: pick a pet first
   (the egg countdown already counts), or start a new egg if your pet has

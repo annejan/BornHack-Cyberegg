@@ -65,6 +65,10 @@ fn update_cached_channels(loaded: &heapless::Vec<LoadedChannel, { channels::NUM_
             // It stays fully live for TX/RX: crypto uses `loaded_channels`,
             // not this UI mirror. Same "present but not shown" idea as the
             // `#blinkme` easter-egg channel, which is never a stored slot.
+            //
+            // Only in game builds: without the game nothing joins SHDW, so
+            // slot 3 is an ordinary user channel and must stay visible.
+            #[cfg(feature = "game")]
             if ch.slot_idx == channels::SHDW_SLOT {
                 continue;
             }

@@ -373,6 +373,22 @@ async fn main(spawner: Spawner) {
         // awake between refreshes (see `Driver::refresh`).
     }
 
+    // The persisted UTC offset has to be in place before anything reads
+    // it, and the ICS import below is the earliest reader: it decides
+    // which *local* day each event falls on, for both the alarm slots and
+    // the day index. Loading it later (it used to live with the other
+    // mesh settings) left the index built against the default offset
+    // while the day cache used the real one, so a badge not on UTC+2 put
+    // an evening event's dot on one day and its entry on the next.
+    //
+    // Only mesh builds persist a timezone; others keep the static default,
+    // which is consistent for every reader either way.
+    #[cfg(feature = "mesh")]
+    bornhack_aegg::TIMEZONE_OFFSET.store(
+        settings::get_timezone().await,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
     {
@@ -383,6 +399,9 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::watch::import_alarms_from_fat12().await;
         spawner.must_spawn(bornhack_aegg::watch::settings_persister_task());
         spawner.must_spawn(bornhack_aegg::watch::alarm_ring_timeout_task());
+        // Picks up a new ALARMS.ICS after the host finishes copying it,
+        // so the calendar doesn't need a reboot to see a fresh schedule.
+        spawner.must_spawn(bornhack_aegg::watch::ics_reload_task());
     }
 
     // ── BornPets balance — install the active threshold set before any
@@ -424,23 +443,19 @@ async fn main(spawner: Spawner) {
         // after a spin-wait on `INITIAL_BONDS`, which let the meshcore
         // listener load an empty channel set on a fresh-flash boot.
         channels::init().await;
+        // The private SHDW channel exists only to carry BornPets friend
+        // beacons and battle results.  A build without the game neither
+        // sends nor listens for either, so joining would just burn a
+        // channel slot on traffic nothing can read.
+        #[cfg(feature = "game")]
         channels::ensure_shdw_channel().await;
         defmt::info!(
             "channels: store ready ({} active)",
             channels::count_active().await
         );
 
-        // Load persisted display/runtime settings (timezone, boost-RX) into
-        // their in-RAM atomics SYNCHRONOUSLY here — before any task that
-        // reads them starts rendering. Previously the load lived inside the
-        // BLE task's init block, which races against the display task: on a
-        // quick reboot the display could draw a frame using the static
-        // default (TIMEZONE_OFFSET = 0 → UTC) before the BLE task had a
-        // chance to load the persisted offset.
-        bornhack_aegg::TIMEZONE_OFFSET.store(
-            settings::get_timezone().await,
-            core::sync::atomic::Ordering::Relaxed,
-        );
+        // Boost-RX is loaded here; the timezone moved earlier still — see
+        // the note above the watch block.
         bornhack_aegg::BOOSTED_RX_GAIN.store(
             settings::get_boost_rx().await,
             core::sync::atomic::Ordering::Relaxed,

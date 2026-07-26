@@ -2,7 +2,7 @@
 
 > **See also:** [README.md](README.md) for project overview, [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) for the meshcore chat UI (contacts list, PM inbox + threads), [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol, [HWTEST.md](HWTEST.md) for the factory hardware-test firmware, [License.md](License.md) for licensing.
 
-The badge includes a full-featured watch application with two switchable faces, a 32-slot alarm system, and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
+The badge includes a full-featured watch application with two switchable faces, a 160-slot alarm system (slot 0 plus 159 one-shot calendar slots), and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
 
 ---
 
@@ -74,12 +74,12 @@ The current face survives reboots — it is persisted to the `"watch"` KV namesp
 
 ## Alarm System
 
-Up to **32 alarm slots** (`N_ALARMS = 32`):
+Up to **160 alarm slots** (`N_ALARMS = 160`):
 
 | Slot range | Purpose |
 | ----------- | ------- |
 | **Slot 0** | Manual recurring alarm — set via the on-screen editor or **Settings → Alarm** |
-| **Slots 1–31** | One-shot calendar events — populated from `ALARMS.ICS` at boot |
+| **Slots 1–159** | One-shot calendar events — populated from `ALARMS.ICS` at boot |
 
 ### Recurring Alarm (Slot 0)
 
@@ -138,11 +138,11 @@ The alarm melody is a curated subset of `MELODIES`:
 | Nokia | Tone: Nokia |
 | Samsung | Tone: Samsung |
 
-### Calendar Events (Slots 1–31)
+### Calendar Events (Slots 1–159)
 
-One-shot alarms bound to a specific date (`year-month-day`). These are **populated from `ALARMS.ICS`** at boot (see Calendar section below) or manually via the **Quick test +5min** action in **Settings → Events**.
+One-shot alarms bound to a specific date (`year-month-day`). These are **populated from `ALARMS.ICS`** at boot (see Calendar section below) or manually via the **Test alarm +5min** action in **Settings → Events**, which arms a titleless alarm that rings but never shows on the Calendar.
 
-One-shot slots auto-disable after firing so they don't re-alarm on reboot.
+One-shot slots auto-disable after firing so they don't re-alarm on reboot. All-day events are the exception: they're marked *silent*, so they show on the calendar all day but never ring and never auto-disable.
 
 ### Firing & Dismissal
 
@@ -172,7 +172,7 @@ Reachable from the icon grid right after Clock. Browse imported events on a mont
 
 ### Timeline view (Day-detail)
 
-- Fixed 18-hour window (6 AM–12 AM) with 18 px/hour scaling
+- Scrollable 6-hour window at 18 px/hour, auto-anchored one hour before the current time (on today) or before the day's first event, stepped an hour at a time with Up/Down
 - Events render as filled black blocks (red if currently happening), height proportional to duration
 - Zero-duration events (missing `DTEND`) render as thin 4px markers
 - The event title shows inside the block if it is tall enough (≥13 px); titles longer than the block width scroll with Left/Right
@@ -184,14 +184,31 @@ Reachable from the icon grid right after Clock. Browse imported events on a mont
 Drop an iCalendar file named `ALARMS.ICS` onto the FAT12 partition (mount the badge as USB mass storage, hold Execute on plug-in if needed).
 
 At boot, the firmware:
-1. Reads `ALARMS.ICS` into a 16 KiB buffer
-2. Parses each `BEGIN:VEVENT` block (extracting `DTSTART`, `DTEND`, `SUMMARY`)
-3. Populates slots 1..31 with one-shot alarms
+1. Walks `ALARMS.ICS` through an 8 KiB sliding window — the file is parsed in chunks, so its size is not a limit
+2. Parses each `BEGIN:VEVENT` block (extracting `DTSTART`, `DTEND`, `RRULE`, `SUMMARY`), expanding recurrence rules into one event per occurrence
+3. Populates slots 1..159 with one-shot alarms
 4. Slot 0 (manual recurring alarm) is left untouched
 
+**How big a calendar can it hold?** As big as the file. The badge does
+not keep every event in RAM:
+
+| What | Where it comes from | Limit |
+| ---- | ------------------- | ----- |
+| Month-grid dots | A one-bit-per-day index built during import (~96 bytes, covering just over two years) | Every event in the file |
+| Day detail / day list | The file, rescanned for that one day whenever the cursor moves | 24 events per day (more shows a red `+N more today`) |
+| Alarms that actually ring | Alarm slots 1..159, filled with the nearest upcoming events | 159; the rest show on the calendar but can't ring, and the grid says so in red |
+
+A 250 KiB, 800-event export navigates fine — opening a day costs one
+rescan of the file (tens of milliseconds, invisible next to an e-paper
+refresh) rather than any RAM.
+
 **Import notes:**
-- Re-runs at every boot — edits while running don't take effect until reboot
-- Caps at 31 events (slots 1..31) or ~15–25 events depending on `SUMMARY` length (4 KiB effective read)
+- Re-runs at every boot, **and automatically whenever the file changes**: the badge counts blocks written over USB mass storage and re-imports once the host has been quiet for 2 seconds. Copy a new `ALARMS.ICS` onto the badge, watch the blue LED blink, and the calendar has the new schedule — no reboot
+- Each import *replaces* the schedule instead of merging into it: slots are overwritten in place and any left over from a longer previous import are retired at the end. That also retires any **Test alarm** event
+- **Settings → Events → Reload from ICS** forces an immediate re-read if you'd rather not wait for the settle window
+- Re-imports again at local midnight, and when the wall clock first syncs. Alarm slots only ever hold the events from today onward that fit, and firing one just disables it — without the daily refresh a calendar with more upcoming events than slots would fall silent after the first 159 of them. A single day with more than 159 events of its own still can't ring them all, and the grid says so in red
+- Only the nearest 159 events get an alarm slot. Everything else still appears on the calendar — that reads the file — but can't ring; the boot log warns and the Calendar grid shows a red `! N can't ring` line. The 2026 Bornhack programme is 127 events, so it all rings
+- A single `RRULE` expands to at most 64 occurrences
 - Multi-day events clamped to 23:59 of the start day
 - Times with `Z` suffix (UTC) are converted using `TIMEZONE_OFFSET`; floating times and `TZID=...:` values are taken at face value
 - The Bornhack programme export from <https://bornhack.dk/.../program/ics/> works directly — the parser handles `TZID=…:` parameters and CRLF line endings
@@ -204,8 +221,9 @@ Lists every populated one-shot slot read-only (`<n>: HH:MM MM-DD`) plus two acti
 
 | Action | Description |
 | ------ | ----------- |
-| **Quick test +5min** | Drops a `Quick test` event 5 minutes from now in the first empty slot. Handy for verifying the alarm path without USB. Silently no-ops if the wall clock isn't synced or all slots are taken. |
-| **Clear all** | Destructive — disables and zeros slots 1..31 immediately. |
+| **Reload from ICS** | Re-reads `ALARMS.ICS` immediately. The badge already does this by itself after a USB copy settles; this is the manual fallback. |
+| **Test alarm +5min** | Arms a test alarm 5 minutes from now in the first empty slot. Handy for verifying the ring path without USB. Silently no-ops if the wall clock isn't synced or all slots are taken. It does *not* show on the Calendar — that screen reads the ICS file, and this alarm isn't in it. |
+| **Clear all** | Destructive — disables and zeros slots 1..159 immediately. |
 
 Empty slots are auto-hidden — you only scroll past events that actually exist.
 
@@ -217,11 +235,12 @@ Minimal RFC 5545 parser — extracts only what the badge needs:
 
 | Property | Parsed | Notes |
 | -------- | ------ | ----- |
-| `DTSTART` | `YYYYMMDDTHHMMSS` (floating), `YYYYMMDDTHHMMSSZ` (UTC), `TZID=…:YYYYMMDDTHHMMSS` | Seconds discarded; `Z` flag tracked per timestamp |
-| `DTEND` | Same formats as DTSTART | Optional; when missing, event is zero-duration (start == end) |
-| `SUMMARY` | First 31 ASCII bytes | Non-ASCII bytes dropped; NUL-padded |
+| `DTSTART` | `YYYYMMDDTHHMMSS` (floating), `YYYYMMDDTHHMMSSZ` (UTC), `TZID=…:YYYYMMDDTHHMMSS`, `VALUE=DATE:YYYYMMDD` (all-day) | Seconds discarded; `Z` flag tracked per timestamp |
+| `DTEND` | Same formats as DTSTART | Optional; when missing, event is zero-duration (start == end). For all-day events the exclusive end date is pulled back to 23:59 of the last covered day |
+| `RRULE` | `FREQ=DAILY\|WEEKLY\|MONTHLY\|YEARLY` with `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY` | Expanded in-parser, one event per occurrence, capped at 64 |
+| `SUMMARY` | First 31 Latin-1 characters | Drawn with an ISO 8859-1 font, so `Æ`, `é`, `ø` render as themselves. Code points past Latin-1 are transliterated (`Š` → `S`, `—` → `-`, `…` → `...`); anything with no sensible spelling (emoji, CJK) becomes `?`. RFC 5545 escapes (`\,` `\;` `\n` `\\`) are decoded. NUL-padded |
 
-**Not implemented:** line folding, `VALUE=` overrides, `RRULE` recurrence, escape sequences (`\,`, `\;`, `\n`), nested `VTIMEZONE` blocks, all-day `DATE` values. Bornhack ICS dumps don't use these features.
+**Not implemented:** line folding of the properties above (Bornhack only folds `DESCRIPTION`, which is ignored), `EXDATE` / `RDATE`, positional `BYDAY` (`2MO`) and other `BY*` parts, nested `VTIMEZONE` blocks.
 
 ---
 
@@ -241,7 +260,7 @@ All watch state is persisted to the `"watch"` KV namespace in ekv (flash key-val
 
 The `SETTINGS_DIRTY_SIGNAL` is signalled on every setting change; the `settings_persister_task` waits on this signal and persists clock face, alarm state, and the boot-chime toggle in one batch.
 
-Calendar event slots (1..31) are **RAM-only** — they're not persisted to flash. They are re-imported from `ALARMS.ICS` at each boot.
+Calendar event slots (1..159) are **RAM-only** — they're not persisted to flash. They are re-imported from `ALARMS.ICS` at each boot.
 
 ---
 

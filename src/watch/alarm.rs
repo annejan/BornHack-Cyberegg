@@ -31,22 +31,25 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::iso_8859_1::FONT_6X10;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
-use super::ics::SUMMARY_LEN;
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE};
 
 /// Maximum number of independent alarm slots.  Slot 0 is the user-editable
 /// "primary" alarm; slots 1..N_ALARMS-1 hold imported calendar events and
-/// other automation.  At ~11 bytes of atomics per slot, 32 slots cost
-/// ~352 bytes of RAM — comfortable for an unfiltered Bornhack day's worth
-/// of events.
-pub const N_ALARMS: usize = 32;
+/// other automation.
+///
+/// These hold only what firing an alarm needs — time, date, tone — so a
+/// slot is ~8 bytes and 160 of them cost about 1.3 KiB.  The calendar
+/// screen doesn't read them at all: it works off the day index and the
+/// day cache, both of which cover the whole ICS file however big it is.
+/// The slots are the *near future*, which is all that can ring.
+pub const N_ALARMS: usize = 160;
 
 // ── Edit-mode state ─────────────────────────────────────────────────────────
 
@@ -207,24 +210,15 @@ static ALARM_MELODY: [AtomicU8; N_ALARMS] =
 static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
 static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
-/// Event end time (hour, minute) per slot.  Used by the Calendar
-/// day-view to render events as duration blocks.  When `DTEND` is
-/// missing in the source ICS the importer mirrors the start time
-/// (zero-duration event → renders as a thin marker).  Multi-day
-/// events are clamped to 23:59 of the start day at import time so
-/// the day-view doesn't have to handle midnight crossings.  These
-/// fields are not consulted by `check_and_fire_alarm`; the alarm
-/// fires at the start time only.
-static ALARM_END_HOUR: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
-static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
-/// Event SUMMARY (calendar title) per slot, NUL-padded ASCII.  Stored as
-/// per-byte atomics to match the rest of the alarm state — no
-/// synchronisation primitive needed and the byte-by-byte loads are
-/// negligible compared to a screen redraw.  Empty for slot 0 (the
-/// manual alarm has no title) and overwritten at boot from `ALARMS.ICS`.
-static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
-    [const { [const { AtomicU8::new(0) }; SUMMARY_LEN] }; N_ALARMS];
-
+/// Show-but-don't-ring flag.  Set for imported all-day events: an
+/// all-day entry nominally starts at 00:00, and waking the camp at
+/// midnight for "Camp build-up" is not a feature.
+///
+/// A silent slot is skipped by [`check_and_fire_alarm`], and by the
+/// clock-face indicators, which must not promise a sound that won't
+/// come.  Calendar visibility is unrelated — that screen reads the ICS
+/// file, not these slots.
+static ALARM_SILENT: [AtomicBool; N_ALARMS] = [const { AtomicBool::new(false) }; N_ALARMS];
 /// Curated tone choices: (display name, melody index).  Shared between
 /// the alarm-tone stepper (Settings → Alarm → Tone) and the per-event
 /// notification-sound steppers in `fw::mesh::sounds` — both modules use
@@ -279,27 +273,6 @@ pub fn alarm_month_n(slot: usize) -> u8 {
 pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
-pub fn alarm_end_hour_n(slot: usize) -> u8 {
-    ALARM_END_HOUR[s(slot)].load(Ordering::Relaxed)
-}
-pub fn alarm_end_minute_n(slot: usize) -> u8 {
-    ALARM_END_MINUTE[s(slot)].load(Ordering::Relaxed)
-}
-
-/// Returns the slot's SUMMARY as a heapless string.  Empty if no
-/// summary was set (e.g. slot 0, or pre-import).
-pub fn alarm_summary_n(slot: usize) -> heapless::String<SUMMARY_LEN> {
-    let i = s(slot);
-    let mut out: heapless::String<SUMMARY_LEN> = heapless::String::new();
-    for byte_atomic in ALARM_SUMMARY[i].iter() {
-        let b = byte_atomic.load(Ordering::Relaxed);
-        if b == 0 {
-            break;
-        }
-        let _ = out.push(b as char);
-    }
-    out
-}
 
 /// `day` is 0 = Mon .. 6 = Sun.
 pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
@@ -329,27 +302,19 @@ pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
     super::signal_settings_dirty();
 }
 
-/// Set the slot's event end time.  Used by the ICS importer to record
-/// the `DTEND` of each event so the day-view can render duration
-/// blocks.  Defaults to the start time when `DTEND` is missing or
-/// degenerate (zero-duration event renders as a thin marker).
-pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
-    let i = s(slot);
-    ALARM_END_HOUR[i].store(hour.min(23), Ordering::Relaxed);
-    ALARM_END_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
-}
-
 pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
     ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
     super::signal_settings_dirty();
 }
 
-/// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
-pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
-    let i = s(slot);
-    for (j, b) in src.iter().enumerate() {
-        ALARM_SUMMARY[i][j].store(*b, Ordering::Relaxed);
-    }
+/// Whether `slot` is shown on the calendar but never rings.
+pub fn alarm_silent_n(slot: usize) -> bool {
+    ALARM_SILENT[s(slot)].load(Ordering::Relaxed)
+}
+
+/// Mark `slot` show-but-don't-ring — see [`ALARM_SILENT`].
+pub fn set_alarm_silent_n(slot: usize, silent: bool) {
+    ALARM_SILENT[s(slot)].store(silent, Ordering::Relaxed);
 }
 
 /// Find the lowest empty event slot index (>= 1) suitable for a new
@@ -358,12 +323,16 @@ pub fn first_empty_event_slot() -> Option<usize> {
     (1..N_ALARMS).find(|&slot| !alarm_enabled_n(slot))
 }
 
-/// Add an event scheduled `minutes_ahead` minutes from the current wall
-/// clock, with the given summary.  Picks the first empty event slot.
-/// Returns the firing `(hour, minute)` on success, or `None` if the
-/// wall clock isn't synced or all event slots are full.
+/// Arm an alarm `minutes_ahead` minutes from the current wall clock, in
+/// the first empty event slot.  Returns the firing `(hour, minute)` on
+/// success, or `None` if the wall clock isn't synced or all event slots
+/// are full.
+///
+/// It carries no title: slots stopped storing one when the calendar
+/// moved to reading `ALARMS.ICS` directly, and this alarm isn't in that
+/// file, so it rings but never appears on the Calendar screen.
 #[cfg(feature = "embassy-core")]
-pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
+pub fn add_quick_event(minutes_ahead: u16) -> Option<(u8, u8)> {
     let c = clock::wall_clock()?;
     let slot = first_empty_event_slot()?;
 
@@ -385,18 +354,6 @@ pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
 
     set_alarm_date_n(slot, year, month, day);
     set_alarm_time_n(slot, target_hour, target_min);
-    let mut buf = [0u8; SUMMARY_LEN];
-    let mut i = 0usize;
-    for &b in summary {
-        if i >= SUMMARY_LEN {
-            break;
-        }
-        if (0x20..=0x7e).contains(&b) {
-            buf[i] = b;
-            i += 1;
-        }
-    }
-    set_alarm_summary_n(slot, &buf);
     set_alarm_enabled_n(slot, true);
     Some((target_hour, target_min))
 }
@@ -412,11 +369,7 @@ pub fn clear_imported_alarms() {
         ALARM_YEAR[slot].store(0, Ordering::Relaxed);
         ALARM_MONTH[slot].store(0, Ordering::Relaxed);
         ALARM_DAY[slot].store(0, Ordering::Relaxed);
-        ALARM_END_HOUR[slot].store(0, Ordering::Relaxed);
-        ALARM_END_MINUTE[slot].store(0, Ordering::Relaxed);
-        for byte_atomic in ALARM_SUMMARY[slot].iter() {
-            byte_atomic.store(0, Ordering::Relaxed);
-        }
+        ALARM_SILENT[slot].store(false, Ordering::Relaxed);
     }
     super::signal_settings_dirty();
 }
@@ -623,7 +576,7 @@ pub fn check_and_fire_alarm() {
     };
     let mut fired = false;
     for slot in 0..N_ALARMS {
-        if !alarm_enabled_n(slot) {
+        if !alarm_enabled_n(slot) || alarm_silent_n(slot) {
             continue;
         }
         // Date- vs day-mask gate.
@@ -708,9 +661,13 @@ pub async fn alarm_ring_timeout_task() {
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-/// Returns `true` if any slot has an enabled alarm.
-fn any_alarm_enabled() -> bool {
-    (0..N_ALARMS).any(alarm_enabled_n)
+/// Returns `true` if any slot holds an alarm that will actually ring.
+///
+/// Silent slots don't count: an imported all-day event is enabled so the
+/// calendar lists it, but `check_and_fire_alarm` skips it, so lighting
+/// the clock face's bell for one would promise a sound that never comes.
+fn any_alarm_will_ring() -> bool {
+    (0..N_ALARMS).any(|slot| alarm_enabled_n(slot) && !alarm_silent_n(slot))
 }
 
 /// Find the soonest enabled alarm whose firing is still in the future *today*.
@@ -719,7 +676,8 @@ fn any_alarm_enabled() -> bool {
 fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
     let mut earliest: Option<(u8, u8)> = None;
     for slot in 0..N_ALARMS {
-        if !alarm_enabled_n(slot) {
+        // Same gate as `check_and_fire_alarm`: only slots that will ring.
+        if !alarm_enabled_n(slot) || alarm_silent_n(slot) {
             continue;
         }
         let active_today = if alarm_is_one_shot_n(slot) {
@@ -813,7 +771,7 @@ where
     // (x=56) is in the free zone between the title and the battery icon
     // at x=128.
     let mut alarm_time_end_x: i32 = bell_cx + 10;
-    if any_alarm_enabled() {
+    if any_alarm_will_ring() {
         draw_bell(display, bell_cx, bell_cy)?;
         if let Some(c) = clock::wall_clock()
             && let Some((h, m)) = next_alarm_today(&c)
@@ -831,32 +789,52 @@ where
         }
     }
 
-    // PM envelope — only when mesh is built in and at least one incoming
-    // PM is unread.  Drawn last so it lands right of the bell + alarm
+    // PM envelope — drawn last so it lands right of the bell + alarm
     // time, well clear of the title text on the left.
     #[cfg(feature = "mesh")]
-    {
-        let unread = crate::fw::mesh::pm_inbox::unread_total();
-        if unread > 0 {
-            let env_cx = alarm_time_end_x + 7;
-            draw_envelope(display, env_cx, bell_cy)?;
-            // The envelope alone says "you've got one" — only annotate
-            // when a count adds information (≥ 2).
-            if unread >= 2 {
-                let mut buf: heapless::String<8> = heapless::String::new();
-                let _ = core::fmt::write(&mut buf, format_args!("+{}", unread));
-                Text::with_text_style(
-                    &buf,
-                    Point::new(env_cx + 8, bell_cy),
-                    MonoTextStyle::new(&FONT_6X10, BLACK),
-                    left,
-                )
-                .draw(display)?;
-            }
-        }
-    }
+    draw_unread_badge(display, alarm_time_end_x + 7, bell_cy)?;
     #[cfg(not(feature = "mesh"))]
     let _ = alarm_time_end_x;
+    Ok(())
+}
+
+/// Draw the unread-PM envelope centred at `(cx, cy)`, followed by `+N`
+/// when more than one is waiting.  Renders nothing when the inbox has no
+/// unread incoming PMs.
+///
+/// Shared by the clock face and the calendar header: "you have mail" is
+/// worth knowing from whichever screen you happen to be on, and both put
+/// it in the same free strip between the title and the battery icon.
+///
+/// The envelope sits on the red plane, which only refreshes on a full
+/// tri-color update; the `+N` is black and updates on every redraw.
+#[cfg(feature = "mesh")]
+pub(super) fn draw_unread_badge<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let unread = crate::fw::mesh::pm_inbox::unread_total();
+    if unread == 0 {
+        return Ok(());
+    }
+    draw_envelope(display, cx, cy)?;
+    // The envelope alone says "you've got one" — only annotate when a
+    // count adds information (≥ 2).
+    if unread >= 2 {
+        let left = TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Left)
+            .build();
+        let mut buf: heapless::String<8> = heapless::String::new();
+        let _ = core::fmt::write(&mut buf, format_args!("+{}", unread));
+        Text::with_text_style(
+            &buf,
+            Point::new(cx + 8, cy),
+            MonoTextStyle::new(&FONT_6X10, BLACK),
+            left,
+        )
+        .draw(display)?;
+    }
     Ok(())
 }
 

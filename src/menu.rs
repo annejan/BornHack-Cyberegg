@@ -34,6 +34,55 @@ impl ScreenId {
     pub const COUNT: usize = 9;
 }
 
+/// Carousel order — the sequence left/right walks through, as screen
+/// indices.
+///
+/// Screens are *stored* in [`ScreenId`] order; this table decides only the
+/// order you page through them, and its first enabled entry is the boot
+/// screen.  Keeping the two apart means the persisted `SCREEN_*` constants,
+/// NFC jumps and `request_screen` targets stay stable across editions.
+#[cfg(not(feature = "organizer"))]
+const SCREEN_ORDER: [u8; ScreenId::COUNT] = [
+    ScreenId::Game.index(),
+    ScreenId::Main.index(),
+    ScreenId::Pm.index(),
+    ScreenId::Channel.index(),
+    ScreenId::Advert.index(),
+    ScreenId::Watch.index(),
+    ScreenId::Calendar.index(),
+    ScreenId::Name.index(),
+    ScreenId::Qr.index(),
+];
+
+/// Organizer edition: no game, and the badge boots into the calendar so it
+/// reads as a desk clock first and a radio second.  Game stays in the table
+/// (the array is fixed-size) but its enabled bit is never set without the
+/// `game` feature, so navigation skips it.
+#[cfg(feature = "organizer")]
+const SCREEN_ORDER: [u8; ScreenId::COUNT] = [
+    ScreenId::Calendar.index(),
+    ScreenId::Watch.index(),
+    ScreenId::Main.index(),
+    ScreenId::Pm.index(),
+    ScreenId::Channel.index(),
+    ScreenId::Advert.index(),
+    ScreenId::Name.index(),
+    ScreenId::Qr.index(),
+    ScreenId::Game.index(),
+];
+
+/// Position of `screen` in [`SCREEN_ORDER`], or `None` when it isn't listed.
+const fn order_pos(screen: u8) -> Option<usize> {
+    let mut i = 0;
+    while i < SCREEN_ORDER.len() {
+        if SCREEN_ORDER[i] == screen {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 // ── Button identifiers ──────────────────────────────────────────────────────
 
 /// Hardware button / joystick direction.
@@ -384,16 +433,17 @@ pub struct DisplayState<const M: usize> {
 
 impl<const M: usize> DisplayState<M> {
     pub const fn new(screens: [ScreenState; M], enabled: [bool; M]) -> Self {
-        // Start on the first enabled screen (or 0 if none enabled).
+        // Start on the first enabled screen in carousel order (or 0 if none
+        // are enabled).
         let mut first = 0u8;
-        while (first as usize) < M {
-            if enabled[first as usize] {
+        let mut i = 0;
+        while i < SCREEN_ORDER.len() {
+            let s = SCREEN_ORDER[i] as usize;
+            if s < M && enabled[s] {
+                first = SCREEN_ORDER[i];
                 break;
             }
-            first += 1;
-        }
-        if first as usize >= M {
-            first = 0;
+            i += 1;
         }
         Self {
             active_screen: first,
@@ -403,29 +453,35 @@ impl<const M: usize> DisplayState<M> {
     }
 
     fn next_enabled_right(&self, from: u8) -> Option<u8> {
-        let mut s = from as usize + 1;
-        while s < M {
-            if self.enabled[s] {
-                return Some(s as u8);
+        let mut i = match order_pos(from) {
+            Some(i) => i + 1,
+            // Not in the order table — fall off the right-hand end.
+            None => return None,
+        };
+        while i < SCREEN_ORDER.len() {
+            let s = SCREEN_ORDER[i] as usize;
+            if s < M && self.enabled[s] {
+                return Some(SCREEN_ORDER[i]);
             }
-            s += 1;
+            i += 1;
         }
         None
     }
 
     fn next_enabled_left(&self, from: u8) -> Option<u8> {
-        if from == 0 {
-            return None;
-        }
-        let mut s = from as usize - 1;
+        let mut i = match order_pos(from) {
+            Some(0) | None => return None,
+            Some(i) => i - 1,
+        };
         loop {
-            if self.enabled[s] {
-                return Some(s as u8);
+            let s = SCREEN_ORDER[i] as usize;
+            if s < M && self.enabled[s] {
+                return Some(SCREEN_ORDER[i]);
             }
-            if s == 0 {
+            if i == 0 {
                 return None;
             }
-            s -= 1;
+            i -= 1;
         }
     }
 
@@ -1103,6 +1159,7 @@ fn label_telemetry_share() -> &'static str {
 
 // ── Ignore blink toggle ────────────────────────────────────────────────────
 
+#[cfg(feature = "game")]
 fn label_game_mute() -> &'static str {
     if crate::GAME_MUTE.load(Ordering::Relaxed) {
         "Mute (On)"
@@ -1111,35 +1168,28 @@ fn label_game_mute() -> &'static str {
     }
 }
 
+#[cfg(feature = "game")]
 fn action_game_mute_toggle() {
     let cur = crate::GAME_MUTE.load(Ordering::Relaxed);
     crate::GAME_MUTE.store(!cur, Ordering::Relaxed);
 }
 
+#[cfg(feature = "game")]
 fn label_game_enabled() -> &'static str {
-    #[cfg(feature = "game")]
-    {
-        if crate::game::settings::is_enabled() {
-            "Disable Game"
-        } else {
-            "Enable Game"
-        }
-    }
-    #[cfg(not(feature = "game"))]
-    {
+    if crate::game::settings::is_enabled() {
         "Disable Game"
+    } else {
+        "Enable Game"
     }
 }
 
+#[cfg(feature = "game")]
 fn action_game_enabled_toggle() {
-    #[cfg(feature = "game")]
-    {
-        let on = crate::game::settings::is_enabled();
-        crate::game::settings::set_enabled(!on);
-        // The DisplayState reconcile in `dispatch_button` flips
-        // `enabled[SCREEN_GAME]` (and hops off the game screen if it was
-        // the active one) after this action returns.
-    }
+    let on = crate::game::settings::is_enabled();
+    crate::game::settings::set_enabled(!on);
+    // The DisplayState reconcile in `dispatch_button` flips
+    // `enabled[SCREEN_GAME]` (and hops off the game screen if it was
+    // the active one) after this action returns.
 }
 
 fn label_boot_chime() -> &'static str {
@@ -1586,21 +1636,35 @@ fn fmt_alarm_slot(buf: &mut heapless::String<24>, slot: u8) {
 }
 
 /// Visibility predicate: only show enabled slots so the menu doesn't
-/// scroll past 31 empties when only a couple of events are loaded.
+/// scroll past a screenful of empties when only a couple of events are
+/// loaded.
 #[cfg(feature = "watch")]
 fn slot_alarm_visible(slot: u8) -> bool {
     crate::watch::alarm_enabled_n(slot as usize)
 }
 
-/// Action: drop a "Quick test" event 5 minutes from now in the first
-/// empty slot.  Useful for verifying the alarm path without USB.
-/// Silently no-ops if the wall clock isn't synced or all slots are
-/// taken — the new event becomes visible on the Calendar grid (red
-/// dot) and the Clock face (bell + HH:MM), so no toast confirmation
-/// is needed.
+/// Action: re-read `ALARMS.ICS` from the USB partition without a
+/// reboot.  The badge does this by itself once a host copy settles, so
+/// this is the manual fallback for when you'd rather not wait — or when
+/// the file changed some other way.
+#[cfg(all(feature = "watch", feature = "embassy-core"))]
+fn action_reload_ics() {
+    crate::watch::request_ics_reload();
+}
+#[cfg(all(feature = "watch", not(feature = "embassy-core")))]
+fn action_reload_ics() {}
+
+/// Action: arm a test alarm 5 minutes from now in the first empty slot.
+/// Useful for verifying the ring path without USB.  Silently no-ops if
+/// the wall clock isn't synced or all slots are taken — the bell and
+/// `HH:MM` on the Clock face confirm it landed, so no toast is needed.
+///
+/// It does *not* appear on the Calendar: that screen reads the ICS file
+/// on flash, not the alarm slots, so anything not in the file has
+/// nothing to show.
 #[cfg(all(feature = "watch", feature = "embassy-core"))]
 fn action_add_quick_test() {
-    let _ = crate::watch::add_quick_event(5, b"Quick test");
+    let _ = crate::watch::add_quick_event(5);
 }
 #[cfg(all(feature = "watch", not(feature = "embassy-core")))]
 fn action_add_quick_test() {}
@@ -1610,17 +1674,25 @@ fn action_add_quick_test() {}
 /// `import_alarms_from_fat12` at boot from `ALARMS.ICS` — there's no
 /// on-device add path; this submenu is observe-only plus a "Clear all"
 /// destructive action.  One shared formatter + visibility predicate
-/// handles all 31 slot rows via `MenuItemKind::SlotInfo`.
+/// handles every slot row via `MenuItemKind::SlotInfo`; empty slots are
+/// hidden, so the list is as long as the imported programme, not as long
+/// as the slot array.
 #[cfg(feature = "watch")]
 macro_rules! events_items {
     ($($n:literal),* $(,)?) => {
         [
             MenuItem { label: || "< Back", kind: MenuItemKind::Back },
-            // Drops a "Quick test" event 5 min from now — silently
-            // no-ops without a synced wall clock; the new event shows
-            // up via the Calendar dot + Clock-face bell.
+            // Re-reads ALARMS.ICS now, rather than waiting for the
+            // badge to notice a USB copy settling.
             MenuItem {
-                label: || "Quick test +5min",
+                label: || "Reload from ICS",
+                kind: MenuItemKind::Action(action_reload_ics),
+            },
+            // Arms a test alarm 5 min from now — silently no-ops
+            // without a synced wall clock; the Clock-face bell confirms
+            // it landed.  Not on the Calendar: that reads the file.
+            MenuItem {
+                label: || "Test alarm +5min",
                 kind: MenuItemKind::Action(action_add_quick_test),
             },
             MenuItem { label: || "", kind: MenuItemKind::Separator },
@@ -1641,12 +1713,18 @@ macro_rules! events_items {
     };
 }
 
-// 1 (Back) + 1 (Quick test) + 1 (Sep) + 31 (slot rows) + 1 (Sep) + 1 (Clear) =
-// 36.
+// 1 (Back) + 1 (Reload) + 1 (Quick test) + 1 (Sep) + 159 (slot rows)
+// + 1 (Sep) + 1 (Clear) = 165.  Must stay in step with `alarm::N_ALARMS`; the test below checks it.
 #[cfg(feature = "watch")]
-static EVENTS_ITEMS: [MenuItem; 36] = events_items!(
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-    27, 28, 29, 30, 31,
+static EVENTS_ITEMS: [MenuItem; 165] = events_items!(
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+    70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91,
+    92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+    111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+    129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146,
+    147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
 );
 
 #[cfg(feature = "game")]
@@ -1960,6 +2038,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     },
 ];
 
+#[cfg(feature = "game")]
 static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "< Back",
@@ -2004,31 +2083,23 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     },
 ];
 
+#[cfg(feature = "game")]
 fn fmt_game_mode(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
-    #[cfg(feature = "game")]
-    {
-        let mode = crate::game::settings::pending_mode();
-        let needs_reboot = crate::game::settings::pending_differs_from_active();
-        let suffix = if needs_reboot { "*" } else { "" };
-        let _ = write!(buf, "Mode: {}{}", mode.label(), suffix);
-    }
-    #[cfg(not(feature = "game"))]
-    {
-        let _ = write!(buf, "Mode: -");
-    }
+    let mode = crate::game::settings::pending_mode();
+    let needs_reboot = crate::game::settings::pending_differs_from_active();
+    let suffix = if needs_reboot { "*" } else { "" };
+    let _ = write!(buf, "Mode: {}{}", mode.label(), suffix);
 }
 
+#[cfg(feature = "game")]
 fn action_game_mode_next() {
-    #[cfg(feature = "game")]
-    {
-        use crate::game::engine::thresholds::Mode;
-        let next = match crate::game::settings::pending_mode() {
-            Mode::Classic => Mode::Casual,
-            Mode::Casual => Mode::Classic,
-        };
-        crate::game::settings::request_mode_change(next);
-    }
+    use crate::game::engine::thresholds::Mode;
+    let next = match crate::game::settings::pending_mode() {
+        Mode::Classic => Mode::Casual,
+        Mode::Casual => Mode::Classic,
+    };
+    crate::game::settings::request_mode_change(next);
 }
 
 #[cfg(feature = "game")]
@@ -2225,11 +2296,32 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
+#[cfg(feature = "game")]
 static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
     },
+    MenuItem {
+        label: || "Settings",
+        kind: MenuItemKind::Submenu(&SETTINGS_ITEMS),
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "About",
+        kind: MenuItemKind::Submenu(&ABOUT_ITEMS),
+    },
+];
+
+/// Same root menu without the pet.  A game-less build has nothing behind
+/// the Bornagotchi submenu — every entry in it toggles or resets state
+/// the firmware doesn't carry — so the row is dropped rather than left
+/// as a dead end at the top of the menu.
+#[cfg(not(feature = "game"))]
+static MAIN_ITEMS: [MenuItem; 3] = [
     MenuItem {
         label: || "Settings",
         kind: MenuItemKind::Submenu(&SETTINGS_ITEMS),
@@ -2817,6 +2909,183 @@ mod tests {
             label: || "-",
             kind: MenuItemKind::Separator,
         }
+    }
+
+    /// From any reachable screen, with any subset of screens enabled,
+    /// every other enabled screen must be reachable with Left/Right.
+    ///
+    /// Brute-forced over all 512 enable-masks rather than argued: the
+    /// carousel deliberately does not wrap, so "can't get back" is a
+    /// plausible bug and a miserable one on a badge with no other way to
+    /// change screens.
+    #[test]
+    fn no_enable_mask_can_strand_the_user() {
+        const N: usize = ScreenId::COUNT;
+
+        for mask in 0u16..(1 << N) {
+            let enabled: [bool; N] = core::array::from_fn(|i| mask & (1 << i) != 0);
+            let state: DisplayState<N> = DisplayState::new(
+                core::array::from_fn(|_| ScreenState::new(&NAME_ITEMS)),
+                enabled,
+            );
+
+            let live: std::vec::Vec<u8> = SCREEN_ORDER
+                .iter()
+                .copied()
+                .filter(|&s| enabled[s as usize])
+                .collect();
+            if live.is_empty() {
+                // Nothing enabled: `new` falls back to screen 0 and
+                // navigation has nowhere to go. Just don't panic.
+                assert_eq!(state.next_enabled_right(state.active_screen()), None);
+                assert_eq!(state.next_enabled_left(state.active_screen()), None);
+                continue;
+            }
+
+            // Boot lands on the first enabled screen in carousel order.
+            assert_eq!(
+                state.active_screen(),
+                live[0],
+                "mask {mask:#b} booted on the wrong screen"
+            );
+
+            // Walking right from the first reaches every enabled screen,
+            // in carousel order, exactly once.
+            let mut seen = std::vec![live[0]];
+            let mut cur = live[0];
+            while let Some(next) = state.next_enabled_right(cur) {
+                assert!(
+                    !seen.contains(&next),
+                    "mask {mask:#b} revisited screen {next}"
+                );
+                seen.push(next);
+                cur = next;
+            }
+            assert_eq!(seen, live, "mask {mask:#b} skipped an enabled screen");
+
+            // And walking left retraces it exactly.
+            for pair in live.windows(2) {
+                assert_eq!(
+                    state.next_enabled_left(pair[1]),
+                    Some(pair[0]),
+                    "mask {mask:#b} can't get back from {}",
+                    pair[1]
+                );
+            }
+            assert_eq!(
+                state.next_enabled_left(live[0]),
+                None,
+                "mask {mask:#b} walked off the left end"
+            );
+
+            // Disabling the active screen must hand focus to a live one,
+            // never leave it pointing at a disabled screen.
+            if live.len() > 1 {
+                let mut s = state;
+                let victim = s.active_screen();
+                s.set_screen_enabled(victim as usize, false);
+                assert_ne!(
+                    s.active_screen(),
+                    victim,
+                    "mask {mask:#b} stayed on a disabled screen"
+                );
+                assert!(
+                    live.contains(&s.active_screen()),
+                    "mask {mask:#b} moved to a screen that was never enabled"
+                );
+            }
+        }
+    }
+
+    /// The Events submenu lists one row per event slot, spelled out as a
+    /// literal list.  If `N_ALARMS` grows the list has to grow with it,
+    /// or the tail of an imported programme becomes unreachable there.
+    #[test]
+    #[cfg(feature = "watch")]
+    fn events_menu_covers_every_slot() {
+        // Back + Reload + Quick test + separator + slots + separator
+        // + Clear all.
+        const FIXED_ROWS: usize = 6;
+        assert_eq!(
+            EVENTS_ITEMS.len(),
+            crate::watch::N_ALARMS - 1 + FIXED_ROWS,
+            "EVENTS_ITEMS must list slots 1..N_ALARMS"
+        );
+    }
+
+    /// The carousel table has to be a permutation of the screen indices —
+    /// a duplicate would make a screen unreachable from one side, a gap
+    /// would strand it entirely.
+    #[test]
+    fn screen_order_is_a_permutation() {
+        let mut seen = [false; ScreenId::COUNT];
+        for &s in SCREEN_ORDER.iter() {
+            assert!((s as usize) < ScreenId::COUNT, "screen {s} out of range");
+            assert!(!seen[s as usize], "screen {s} listed twice");
+            seen[s as usize] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "not every screen is reachable");
+    }
+
+    #[test]
+    fn order_pos_agrees_with_the_table() {
+        for (i, &s) in SCREEN_ORDER.iter().enumerate() {
+            assert_eq!(order_pos(s), Some(i));
+        }
+        assert_eq!(order_pos(ScreenId::COUNT as u8), None);
+    }
+
+    /// The organizer edition boots into the calendar and pages on to the
+    /// clock — this is the whole point of the edition, so pin it.
+    #[test]
+    #[cfg(feature = "organizer")]
+    fn organizer_leads_with_calendar_then_clock() {
+        assert_eq!(SCREEN_ORDER[0], ScreenId::Calendar.index());
+        assert_eq!(SCREEN_ORDER[1], ScreenId::Watch.index());
+        assert_eq!(SCREEN_ORDER[2], ScreenId::Main.index());
+    }
+
+    #[test]
+    #[cfg(not(feature = "organizer"))]
+    fn stock_order_matches_screen_ids() {
+        for (i, &s) in SCREEN_ORDER.iter().enumerate() {
+            assert_eq!(s as usize, i);
+        }
+    }
+
+    /// Navigation walks the order table, not the raw index, and skips
+    /// disabled screens on the way.
+    #[test]
+    fn screen_nav_follows_the_order_table() {
+        // `enabled` is indexed by screen id, not by carousel position.
+        let enabled = core::array::from_fn(|i| i != ScreenId::Game.index() as usize);
+        let state: DisplayState<{ ScreenId::COUNT }> = DisplayState::new(
+            core::array::from_fn(|_| ScreenState::new(&NAME_ITEMS)),
+            enabled,
+        );
+
+        // Boot lands on the first enabled screen in carousel order.
+        let first = *SCREEN_ORDER
+            .iter()
+            .find(|&&s| s != ScreenId::Game.index())
+            .unwrap();
+        assert_eq!(state.active_screen(), first);
+
+        // Paging right visits every enabled screen in table order, once.
+        let mut visited = vec![first];
+        let mut cur = first;
+        while let Some(next) = state.next_enabled_right(cur) {
+            assert_ne!(next, ScreenId::Game.index(), "disabled screen visited");
+            visited.push(next);
+            cur = next;
+        }
+        assert_eq!(visited.len(), ScreenId::COUNT - 1);
+
+        // And paging left retraces exactly the same path.
+        for pair in visited.windows(2) {
+            assert_eq!(state.next_enabled_left(pair[1]), Some(pair[0]));
+        }
+        assert_eq!(state.next_enabled_left(first), None);
     }
 
     /// `menu_up`/`menu_down` wrap around a menu boundary instead of doing

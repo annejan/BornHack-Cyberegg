@@ -1,8 +1,13 @@
-//! Calendar screen — month-grid view of every enabled one-shot alarm
-//! slot, with a movable cursor and a per-day detail mode.  Sits in the
-//! icon grid right after the Clock screen; reads the same alarm-slot
-//! state that fires the buzzer, so any event you load via `ALARMS.ICS`
-//! automatically shows up here.
+//! Calendar screen — month-grid view of the whole `ALARMS.ICS` file,
+//! with a movable cursor and a per-day detail mode.  Sits in the icon
+//! grid right after the Clock screen.
+//!
+//! Nothing here reads alarm slots.  The grid's has-events dots come from
+//! the one-bit-per-day index (`super::day_has_events`) and the day views
+//! from the single-day cache (`super::with_day_cache`, refilled by
+//! `super::request_day` when the cursor moves), both of which cover
+//! every event in the file however big it is.  The alarm slots hold only
+//! the near future, because ringing is all they are for.
 //!
 //! Three modes — same shape as the Clock face's "consume arrows only
 //! when needed" pattern, so the user can scroll past Calendar with
@@ -31,7 +36,7 @@
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::iso_8859_1::FONT_6X10;
 use embedded_graphics::mono_font::iso_8859_1::{FONT_6X13_BOLD, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
@@ -69,10 +74,6 @@ where
     Ok(())
 }
 
-use super::alarm::{
-    N_ALARMS, alarm_day_n, alarm_enabled_n, alarm_end_hour_n, alarm_end_minute_n, alarm_hour_n,
-    alarm_is_one_shot_n, alarm_minute_n, alarm_month_n, alarm_summary_n, alarm_year_n,
-};
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE, draw_frame};
 
@@ -94,8 +95,6 @@ static MODE: AtomicU8 = AtomicU8::new(MODE_PASSIVE);
 static CURSOR_YEAR: AtomicU16 = AtomicU16::new(0);
 static CURSOR_MONTH: AtomicU8 = AtomicU8::new(0);
 static CURSOR_DAY: AtomicU8 = AtomicU8::new(0);
-
-const MAX_EVENTS: usize = N_ALARMS;
 
 /// First hour visible at the top of the day-detail timeline (0..=23).
 /// Sentinel `0xFF` means "auto-position on next render" — set when the
@@ -119,6 +118,22 @@ static DAY_LIST_SCROLL: AtomicU8 = AtomicU8::new(0);
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
+/// Centre of the unread-PM envelope in the frame header.  The header is
+/// the title at x=4 (7 px/char, so "Calendar" runs to x=60) and the
+/// battery icon at x=128; the envelope is 13 px wide and its optional
+/// `+N` suffix another ~18, so this sits clear of both.  `PM_BADGE_CY`
+/// matches the title's vertical centre.
+const PM_BADGE_CX: i32 = 76;
+const PM_BADGE_CY: i32 = 8;
+
+/// Buffer size for an event row: `HH:MM-HH:MM ` plus the label.
+///
+/// Labels are stored as Latin-1, one byte per character, but a heapless
+/// `String` holds UTF-8 — so a 31-character title can be 62 bytes once
+/// decoded.  Sizing this for 31 *bytes* silently dropped the whole title
+/// on any accented event, because `push_str` is all-or-nothing.
+const ROW_BUF: usize = super::ics::SUMMARY_LEN * 2 + 16;
+
 const MONTH_LABEL_Y: i32 = 25; // baseline middle
 const WEEKDAY_STRIP_Y: i32 = 39;
 
@@ -131,70 +146,25 @@ const N_ROWS: i32 = 6;
 const FOOTER_Y: i32 = 130; // baseline middle of the first footer line
 const FOOTER_Y_2: i32 = 144;
 
+/// Baseline of the day-list "+N more today" note.  `Baseline::Middle` on
+/// a 10 px font puts the glyph rows at `y - 4 ..= y + 5`, so on a
+/// 152-row panel (0..=151) this is the lowest value that isn't clipped.
+const OVERFLOW_NOTE_Y: i32 = 146;
+
 const DAY_NAMES_SHORT: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const DAY_NAMES_LONG: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTH_ABBR: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// ── Event collection ────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct EventRow {
-    year: u16,
-    month: u8,
-    day: u8,
-    hour: u8,
-    minute: u8,
-    /// Event end time on the same day.  Mirrors `(hour, minute)` for
-    /// zero-duration events (DTEND missing in the source ICS).
-    end_hour: u8,
-    end_minute: u8,
-    /// Back-reference to the alarm slot — used to look up the summary.
-    slot: u8,
-}
-
-fn collect_sorted(out: &mut [EventRow; MAX_EVENTS]) -> usize {
-    let mut n = 0usize;
-    for slot in 0..N_ALARMS {
-        if !alarm_enabled_n(slot) || !alarm_is_one_shot_n(slot) {
-            continue;
-        }
-        if n >= out.len() {
-            break;
-        }
-        out[n] = EventRow {
-            year: alarm_year_n(slot),
-            month: alarm_month_n(slot),
-            day: alarm_day_n(slot),
-            hour: alarm_hour_n(slot),
-            minute: alarm_minute_n(slot),
-            end_hour: alarm_end_hour_n(slot),
-            end_minute: alarm_end_minute_n(slot),
-            slot: slot as u8,
-        };
-        n += 1;
+/// Drop the first `n` *characters* of `s`.  Empty once `n` runs past the
+/// end.  Used for the day-view title scroll, where counting bytes would
+/// split a multi-byte character in an accented title.
+fn scroll_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((byte, _)) => &s[byte..],
+        None => "",
     }
-    for i in 1..n {
-        let key = out[i];
-        let mut j = i;
-        while j > 0 && cmp_event(&out[j - 1], &key) == core::cmp::Ordering::Greater {
-            out[j] = out[j - 1];
-            j -= 1;
-        }
-        out[j] = key;
-    }
-    n
-}
-
-fn cmp_event(a: &EventRow, b: &EventRow) -> core::cmp::Ordering {
-    (a.year, a.month, a.day, a.hour, a.minute).cmp(&(b.year, b.month, b.day, b.hour, b.minute))
-}
-
-fn day_has_events(events: &[EventRow], y: u16, m: u8, d: u8) -> bool {
-    events
-        .iter()
-        .any(|ev| ev.year == y && ev.month == m && ev.day == d)
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────────
@@ -225,24 +195,52 @@ fn add_days(year: u16, month: u8, day: u8, delta_days: i64) -> (u16, u8, u8) {
 }
 
 /// Cursor-date getter (sentinel-aware): if uninitialised, pick today,
-/// then first event, then a Bornhack-2026 fallback.
-fn ensure_cursor(events: &[EventRow]) -> (u16, u8, u8) {
+/// then the first day the calendar has anything on, then a
+/// Bornhack-2026 fallback.
+fn ensure_cursor() -> (u16, u8, u8) {
     let y = CURSOR_YEAR.load(Ordering::Relaxed);
     if y != 0 {
+        // A cursor placed before the wall clock synced is a guess, not a
+        // choice — re-anchor it on today the moment a real date exists.
+        // A mesh badge syncs its clock well after boot, and the organizer
+        // edition *boots on this screen*, so without this the calendar
+        // opens on the wrong month and stays there until the user
+        // navigates away by hand.
+        if CURSOR_IS_GUESS.load(Ordering::Relaxed)
+            && let Some(t) = today()
+        {
+            set_cursor(t);
+            return t;
+        }
         return (
             y,
             CURSOR_MONTH.load(Ordering::Relaxed),
             CURSOR_DAY.load(Ordering::Relaxed),
         );
     }
-    let init = today()
-        .or_else(|| events.first().map(|e| (e.year, e.month, e.day)))
-        .unwrap_or((2026, 7, 15));
-    set_cursor(init);
-    init
+    match today() {
+        Some(t) => {
+            set_cursor(t);
+            t
+        }
+        None => {
+            let guess = super::first_indexed_day().unwrap_or((2026, 7, 15));
+            set_cursor(guess);
+            CURSOR_IS_GUESS.store(true, Ordering::Relaxed);
+            guess
+        }
+    }
 }
 
+/// True while the cursor holds a date picked without a wall clock.
+/// Cleared as soon as anything sets a real one — including the user
+/// moving it, which makes the placement their choice rather than a
+/// guess to be overridden later.
+static CURSOR_IS_GUESS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 fn set_cursor(ymd: (u16, u8, u8)) {
+    CURSOR_IS_GUESS.store(false, Ordering::Relaxed);
     CURSOR_YEAR.store(ymd.0, Ordering::Relaxed);
     CURSOR_MONTH.store(ymd.1, Ordering::Relaxed);
     CURSOR_DAY.store(ymd.2, Ordering::Relaxed);
@@ -307,6 +305,23 @@ fn dispatch_active(btn: ButtonId) -> bool {
     true
 }
 
+/// The timeline's current top hour, or `None` while there is nothing to
+/// scroll yet.
+///
+/// `DAY_VIEW_TOP_HOUR` holds `0xFF` until the renderer has resolved where
+/// to anchor the view, and it only resolves once the day cache actually
+/// holds the cursor day. Stepping from an unresolved sentinel used to
+/// substitute hour 0, which turned the next Up or Down into a jump to
+/// midnight — and, worse, destroyed the sentinel, so the view never
+/// auto-scrolled to the day's events when they finally arrived.
+///
+/// Scroll presses during that window are swallowed instead: there is no
+/// rendered position to step from, and the day is about to place itself.
+fn scrollable_top_hour() -> Option<u8> {
+    let top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+    if top == 0xFF { None } else { Some(top) }
+}
+
 fn dispatch_day_detail(btn: ButtonId) -> bool {
     // Up/Down:        scroll the timeline by an hour.
     // Left/Right:     scroll all event titles left/right in 3-char steps so
@@ -321,18 +336,16 @@ fn dispatch_day_detail(btn: ButtonId) -> bool {
     // Cancel:         back to the grid (title scroll resets to 0).
     match btn {
         ButtonId::Up => {
-            let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
-            // Treat sentinel as 0 for the bounds-check; renderer will
-            // resolve the new value into the visible range.
-            let resolved = if cur_top == 0xFF { 0 } else { cur_top };
-            DAY_VIEW_TOP_HOUR.store(resolved.saturating_sub(1), Ordering::Relaxed);
+            if let Some(cur_top) = scrollable_top_hour() {
+                DAY_VIEW_TOP_HOUR.store(cur_top.saturating_sub(1), Ordering::Relaxed);
+            }
             true
         }
         ButtonId::Down => {
-            let cur_top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
-            let resolved = if cur_top == 0xFF { 0 } else { cur_top };
-            // Cap at 23 so the user can't scroll past the end of the day.
-            DAY_VIEW_TOP_HOUR.store(resolved.saturating_add(1).min(23), Ordering::Relaxed);
+            if let Some(cur_top) = scrollable_top_hour() {
+                // Cap at 23 so the user can't scroll past the end of the day.
+                DAY_VIEW_TOP_HOUR.store(cur_top.saturating_add(1).min(23), Ordering::Relaxed);
+            }
             true
         }
         ButtonId::Right => {
@@ -373,9 +386,12 @@ fn dispatch_day_list(btn: ButtonId) -> bool {
         ButtonId::Down => {
             let cur = DAY_LIST_SCROLL.load(Ordering::Relaxed);
             // Loose cap — the renderer just leaves rows blank past the
-            // end of the day's events.  N_ALARMS is the absolute upper
-            // bound on events ever importable.
-            DAY_LIST_SCROLL.store(cur.saturating_add(1).min(N_ALARMS as u8), Ordering::Relaxed);
+            // end of the day's events.  `DAY_CACHE_MAX` is the most the
+            // day cache holds, so no day can list more than that.
+            DAY_LIST_SCROLL.store(
+                cur.saturating_add(1).min(super::DAY_CACHE_MAX as u8),
+                Ordering::Relaxed,
+            );
             true
         }
         ButtonId::Cancel => {
@@ -405,32 +421,49 @@ where
     let bat = battery_pct();
     draw_frame(display, Some(("Calendar", &bat)), None)?;
 
-    let mut events_buf = [EventRow {
-        year: 0,
-        month: 0,
-        day: 0,
-        hour: 0,
-        minute: 0,
-        end_hour: 0,
-        end_minute: 0,
-        slot: 0,
-    }; MAX_EVENTS];
-    let n = collect_sorted(&mut events_buf);
-    let events = &events_buf[..n];
+    // Unread-PM envelope, same as the clock face carries.  The header
+    // strip between the "Calendar" title and the battery icon is
+    // otherwise empty, and the calendar is the screen the organizer
+    // edition boots on — mail shouldn't need a trip to the clock to
+    // notice.
+    #[cfg(feature = "mesh")]
+    super::alarm::draw_unread_badge(display, PM_BADGE_CX, PM_BADGE_CY)?;
 
-    match MODE.load(Ordering::Relaxed) {
-        MODE_DAY_LIST => draw_day_list(display, events),
-        MODE_DAY_DETAIL => draw_day_detail(display, events),
-        MODE_ACTIVE => draw_grid(display, events, true),
-        _ => draw_grid(display, events, false),
-    }
+    // Everything below reads the cursor day out of the shared cache,
+    // which the ICS task refills from the file whenever the cursor
+    // moves.  Nothing here walks a list of every event in the calendar,
+    // which is what lets the file be arbitrarily large.
+    let cursor = ensure_cursor();
+    super::request_day(cursor.0, cursor.1, cursor.2);
+
+    super::with_day_cache(|cache| {
+        // A cache miss is transient — the task is already loading the
+        // day and will signal a redraw.  Render the empty day rather
+        // than a spinner; on a fast day-load the placeholder is never
+        // even seen.  `loaded` distinguishes that from a real day that
+        // simply has nothing on it, which the views must not confuse.
+        let loaded = cache.date == cursor;
+        let day: &[super::CachedEvent] = if loaded { cache.valid() } else { &[] };
+        let overflow = if loaded { cache.overflow } else { 0 };
+
+        match MODE.load(Ordering::Relaxed) {
+            MODE_DAY_LIST => draw_day_list(display, cursor, day, overflow),
+            MODE_DAY_DETAIL => draw_day_detail(display, cursor, day, loaded),
+            MODE_ACTIVE => draw_grid(display, cursor, day, true),
+            _ => draw_grid(display, cursor, day, false),
+        }
+    })
 }
 
-fn draw_grid<D>(display: &mut D, events: &[EventRow], active: bool) -> Result<(), D::Error>
+fn draw_grid<D>(
+    display: &mut D,
+    cursor: (u16, u8, u8),
+    day: &[super::CachedEvent],
+    active: bool,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let cursor = ensure_cursor(events);
     let today_ymd = today();
 
     // ── Month label ────────────────────────────────────────────────────────
@@ -510,10 +543,14 @@ where
                     centered,
                 )?;
 
-                // Has-events dot in the top-right corner.
-                if day_has_events(events, cell_date.0, cell_date.1, cell_date.2) {
+                // Has-events dot in the top-right corner.  White on
+                // today, whose cell is already filled red — the day
+                // number takes the same treatment a few lines up, and a
+                // red dot on red was invisible on exactly the day you
+                // most want it.
+                if super::day_has_events(cell_date.0, cell_date.1, cell_date.2) {
                     Circle::new(Point::new(cell_x + COL_W - 5, cell_y + 1), 3)
-                        .into_styled(PrimitiveStyle::with_fill(RED))
+                        .into_styled(PrimitiveStyle::with_fill(fg))
                         .draw(display)?;
                 }
             }
@@ -534,15 +571,33 @@ where
     }
 
     // ── Footer: cursor day's first event + "+N more" ───────────────────────
-    let cursor_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
-        .iter()
-        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
-        .collect();
+    let cursor_evs = day;
 
     let left = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Left)
         .build();
+    // Every event in the file shows on this grid, however big the file
+    // is — but only the first N_ALARMS of them get an alarm slot, and
+    // the rest can't ring.  Say so in red rather than letting a silent
+    // alarm look like a working one.
+    let dropped = super::events_dropped();
+    if dropped > 0 {
+        // Kept short on purpose: at 6 px/char the 152 px panel takes 25
+        // characters, and `dropped` is a u16 — spelling out the total as
+        // well would run off the edge on a big calendar.  The boot log
+        // carries the full "N events, M armed, K beyond the slots".
+        let mut warn: heapless::String<24> = heapless::String::new();
+        let _ = core::fmt::write(&mut warn, format_args!("! {dropped} can't ring"));
+        draw_bold(
+            display,
+            &warn,
+            Point::new(76, FOOTER_Y_2),
+            MonoTextStyle::new(&FONT_6X10, RED),
+            centered,
+        )?;
+    }
+
     if cursor_evs.is_empty() {
         draw_bold(
             display,
@@ -553,8 +608,8 @@ where
         )?;
     } else {
         let ev0 = cursor_evs[0];
-        let summary = alarm_summary_n(ev0.slot as usize);
-        let mut row: heapless::String<48> = heapless::String::new();
+        let summary = ev0.summary();
+        let mut row: heapless::String<ROW_BUF> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
             format_args!("{:02}:{:02} {}", ev0.hour, ev0.minute, summary.as_str()),
@@ -567,7 +622,10 @@ where
             left,
         )?;
 
-        if cursor_evs.len() > 1 {
+        // Both want the second footer line; the missing-events warning
+        // wins, since "+ 3 more" is recoverable by opening the day and
+        // "20 events not loaded" isn't.
+        if cursor_evs.len() > 1 && dropped == 0 {
             let mut more: heapless::String<24> = heapless::String::new();
             let _ = core::fmt::write(&mut more, format_args!("+ {} more", cursor_evs.len() - 1));
             draw_bold(
@@ -610,11 +668,15 @@ where
 /// blocks shorter than ~10 px omit the title.  Today's "now" position
 /// is marked with a red horizontal line.  Empty days show
 /// `(no events)` over the timeline.
-fn draw_day_detail<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
+fn draw_day_detail<D>(
+    display: &mut D,
+    cursor: (u16, u8, u8),
+    day_evs: &[super::CachedEvent],
+    loaded: bool,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let cursor = ensure_cursor(events);
     let today_ymd = today();
 
     // ── Day header (compact red bar) ─────────────────────────────────────
@@ -661,13 +723,6 @@ where
     const TL_LEFT_X: i32 = 22;
     const TL_RIGHT_X: i32 = 148;
 
-    // Filter events to the cursor day (collected before resolving the
-    // scroll position so we can auto-scroll to the first event).
-    let day_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
-        .iter()
-        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
-        .collect();
-
     // Resolve the scroll sentinel to a sensible top-hour: first event
     // hour, or current hour if today, or 06:00.  Clamp so the visible
     // window always stays inside 0..24.
@@ -686,7 +741,19 @@ where
         // very top edge.
         let anchored = (chosen - 1).clamp(0, 24 - HOURS_VISIBLE);
         top_hour = anchored as u8;
-        DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
+        // Only commit the resolved position once the cache actually
+        // holds this day.  The first frame after the cursor moves can
+        // render before the day cache has been refilled; storing then
+        // would pin the view to a default hour and never auto-scroll to
+        // the events once they arrive.
+        //
+        // The test is "is this day loaded", not "does it have events" —
+        // an empty day is loaded, and leaving its sentinel unresolved
+        // made the next Up/Down read 0xFF as hour 0 and jump the
+        // timeline instead of stepping it.
+        if loaded {
+            DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
+        }
     } else if (top_hour as i32) > 24 - HOURS_VISIBLE {
         top_hour = (24 - HOURS_VISIBLE) as u8;
         DAY_VIEW_TOP_HOUR.store(top_hour, Ordering::Relaxed);
@@ -751,7 +818,7 @@ where
     };
 
     // Event blocks — only those that intersect the visible window.
-    for ev in &day_evs {
+    for ev in day_evs {
         let ev_start_min = ev.hour as i32 * 60 + ev.minute as i32;
         let ev_end_min = ev.end_hour as i32 * 60 + ev.end_minute as i32;
         let win_start_min = tl_start_hour * 60;
@@ -793,15 +860,16 @@ where
         // that means 60-min events get titles; 30-min and 45-min events
         // render as bare time markers.
         if block_h >= 13 {
-            let summary = alarm_summary_n(ev.slot as usize);
-            // Apply the global title scroll offset.  `get(N..)` returns
-            // None if N is past the end of the (NUL-trimmed) summary —
-            // fine, the title row just renders as the bare time prefix
-            // for that event, which still tells the user what's where
-            // and is the cue to press Execute back.
+            let summary = ev.summary();
+            // Apply the global title scroll offset.  Counted in
+            // characters, not bytes: an accented title is UTF-8 here, so
+            // a byte offset would land mid-sequence and blank the row.
+            // Past the end the title renders as the bare time prefix,
+            // which still tells the user what's where and is the cue to
+            // press Execute back.
             let scroll = DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed) as usize;
-            let scrolled = summary.as_str().get(scroll..).unwrap_or("");
-            let mut row: heapless::String<48> = heapless::String::new();
+            let scrolled = scroll_chars(summary.as_str(), scroll);
+            let mut row: heapless::String<ROW_BUF> = heapless::String::new();
             let _ = core::fmt::write(
                 &mut row,
                 format_args!("{:02}:{:02} {}", ev.hour, ev.minute, scrolled),
@@ -868,11 +936,15 @@ where
 /// Day-list popup — full-screen scrollable list of every event on the
 /// cursor day with full (untruncated) summaries.  Reached from
 /// day-detail by Fire / Execute; see `MODE_DAY_LIST`.
-fn draw_day_list<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
+fn draw_day_list<D>(
+    display: &mut D,
+    cursor: (u16, u8, u8),
+    day_evs: &[super::CachedEvent],
+    overflow: u8,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let cursor = ensure_cursor(events);
     let today_ymd = today();
 
     // ── Day header (same red bar / FONT_7X13_BOLD as day-detail) ─────────
@@ -907,11 +979,8 @@ where
     .draw(display)?;
 
     // ── Event rows ───────────────────────────────────────────────────────
-    // Filter to cursor day; events arrive already sorted by start time.
-    let day_evs: heapless::Vec<&EventRow, MAX_EVENTS> = events
-        .iter()
-        .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
-        .collect();
+    // The cache holds exactly the cursor day, already sorted by start
+    // time.
 
     if day_evs.is_empty() {
         Text::with_text_style(
@@ -949,18 +1018,16 @@ where
             break;
         }
         let ev = day_evs[idx as usize];
-        let summary = alarm_summary_n(ev.slot as usize);
-        let mut row: heapless::String<48> = heapless::String::new();
+        let summary = ev.summary();
+        let mut row: heapless::String<ROW_BUF> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
-            format_args!(
-                "{:02}:{:02}-{:02}:{:02} {}",
-                ev.hour,
-                ev.minute,
-                ev.end_hour,
-                ev.end_minute,
-                summary.as_str()
-            ),
+            // Start time only.  The end time cost six characters of
+            // title, which left this mode showing *less* of a name than
+            // the timeline it exists to expand on — and unlike the
+            // timeline, it can't scroll.  Durations are what the
+            // timeline draws; this view is for reading names.
+            format_args!("{:02}:{:02} {}", ev.hour, ev.minute, summary.as_str()),
         );
         let y = ROW_TOP_Y + r * ROW_H + ROW_H / 2;
         Text::with_text_style(&row, Point::new(ROW_LEFT_X, y), row_style, left_align)
@@ -977,5 +1044,390 @@ where
         draw_bold(display, "v", Point::new(146, ROW_BOT_Y - 4), arrow_style, centered)?;
     }
 
+    // A day busier than the cache can hold says so rather than silently
+    // showing a subset. Red, like the truncated-import warning on the
+    // grid — both mean "there is more than this".
+    if overflow > 0 {
+        let mut warn: heapless::String<24> = heapless::String::new();
+        let _ = core::fmt::write(&mut warn, format_args!("+{overflow} more today"));
+        draw_bold(
+            display,
+            &warn,
+            // Centred FONT_6X10 spans 4 px above and 5 below its anchor,
+            // so 146 is the lowest baseline that stays inside the 152-row
+            // panel.  Anything lower clipped the message that exists to
+            // say events are hidden.
+            Point::new(76, OVERFLOW_NOTE_Y),
+            MonoTextStyle::new(&FONT_6X10, RED),
+            centered,
+        )?;
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The header strip is shared by the title, the unread-PM envelope
+    /// and the battery icon, all positioned by hand.  Pin the gaps so a
+    /// later layout tweak can't quietly overlap them.
+    #[test]
+    fn pm_badge_clears_the_title_and_battery() {
+        // `draw_frame` puts the title at x=4 in a 7 px/char font and the
+        // battery icon at x=128.
+        const TITLE_X: i32 = 4;
+        const TITLE_END: i32 = TITLE_X + 7 * "Calendar".len() as i32;
+        const BATTERY_X: i32 = 128;
+        /// Envelope glyph, drawn centred.
+        const BADGE_W: i32 = 13;
+        /// Widest `+N` suffix: 2 chars at 6 px, offset 8 px from centre.
+        const SUFFIX_END: i32 = 8 + 2 * 6;
+
+        assert!(
+            PM_BADGE_CX - BADGE_W / 2 > TITLE_END,
+            "envelope overlaps the title"
+        );
+        assert!(
+            PM_BADGE_CX + SUFFIX_END < BATTERY_X,
+            "unread count overlaps the battery icon"
+        );
+        // Title baseline is y=14 in a 13 px font, so the header band is
+        // roughly y=1..15; the 13 px envelope has to sit inside it.
+        assert!(PM_BADGE_CY - BADGE_W / 2 >= 1);
+        assert!(PM_BADGE_CY + BADGE_W / 2 <= 15);
+    }
+
+    /// An event row is `HH:MM-HH:MM ` plus the label.  Labels are stored
+    /// as Latin-1 (one byte per character) but rendered from UTF-8, so a
+    /// full-length accented title doubles in size — and `heapless`
+    /// `push_str` is all-or-nothing, so a row buffer one byte too small
+    /// drops the entire title rather than clipping it.
+    #[test]
+    fn row_buffer_holds_a_full_length_accented_title() {
+        use core::fmt::Write;
+
+        let worst = super::super::CachedEvent {
+            hour: 23,
+            minute: 59,
+            end_hour: 23,
+            end_minute: 59,
+            summary: [0xc6; super::super::ics::SUMMARY_LEN], // 31 x 'Æ'
+        };
+        let label = worst.summary();
+        assert_eq!(label.chars().count(), super::super::ics::SUMMARY_LEN);
+        assert_eq!(label.len(), super::super::ics::SUMMARY_LEN * 2, "two bytes each");
+
+        let mut row: heapless::String<ROW_BUF> = heapless::String::new();
+        write!(
+            row,
+            "{:02}:{:02}-{:02}:{:02} {}",
+            worst.hour,
+            worst.minute,
+            worst.end_hour,
+            worst.end_minute,
+            label.as_str()
+        )
+        .expect("row buffer must hold the widest event row");
+        assert!(row.ends_with('Æ'), "title survived: {row:?}");
+    }
+
+    /// The day-list exists to show names the timeline was too cramped
+    /// for, so it must not show *fewer* characters of one than the
+    /// timeline does.
+    #[test]
+    fn day_list_shows_more_title_than_the_timeline() {
+        const PANEL_W: i32 = 152;
+        const CHAR_W: i32 = 6; // FONT_6X13_BOLD, used by both rows
+
+        // Timeline row: drawn at TL_LEFT_X + 2, prefixed "HH:MM ".
+        const TIMELINE_X: i32 = 22 + 2;
+        const TIMELINE_PREFIX: i32 = 6;
+        let timeline_chars = (PANEL_W - TIMELINE_X) / CHAR_W - TIMELINE_PREFIX;
+
+        // Day-list row: drawn at ROW_LEFT_X, same "HH:MM " prefix.
+        const LIST_X: i32 = 2;
+        const LIST_PREFIX: i32 = 6;
+        let list_chars = (PANEL_W - LIST_X) / CHAR_W - LIST_PREFIX;
+
+        assert!(
+            list_chars > timeline_chars,
+            "day-list shows {list_chars} title chars, timeline shows {timeline_chars}"
+        );
+        // Concretely: 19 characters against the timeline's 15. It still
+        // can't show a full 31-character label — it cannot scroll, so
+        // that is the honest ceiling of this layout.
+        assert_eq!((list_chars, timeline_chars), (19, 15));
+    }
+
+    /// A cursor placed before the wall clock synced is a guess. Once a
+    /// real date arrives it must be replaced — a mesh badge syncs late,
+    /// and the organizer edition boots straight onto this screen.
+    #[test]
+    fn a_guessed_cursor_is_replaced_once_the_clock_arrives() {
+        let Some(today) = today() else {
+            return; // no wall clock in this build — nothing to re-anchor to
+        };
+
+        // A cursor left over from a clockless frame is a guess, and the
+        // next draw with a real date must replace it.
+        set_cursor((2026, 3, 4));
+        CURSOR_IS_GUESS.store(true, Ordering::Relaxed);
+        assert_eq!(
+            ensure_cursor(),
+            today,
+            "a guessed cursor must re-anchor on today"
+        );
+        assert!(
+            !CURSOR_IS_GUESS.load(Ordering::Relaxed),
+            "and stop being a guess once it has"
+        );
+
+        // The user moving the cursor makes it their choice; a later
+        // clock sync must not drag it back to today.
+        set_cursor((2026, 3, 4));
+        assert!(!CURSOR_IS_GUESS.load(Ordering::Relaxed));
+        assert_eq!(ensure_cursor(), (2026, 3, 4));
+    }
+
+    /// Every button in every mode, in every order, from every starting
+    /// state — asserting the invariants the renderers rely on after each
+    /// press.
+    ///
+    /// The renderers index arrays and compute coordinates from this
+    /// state with no clipping assertions, and `panic = "abort"`, so a
+    /// state the dispatcher can reach but a renderer can't handle takes
+    /// the badge out. A person holding a direction down generates
+    /// exactly this: long unbroken runs of one button with no redraw in
+    /// between.
+    #[test]
+    fn button_walk_never_leaves_an_invalid_state() {
+        const BUTTONS: [ButtonId; 7] = [
+            ButtonId::Cancel,
+            ButtonId::Execute,
+            ButtonId::Up,
+            ButtonId::Down,
+            ButtonId::Left,
+            ButtonId::Right,
+            ButtonId::Fire,
+        ];
+
+        fn check(seq: &str) {
+            let mode = MODE.load(Ordering::Relaxed);
+            assert!(
+                matches!(
+                    mode,
+                    MODE_PASSIVE | MODE_ACTIVE | MODE_DAY_DETAIL | MODE_DAY_LIST
+                ),
+                "{seq}: mode {mode} is not one of the four"
+            );
+
+            // The cursor is fed to add_days, weekday_for and
+            // days_from_civil, and rendered as "Mon 15 Jul 2026".
+            let (y, m, d) = (
+                CURSOR_YEAR.load(Ordering::Relaxed),
+                CURSOR_MONTH.load(Ordering::Relaxed),
+                CURSOR_DAY.load(Ordering::Relaxed),
+            );
+            if y != 0 {
+                assert!((1..=12).contains(&m), "{seq}: month {m}");
+                assert!(d >= 1 && d <= 31, "{seq}: day {d}");
+                // Must be a real date — the month-grid header indexes
+                // MONTH_ABBR[m-1] and DAY_NAMES_LONG[weekday].
+                assert!(
+                    fasttime::Date::from_ymd(y as i32, m, d).is_ok(),
+                    "{seq}: {y}-{m}-{d} is not a real date"
+                );
+                assert!(
+                    (weekday_for(y, m, d) as usize) < DAY_NAMES_LONG.len(),
+                    "{seq}: weekday out of range"
+                );
+            }
+
+            // Scroll offsets are used as slice indices and loop bounds.
+            let top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+            assert!(top <= 23 || top == 0xFF, "{seq}: top hour {top}");
+            assert!(
+                DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed) <= TITLE_SCROLL_MAX,
+                "{seq}: title scroll past its cap"
+            );
+            assert!(
+                DAY_LIST_SCROLL.load(Ordering::Relaxed) as usize <= crate::watch::DAY_CACHE_MAX,
+                "{seq}: day-list scroll past the cache"
+            );
+        }
+
+        // Exhaustive over every ordering up to length 4 (2801 sequences),
+        // from a known date near a month end so rollovers get hit.
+        fn walk(depth: usize, seq: &mut std::string::String) {
+            if depth == 0 {
+                return;
+            }
+            for (name, btn) in [
+                ("C", ButtonId::Cancel),
+                ("E", ButtonId::Execute),
+                ("U", ButtonId::Up),
+                ("D", ButtonId::Down),
+                ("L", ButtonId::Left),
+                ("R", ButtonId::Right),
+                ("F", ButtonId::Fire),
+            ] {
+                let saved = (
+                    MODE.load(Ordering::Relaxed),
+                    CURSOR_YEAR.load(Ordering::Relaxed),
+                    CURSOR_MONTH.load(Ordering::Relaxed),
+                    CURSOR_DAY.load(Ordering::Relaxed),
+                    DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed),
+                    DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed),
+                    DAY_LIST_SCROLL.load(Ordering::Relaxed),
+                );
+
+                seq.push_str(name);
+                dispatch(btn);
+                check(seq);
+                walk(depth - 1, seq);
+                seq.pop();
+
+                MODE.store(saved.0, Ordering::Relaxed);
+                CURSOR_YEAR.store(saved.1, Ordering::Relaxed);
+                CURSOR_MONTH.store(saved.2, Ordering::Relaxed);
+                CURSOR_DAY.store(saved.3, Ordering::Relaxed);
+                DAY_VIEW_TOP_HOUR.store(saved.4, Ordering::Relaxed);
+                DAY_VIEW_TITLE_SCROLL.store(saved.5, Ordering::Relaxed);
+                DAY_LIST_SCROLL.store(saved.6, Ordering::Relaxed);
+            }
+        }
+
+        // Dates worth starting from: a month end, a leap day, a year end,
+        // and the far end of February.
+        for start in [
+            (2026u16, 7u8, 31u8),
+            (2028, 2, 29),
+            (2026, 12, 31),
+            (2027, 2, 28),
+            (2026, 1, 1),
+        ] {
+            for mode in [MODE_PASSIVE, MODE_ACTIVE, MODE_DAY_DETAIL, MODE_DAY_LIST] {
+                MODE.store(mode, Ordering::Relaxed);
+                set_cursor(start);
+                DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
+                DAY_VIEW_TITLE_SCROLL.store(0, Ordering::Relaxed);
+                DAY_LIST_SCROLL.store(0, Ordering::Relaxed);
+                walk(4, &mut std::string::String::new());
+            }
+        }
+
+        // And long unbroken runs, which is what holding a key produces.
+        for btn in BUTTONS {
+            for start in [(2026u16, 12u8, 31u8), (2028, 2, 29)] {
+                for mode in [MODE_PASSIVE, MODE_ACTIVE, MODE_DAY_DETAIL, MODE_DAY_LIST] {
+                    MODE.store(mode, Ordering::Relaxed);
+                    set_cursor(start);
+                    for i in 0..500 {
+                        dispatch(btn);
+                        check(&std::format!("hold x{i}"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The timeline scroll must never step from the unresolved sentinel.
+    /// Doing so read `0xFF` as hour 0 — turning the next press into a
+    /// jump to midnight — and overwrote the sentinel, so the view never
+    /// auto-anchored on the day's events once they loaded.
+    #[test]
+    fn scroll_does_nothing_until_the_view_has_a_position() {
+        DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
+        assert_eq!(scrollable_top_hour(), None, "sentinel is not a position");
+
+        // Up and Down must both leave the sentinel intact.
+        for (name, btn) in [("Up", ButtonId::Up), ("Down", ButtonId::Down)] {
+            assert!(dispatch_day_detail(btn), "the press is still consumed");
+            assert_eq!(
+                DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed),
+                0xFF,
+                "{name} clobbered the sentinel"
+            );
+        }
+
+        // Once the renderer has anchored the view, stepping works.
+        DAY_VIEW_TOP_HOUR.store(9, Ordering::Relaxed);
+        assert_eq!(scrollable_top_hour(), Some(9));
+        dispatch_day_detail(ButtonId::Down);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 10);
+        dispatch_day_detail(ButtonId::Up);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 9);
+
+        // And it still clamps at both ends of the day.
+        DAY_VIEW_TOP_HOUR.store(0, Ordering::Relaxed);
+        dispatch_day_detail(ButtonId::Up);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 0);
+        DAY_VIEW_TOP_HOUR.store(23, Ordering::Relaxed);
+        dispatch_day_detail(ButtonId::Down);
+        assert_eq!(DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed), 23);
+    }
+
+    /// Text is anchored by its vertical middle, so a 10 px font reaches
+    /// 4 px above its baseline and 5 below.  Every such anchor has to
+    /// leave both ends inside the 152-row panel — the day-list overflow
+    /// note used to sit 2 px too low and lose its bottom rows, which is
+    /// a poor look for the one message that exists to say something is
+    /// hidden.
+    #[test]
+    fn bottom_anchored_text_stays_on_the_panel() {
+        const PANEL_H: i32 = 152;
+        const FONT_H: i32 = 10;
+        // embedded-graphics: baseline_offset(Middle) = (height - 1) / 2.
+        const ABOVE: i32 = (FONT_H - 1) / 2;
+        const BELOW: i32 = FONT_H - 1 - ABOVE;
+
+        for (name, y) in [
+            ("overflow note", OVERFLOW_NOTE_Y),
+            ("footer line 1", FOOTER_Y),
+            ("footer line 2", FOOTER_Y_2),
+        ] {
+            assert!(y - ABOVE >= 0, "{name} clipped at the top");
+            assert!(
+                y + BELOW <= PANEL_H - 1,
+                "{name} clipped at the bottom: reaches row {}",
+                y + BELOW
+            );
+        }
+    }
+
+    /// Footer strings are drawn at 6 px/char on a 152 px panel, so 25
+    /// characters is the hard limit.  Both of these interpolate counts
+    /// that can grow, which is exactly how text has run off this panel
+    /// before.
+    #[test]
+    fn footer_warnings_fit_the_panel() {
+        use core::fmt::Write;
+        const MAX_CHARS: usize = 152 / 6;
+
+        let mut warn: heapless::String<24> = heapless::String::new();
+        let _ = write!(warn, "! {} can't ring", u16::MAX);
+        assert!(
+            warn.chars().count() <= MAX_CHARS,
+            "ring warning too wide: {warn:?}"
+        );
+
+        let mut more: heapless::String<24> = heapless::String::new();
+        let _ = write!(more, "+{} more today", u8::MAX);
+        assert!(
+            more.chars().count() <= MAX_CHARS,
+            "overflow note too wide: {more:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_chars_counts_characters_not_bytes() {
+        assert_eq!(scroll_chars("Bornhack", 4), "hack");
+        // Latin-1 letters are two UTF-8 bytes; a byte offset would land
+        // mid-sequence here and lose the rest of the title.
+        assert_eq!(scroll_chars("CyberÆgg", 5), "Ægg");
+        assert_eq!(scroll_chars("SKÅL", 2), "ÅL");
+        assert_eq!(scroll_chars("short", 99), "");
+    }
 }

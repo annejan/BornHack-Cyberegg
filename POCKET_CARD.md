@@ -29,6 +29,10 @@ One-page badge cheat sheet. Print and tuck under the strap.
 
 `Game → Main → PMs → Channel → Adverts → Clock → Calendar → Name → My QR`
 
+Organizer edition (no game, boots on the schedule):
+
+`Calendar → Clock → Main → PMs → Channel → Adverts → Name → My QR`
+
 ## LED meanings
 
 | Colour                   | Meaning                                     |
@@ -63,7 +67,7 @@ Plug USB-C. Badge appears as **`CYBR<4 hex>`** drive.
 | `PETS.CFG`                          | add / rename pets (PREFIX=NAME) |
 | `LUT.CFG`                           | custom e-paper waveform         |
 
-Reboot the badge after dropping files.
+Reboot after dropping the `.PCX` / `.CFG` files. `ALARMS.ICS` re-imports itself ~2 s after the copy finishes (or **Settings → Events → Reload from ICS**).
 
 ## Firmware update (DFU mode)
 

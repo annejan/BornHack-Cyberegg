@@ -269,11 +269,14 @@ mod tests {
     }
 
     #[test]
-    fn drops_control_and_beyond_latin1() {
+    fn drops_control_and_substitutes_beyond_latin1() {
         assert_eq!(filter("a\u{7f}b").as_str(), "ab"); // DEL
         assert_eq!(filter("x\ty").as_str(), "xy"); // tab (control)
         assert_eq!(filter("q\u{85}w").as_str(), "qw"); // C1 control (< U+00A0)
-        assert_eq!(filter("日本語").as_str(), ""); // CJK beyond Latin-1
-        assert_eq!(filter("hi🎉").as_str(), "hi"); // emoji beyond Latin-1
+        // Beyond Latin-1 there is no glyph, but the character was *there* —
+        // substituting `?` says so, where dropping it silently rewrites the
+        // name.  A name made only of such characters still shows.
+        assert_eq!(filter("日本語").as_str(), "???"); // CJK
+        assert_eq!(filter("hi🎉").as_str(), "hi?"); // emoji
     }
 }

@@ -17,9 +17,11 @@ FW_OUT = firmware
 BL_ELF = bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 
 .PHONY: fw fw-release fw-release-debug fw-game fw-game-release fw-mesh fw-mesh-release \
+        fw-organizer fw-organizer-release flash-organizer flash-organizer-release dfu-flash-organizer \
         fw-1680 fw-1680-release flash-1680 flash-1680-release \
         fw-1680-game fw-1680-game-release flash-1680-game \
         fw-1680-mesh flash-1680-mesh dfu-flash-1680 dfu-flash-1680-release \
+        fw-1680-organizer fw-1680-organizer-release flash-1680-organizer \
         fw-hwtest flash-hwtest run-hwtest monitor-hwtest fw-hwtest-bin fw-full-bin \
         sim flash flash-release flash-release-debug run-release-debug \
         flash-game flash-mesh \
@@ -137,6 +139,19 @@ flash-1680-mesh:
 	cargo fw-1680-mesh
 	probe-rs download --chip nRF52840_xxAA $(ELF)
 
+# Organizer edition on the SSD1680 panel.
+fw-1680-organizer:
+	cargo fw-1680-organizer
+	@arm-none-eabi-size $(ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+fw-1680-organizer-release:
+	cargo fw-1680-organizer-release
+	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+flash-1680-organizer:
+	cargo fw-1680-organizer
+	probe-rs download --chip nRF52840_xxAA $(ELF)
+
 dfu-flash-1680:
 	cargo fw-1680
 	arm-none-eabi-objcopy -O binary $(ELF) $(BIN)
@@ -150,6 +165,30 @@ dfu-flash-1680-release:
 flash-mesh-release:
 	cargo fw-mesh-release
 	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# ---------- Organizer edition (calendar-first, no game) ----------
+
+fw-organizer:
+	cargo fw-organizer
+	@arm-none-eabi-size $(ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+fw-organizer-release:
+	cargo fw-organizer-release
+	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+flash-organizer:
+	cargo fw-organizer
+	probe-rs download --chip nRF52840_xxAA $(ELF)
+
+flash-organizer-release:
+	cargo fw-organizer-release
+	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# Build the organizer edition and push it over USB DFU (badge must be in
+# bootloader mode).
+dfu-flash-organizer: fw-organizer-release
+	arm-none-eabi-objcopy -O binary $(ELF_REL) $(BIN_REL)
+	dfu-util -w -D $(BIN_REL)
 
 # ---------- Watch app ----------
 

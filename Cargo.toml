@@ -224,6 +224,15 @@ embassy-1680-game = ["embassy-1680", "game", "usb-storage"]
 embassy-mesh = ["embassy-base", "mesh"]
 # Mesh only on the SSD1680 panel.
 embassy-1680-mesh = ["embassy-1680", "mesh"]
+# Carousel reorder for the organizer edition: boot into the calendar, then the
+# clock, then the meshcore screens, then name + QR.  Pure navigation change —
+# does not pull in or drop any subsystem itself.
+organizer = []
+# Organizer edition: clock/calendar-first badge with meshcore, no game.
+# USB storage stays in so .ics calendar files can be dropped on it.
+embassy-organizer = ["embassy-base", "mesh", "usb-storage", "organizer"]
+# Organizer edition on the SSD1680 panel.
+embassy-1680-organizer = ["embassy-1680", "mesh", "usb-storage", "organizer"]
 # Watch only (no game, no mesh) — `watch` is already pulled in by embassy-base.
 embassy-watch = ["embassy-base"]
 # Factory hardware test — minimal standalone firmware, no bootloader required.

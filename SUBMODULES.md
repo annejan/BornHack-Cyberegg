@@ -1,6 +1,6 @@
 # Submodules guide
 
-Three of the firmware's biggest dependencies live as **git submodules**
+Four of the firmware's biggest dependencies live as **git submodules**
 under `vendor/`, consumed by Cargo as `path = "./vendor/<name>"` deps:
 
 | Submodule | Path | Upstream | Cargo crate |
@@ -8,6 +8,7 @@ under `vendor/`, consumed by Cargo as `path = "./vendor/<name>"` deps:
 | MeshCore protocol | `vendor/meshcore` | <https://codeberg.org/Ranzbak/meshcore-aegg-rust> | `meshcore` |
 | MeshCore companion | `vendor/meshcore-companion` | <https://codeberg.org/Ranzbak/meshcore-companion-aegg-rust> | `meshcore-companion` |
 | SSD1675 e-paper driver | `vendor/ssd1675` | <https://codeberg.org/Ranzbak/ssd1675> | `ssd1675` |
+| SSD1680 e-paper driver | `vendor/ssd1680` | <https://codeberg.org/Ranzbak/ssd1680.git> | `ssd1680` |
 
 Each submodule is **pinned to a specific commit** in the parent repo's
 tree (the SHAs are stored alongside `.gitmodules`).  Cloning the parent

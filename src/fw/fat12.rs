@@ -518,6 +518,75 @@ pub async fn read_file(file: &FileRef, offset: u32, buf: &mut [u8]) -> Result<us
     Ok(bytes_read)
 }
 
+/// Sequential reader over a file's cluster chain.
+///
+/// [`read_file`] re-walks the chain from the first cluster on every call,
+/// so reading a whole file in `n` chunks costs `O(n²)` FAT lookups — fine
+/// for a config file, wasteful for a 100 KiB calendar export. This keeps
+/// its place instead: one traversal for the whole file, and the BPB is
+/// read once at open rather than per chunk.
+pub struct FileReader {
+    params: FatParams,
+    /// Cluster the next byte lives in. `None` once the chain has ended.
+    cluster: Option<u16>,
+    /// Byte offset within `cluster`.
+    in_cluster: u32,
+    /// Bytes returned so far.
+    pos: u32,
+    size: u32,
+}
+
+impl FileReader {
+    /// Open `file` for sequential reading from byte 0.
+    pub async fn open(file: &FileRef) -> Result<Self, FatError> {
+        // Clusters 0 and 1 are reserved; a directory entry claiming
+        // size > 0 with first_cluster < 2 is corrupt (host-writable, so
+        // untrusted) — same guard as `read_file`.
+        if file.size > 0 && file.first_cluster < 2 {
+            return Err(FatError::Corrupt);
+        }
+        Ok(Self {
+            params: read_params().await?,
+            cluster: Some(file.first_cluster),
+            in_cluster: 0,
+            pos: 0,
+            size: file.size,
+        })
+    }
+
+    /// Fill as much of `buf` as the file has left. Returns 0 at EOF.
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, FatError> {
+        let remaining = self.size.saturating_sub(self.pos) as usize;
+        let to_read = buf.len().min(remaining);
+        let cluster_bytes = self.params.cluster_bytes();
+        let mut done = 0usize;
+
+        while done < to_read {
+            let Some(cluster) = self.cluster else {
+                // Chain ended before the directory-entry size said it
+                // should — treat the short read as the end of the file
+                // rather than failing the whole import.
+                break;
+            };
+            let addr = self.params.cluster_addr(cluster) + self.in_cluster;
+            let chunk = (to_read - done).min((cluster_bytes - self.in_cluster) as usize);
+            flash::read(addr, &mut buf[done..done + chunk])
+                .await
+                .map_err(|_| FatError::FlashError)?;
+            done += chunk;
+            self.pos += chunk as u32;
+            self.in_cluster += chunk as u32;
+
+            if self.in_cluster >= cluster_bytes {
+                self.cluster = next_cluster(&self.params, cluster).await?;
+                self.in_cluster = 0;
+            }
+        }
+
+        Ok(done)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Format — create a fresh FAT12 filesystem
 // ---------------------------------------------------------------------------

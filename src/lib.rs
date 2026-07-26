@@ -25,11 +25,17 @@
 //! Compose to keep the flash budget under control on the 960 KiB app
 //! partition:
 //!
-//! - `embassy-base` — async runtime, EPD driver, buttons, buzzer, kv, watch
-//!   face, signed-channel NFC.  Always on for any firmware build.
+//! - `embassy-core` — async runtime, buttons, buzzer, kv, watch face,
+//!   signed-channel NFC, everything that doesn't depend on which EPD
+//!   controller is fitted.  Always on for any firmware build.
+//! - `embassy-base` / `embassy-1680` — `embassy-core` plus exactly one EPD
+//!   driver: SSD1675 (the shipping panel) or SSD1680.  Every variant below
+//!   has an `embassy-1680-*` twin built on the other driver.
 //! - `embassy-watch` — `embassy-base` only (smallest fw configuration).
 //! - `embassy-game` — `embassy-base` + virtual pet game + USB-MSC.
 //! - `embassy-mesh` — `embassy-base` + LoRa mesh + BLE companion.
+//! - `embassy-organizer` — `embassy-base` + mesh + USB-MSC, no game;
+//!   calendar-first screen order.
 //! - `embassy` — full build = base + game + mesh + USB-MSC.
 //! - `simulator` — host-side build with SDL2 rendering and `std`.
 //! - `signed-channel` — Ed25519 challenge/response NFC station auth.
