@@ -288,13 +288,23 @@ pub fn request_ics_reload() {
     ICS_RELOAD_SIGNAL.signal(());
 }
 
-/// Re-import `ALARMS.ICS` whenever the file might have changed.
+/// Re-import `ALARMS.ICS` whenever the slots might be out of date.
 ///
-/// Two triggers:
+/// Triggers:
 ///   * the host wrote to the USB mass-storage partition and then went
 ///     quiet — MSC gives no "copy finished" notification and hosts flush
 ///     lazily, so the settle window is the only reliable signal;
-///   * the user picked **Settings → Events → Reload from ICS**.
+///   * the user picked **Settings → Events → Reload from ICS**;
+///   * the local day rolled over, or the wall clock synced for the first
+///     time.  The slots hold only the events from today onward that fit,
+///     and firing one merely disables it — so without this, a calendar
+///     with more upcoming events than slots would go quiet after the
+///     first `N_ALARMS` of them, and a badge that booted before its clock
+///     synced would keep the unfiltered from-the-top import it started
+///     with.
+///
+/// A day still can't ring more than `N_ALARMS` events of its own; the
+/// calendar says so in red when it comes to that.
 ///
 /// Either way the import replaces the schedule rather than merging into
 /// it: slots are overwritten in place and any left over from a longer
@@ -313,6 +323,9 @@ pub async fn ics_reload_task() {
     const POLL: Duration = Duration::from_millis(500);
 
     let mut seen = host_write_count();
+    // Local day the slots were last filled for.  `None` until the wall
+    // clock syncs, which on a mesh badge can be well after boot.
+    let mut armed_for = today_day_number();
 
     loop {
         // Wait for a trigger: a day the calendar wants cached, a manual
@@ -336,6 +349,18 @@ pub async fn ics_reload_task() {
             }
             if host_write_count() != seen {
                 break false;
+            }
+            // The day rolled over (or the clock just synced for the
+            // first time).  Slots hold only the events from `horizon`
+            // onward that fit, and firing one merely disables it —
+            // nothing else ever refills them.  On a calendar with more
+            // upcoming events than slots, everything past the first
+            // N_ALARMS would go off unheard until the next reboot. A
+            // re-import moves the horizon forward, retires what has
+            // passed and pulls in the next batch.
+            let today = today_day_number();
+            if today.is_some() && today != armed_for {
+                break true;
             }
             ICS_RELOAD_SIGNAL.reset();
             // Wake on the next request, or poll for host writes — MSC
@@ -366,8 +391,11 @@ pub async fn ics_reload_task() {
             defmt::info!("watch: USB write settled, re-reading ALARMS.ICS");
         } else {
             seen = host_write_count();
-            defmt::info!("watch: manual ALARMS.ICS reload");
+            defmt::info!("watch: re-reading ALARMS.ICS");
         }
+
+        // Whatever the trigger, the slots now match the current day.
+        armed_for = today_day_number();
 
         import_alarms_from_fat12().await;
         // The cached day is from the old file — reload it so the screen
