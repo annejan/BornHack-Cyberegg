@@ -2911,6 +2911,92 @@ mod tests {
         }
     }
 
+    /// From any reachable screen, with any subset of screens enabled,
+    /// every other enabled screen must be reachable with Left/Right.
+    ///
+    /// Brute-forced over all 512 enable-masks rather than argued: the
+    /// carousel deliberately does not wrap, so "can't get back" is a
+    /// plausible bug and a miserable one on a badge with no other way to
+    /// change screens.
+    #[test]
+    fn no_enable_mask_can_strand_the_user() {
+        const N: usize = ScreenId::COUNT;
+
+        for mask in 0u16..(1 << N) {
+            let enabled: [bool; N] = core::array::from_fn(|i| mask & (1 << i) != 0);
+            let state: DisplayState<N> = DisplayState::new(
+                core::array::from_fn(|_| ScreenState::new(&NAME_ITEMS)),
+                enabled,
+            );
+
+            let live: std::vec::Vec<u8> = SCREEN_ORDER
+                .iter()
+                .copied()
+                .filter(|&s| enabled[s as usize])
+                .collect();
+            if live.is_empty() {
+                // Nothing enabled: `new` falls back to screen 0 and
+                // navigation has nowhere to go. Just don't panic.
+                assert_eq!(state.next_enabled_right(state.active_screen()), None);
+                assert_eq!(state.next_enabled_left(state.active_screen()), None);
+                continue;
+            }
+
+            // Boot lands on the first enabled screen in carousel order.
+            assert_eq!(
+                state.active_screen(),
+                live[0],
+                "mask {mask:#b} booted on the wrong screen"
+            );
+
+            // Walking right from the first reaches every enabled screen,
+            // in carousel order, exactly once.
+            let mut seen = std::vec![live[0]];
+            let mut cur = live[0];
+            while let Some(next) = state.next_enabled_right(cur) {
+                assert!(
+                    !seen.contains(&next),
+                    "mask {mask:#b} revisited screen {next}"
+                );
+                seen.push(next);
+                cur = next;
+            }
+            assert_eq!(seen, live, "mask {mask:#b} skipped an enabled screen");
+
+            // And walking left retraces it exactly.
+            for pair in live.windows(2) {
+                assert_eq!(
+                    state.next_enabled_left(pair[1]),
+                    Some(pair[0]),
+                    "mask {mask:#b} can't get back from {}",
+                    pair[1]
+                );
+            }
+            assert_eq!(
+                state.next_enabled_left(live[0]),
+                None,
+                "mask {mask:#b} walked off the left end"
+            );
+
+            // Disabling the active screen must hand focus to a live one,
+            // never leave it pointing at a disabled screen.
+            if live.len() > 1 {
+                let mut s = state;
+                let victim = s.active_screen();
+                s.set_screen_enabled(victim as usize, false);
+                assert_ne!(
+                    s.active_screen(),
+                    victim,
+                    "mask {mask:#b} stayed on a disabled screen"
+                );
+                assert!(
+                    live.contains(&s.active_screen()),
+                    "mask {mask:#b} moved to a screen that was never enabled"
+                );
+            }
+        }
+    }
+
     /// The Events submenu lists one row per event slot, spelled out as a
     /// literal list.  If `N_ALARMS` grows the list has to grow with it,
     /// or the tail of an imported programme becomes unreachable there.

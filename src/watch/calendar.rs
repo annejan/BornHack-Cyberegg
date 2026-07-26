@@ -1104,6 +1104,148 @@ mod tests {
         assert!(row.ends_with('Æ'), "title survived: {row:?}");
     }
 
+    /// Every button in every mode, in every order, from every starting
+    /// state — asserting the invariants the renderers rely on after each
+    /// press.
+    ///
+    /// The renderers index arrays and compute coordinates from this
+    /// state with no clipping assertions, and `panic = "abort"`, so a
+    /// state the dispatcher can reach but a renderer can't handle takes
+    /// the badge out. A person holding a direction down generates
+    /// exactly this: long unbroken runs of one button with no redraw in
+    /// between.
+    #[test]
+    fn button_walk_never_leaves_an_invalid_state() {
+        const BUTTONS: [ButtonId; 7] = [
+            ButtonId::Cancel,
+            ButtonId::Execute,
+            ButtonId::Up,
+            ButtonId::Down,
+            ButtonId::Left,
+            ButtonId::Right,
+            ButtonId::Fire,
+        ];
+
+        fn check(seq: &str) {
+            let mode = MODE.load(Ordering::Relaxed);
+            assert!(
+                matches!(
+                    mode,
+                    MODE_PASSIVE | MODE_ACTIVE | MODE_DAY_DETAIL | MODE_DAY_LIST
+                ),
+                "{seq}: mode {mode} is not one of the four"
+            );
+
+            // The cursor is fed to add_days, weekday_for and
+            // days_from_civil, and rendered as "Mon 15 Jul 2026".
+            let (y, m, d) = (
+                CURSOR_YEAR.load(Ordering::Relaxed),
+                CURSOR_MONTH.load(Ordering::Relaxed),
+                CURSOR_DAY.load(Ordering::Relaxed),
+            );
+            if y != 0 {
+                assert!((1..=12).contains(&m), "{seq}: month {m}");
+                assert!(d >= 1 && d <= 31, "{seq}: day {d}");
+                // Must be a real date — the month-grid header indexes
+                // MONTH_ABBR[m-1] and DAY_NAMES_LONG[weekday].
+                assert!(
+                    fasttime::Date::from_ymd(y as i32, m, d).is_ok(),
+                    "{seq}: {y}-{m}-{d} is not a real date"
+                );
+                assert!(
+                    (weekday_for(y, m, d) as usize) < DAY_NAMES_LONG.len(),
+                    "{seq}: weekday out of range"
+                );
+            }
+
+            // Scroll offsets are used as slice indices and loop bounds.
+            let top = DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed);
+            assert!(top <= 23 || top == 0xFF, "{seq}: top hour {top}");
+            assert!(
+                DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed) <= TITLE_SCROLL_MAX,
+                "{seq}: title scroll past its cap"
+            );
+            assert!(
+                DAY_LIST_SCROLL.load(Ordering::Relaxed) as usize <= crate::watch::DAY_CACHE_MAX,
+                "{seq}: day-list scroll past the cache"
+            );
+        }
+
+        // Exhaustive over every ordering up to length 4 (2801 sequences),
+        // from a known date near a month end so rollovers get hit.
+        fn walk(depth: usize, seq: &mut std::string::String) {
+            if depth == 0 {
+                return;
+            }
+            for (name, btn) in [
+                ("C", ButtonId::Cancel),
+                ("E", ButtonId::Execute),
+                ("U", ButtonId::Up),
+                ("D", ButtonId::Down),
+                ("L", ButtonId::Left),
+                ("R", ButtonId::Right),
+                ("F", ButtonId::Fire),
+            ] {
+                let saved = (
+                    MODE.load(Ordering::Relaxed),
+                    CURSOR_YEAR.load(Ordering::Relaxed),
+                    CURSOR_MONTH.load(Ordering::Relaxed),
+                    CURSOR_DAY.load(Ordering::Relaxed),
+                    DAY_VIEW_TOP_HOUR.load(Ordering::Relaxed),
+                    DAY_VIEW_TITLE_SCROLL.load(Ordering::Relaxed),
+                    DAY_LIST_SCROLL.load(Ordering::Relaxed),
+                );
+
+                seq.push_str(name);
+                dispatch(btn);
+                check(seq);
+                walk(depth - 1, seq);
+                seq.pop();
+
+                MODE.store(saved.0, Ordering::Relaxed);
+                CURSOR_YEAR.store(saved.1, Ordering::Relaxed);
+                CURSOR_MONTH.store(saved.2, Ordering::Relaxed);
+                CURSOR_DAY.store(saved.3, Ordering::Relaxed);
+                DAY_VIEW_TOP_HOUR.store(saved.4, Ordering::Relaxed);
+                DAY_VIEW_TITLE_SCROLL.store(saved.5, Ordering::Relaxed);
+                DAY_LIST_SCROLL.store(saved.6, Ordering::Relaxed);
+            }
+        }
+
+        // Dates worth starting from: a month end, a leap day, a year end,
+        // and the far end of February.
+        for start in [
+            (2026u16, 7u8, 31u8),
+            (2028, 2, 29),
+            (2026, 12, 31),
+            (2027, 2, 28),
+            (2026, 1, 1),
+        ] {
+            for mode in [MODE_PASSIVE, MODE_ACTIVE, MODE_DAY_DETAIL, MODE_DAY_LIST] {
+                MODE.store(mode, Ordering::Relaxed);
+                set_cursor(start);
+                DAY_VIEW_TOP_HOUR.store(0xFF, Ordering::Relaxed);
+                DAY_VIEW_TITLE_SCROLL.store(0, Ordering::Relaxed);
+                DAY_LIST_SCROLL.store(0, Ordering::Relaxed);
+                walk(4, &mut std::string::String::new());
+            }
+        }
+
+        // And long unbroken runs, which is what holding a key produces.
+        for btn in BUTTONS {
+            for start in [(2026u16, 12u8, 31u8), (2028, 2, 29)] {
+                for mode in [MODE_PASSIVE, MODE_ACTIVE, MODE_DAY_DETAIL, MODE_DAY_LIST] {
+                    MODE.store(mode, Ordering::Relaxed);
+                    set_cursor(start);
+                    for i in 0..500 {
+                        dispatch(btn);
+                        check(&std::format!("hold x{i}"));
+                    }
+                }
+            }
+        }
+    }
+
     /// The timeline scroll must never step from the unresolved sentinel.
     /// Doing so read `0xFF` as hour 0 — turning the next press into a
     /// jump to midnight — and overwrote the sentinel, so the view never
