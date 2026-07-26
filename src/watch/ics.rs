@@ -247,21 +247,40 @@ impl Pending {
             Freq::Daily => shift_date(y, m, d, interval),
             Freq::Weekly if self.rule.byday == 0 => shift_date(y, m, d, 7 * interval),
             Freq::Weekly => {
-                // Walk day by day, keeping only weekdays named by BYDAY
-                // that fall in a week the INTERVAL selects.  Week numbers
-                // are counted from the Monday of DTSTART's week, so
-                // INTERVAL=2 means "every other week", not "14 days after
-                // the previous hit".
+                // Week numbers are counted from the Monday of DTSTART's
+                // week, so INTERVAL=2 means "every other week", not
+                // "14 days after the previous hit".
+                //
+                // Finish the current week first, then jump straight to
+                // the next selected week.  Walking day by day instead
+                // made the search budget an implicit cap on INTERVAL:
+                // at one step per day, INTERVAL=58 (406 days) exhausted
+                // it and the rule silently collapsed to DTSTART alone —
+                // while the same rule *without* BYDAY took the fast path
+                // above and expanded fine.
                 let base_week = week_index(self.base.year, self.base.month, self.base.day);
-                let mut cursor = days_from_civil(y, m, d);
-                for _ in 0..MAX_SEARCH_STEPS {
-                    cursor += 1;
-                    let (cy, cm, cd) = civil_from_days(cursor)?;
-                    if (week_index(cy, cm, cd) - base_week).rem_euclid(interval as i64) != 0 {
-                        continue;
+                let cur = days_from_civil(y, m, d);
+                let cur_weekday = weekday(cur) as i64;
+
+                // Remaining BYDAY weekdays in the week we're already in,
+                // but only if this week is one the INTERVAL selects.
+                let this_week = week_index(y, m, d);
+                if (this_week - base_week).rem_euclid(interval as i64) == 0 {
+                    for wd in (cur_weekday + 1)..7 {
+                        if self.rule.byday & (1 << wd) != 0 {
+                            return civil_from_days(cur + (wd - cur_weekday));
+                        }
                     }
-                    if self.rule.byday & (1 << weekday(cursor)) != 0 {
-                        return Some((cy, cm, cd));
+                }
+
+                // Otherwise advance to the Monday of the next selected
+                // week and take its first BYDAY weekday.
+                let elapsed = (this_week - base_week).rem_euclid(interval as i64);
+                let weeks_ahead = interval as i64 - elapsed;
+                let next_monday = cur - cur_weekday + 7 * weeks_ahead;
+                for wd in 0..7 {
+                    if self.rule.byday & (1 << wd) != 0 {
+                        return civil_from_days(next_monday + wd);
                     }
                 }
                 None
@@ -1131,6 +1150,53 @@ END:VEVENT\n";
         assert_eq!(
             occurrences(doc),
             [(8, 11, 18), (8, 13, 18), (8, 18, 18), (8, 20, 18)]
+        );
+    }
+
+    /// The BYDAY search used to walk one day per step against a 400-step
+    /// budget, so `INTERVAL >= 58` (406 days) exhausted it and the rule
+    /// collapsed to DTSTART alone — while the same rule without BYDAY
+    /// took a different path and expanded fine.  A large INTERVAL must
+    /// not be a cliff.
+    #[test]
+    fn weekly_byday_survives_a_large_interval() {
+        for interval in [1u32, 2, 57, 58, 200, 1000] {
+            let doc = std::format!(
+                "BEGIN:VEVENT\nSUMMARY:X\nDTSTART:20260105T090000\n\
+                 RRULE:FREQ=WEEKLY;INTERVAL={interval};BYDAY=MO;COUNT=4\nEND:VEVENT\n"
+            );
+            let evs: std::vec::Vec<_> = Parser::new(doc.as_bytes()).collect();
+            assert_eq!(evs.len(), 4, "INTERVAL={interval} lost occurrences");
+
+            // 2026-01-05 is a Monday; every occurrence must be one too,
+            // spaced exactly `interval` weeks apart.
+            let base = days_from_civil(2026, 1, 5);
+            for (i, e) in evs.iter().enumerate() {
+                let day = days_from_civil(e.year, e.month, e.day);
+                assert_eq!(weekday(day), 0, "INTERVAL={interval}: not a Monday");
+                assert_eq!(
+                    day - base,
+                    (i as i64) * 7 * interval as i64,
+                    "INTERVAL={interval}: wrong spacing at {i}"
+                );
+            }
+        }
+    }
+
+    /// Multiple BYDAY weekdays with an interval: all of the named days in
+    /// each selected week, and no days from the weeks in between.
+    #[test]
+    fn weekly_byday_multiple_days_with_interval() {
+        // 2026-01-05 is a Monday.
+        let doc = b"BEGIN:VEVENT\nSUMMARY:X\nDTSTART:20260105T090000\n\
+RRULE:FREQ=WEEKLY;INTERVAL=3;BYDAY=MO,WE,FR;COUNT=6\nEND:VEVENT\n";
+        let got: std::vec::Vec<_> = Parser::new(doc)
+            .map(|e| (e.month, e.day))
+            .collect();
+        assert_eq!(
+            got,
+            [(1, 5), (1, 7), (1, 9), (1, 26), (1, 28), (1, 30)],
+            "three days in week 0, then a three-week jump"
         );
     }
 

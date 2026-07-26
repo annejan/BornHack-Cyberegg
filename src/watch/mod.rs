@@ -160,12 +160,6 @@ pub async fn import_alarms_from_fat12() {
 
     EVENTS_DROPPED.store(0, Ordering::Relaxed);
 
-    // Drop the previous import first. On a re-import the new file may be
-    // shorter than the old one, and stale events left in the tail slots
-    // would show up on the calendar as entries no ICS file mentions.
-    // Also clears anything added via Settings → Events → Quick test.
-    alarm::clear_imported_alarms();
-
     // Visible "we're chewing on the calendar file" feedback — boot
     // import can take a noticeable second on a full festival ICS, and
     // the EPD takes its sweet time to refresh after, so without this
@@ -189,13 +183,18 @@ pub async fn import_alarms_from_fat12() {
     let horizon = today_day_number().unwrap_or(i64::MIN);
 
     index_clear();
+    // Slots are overwritten in place and the leftovers disabled at the
+    // end, rather than cleared up front.  Clearing first left every slot
+    // disabled across the whole awaiting rescan — a second or more — and
+    // `check_and_fire_alarm` runs off the minute tick in that window, so
+    // an alarm due during a re-import simply never rang.
     let mut slot = 1usize; // slot 0 stays reserved for the manual alarm
     let mut dropped = 0u16;
     let mut total = 0u16;
 
     let found = scan_ics(|event| {
         total = total.saturating_add(1);
-        index_mark(event);
+        index_mark(event, tz_offset);
         // Multi-day events keep ringing until their last day is behind
         // us, so compare against the end date.
         let end = ics::days_from_civil(event.end_year, event.end_month, event.end_day);
@@ -215,6 +214,14 @@ pub async fn import_alarms_from_fat12() {
     if !found {
         led::set_led(&LED_BLUE, LedState::Off);
         return;
+    }
+    // Retire whatever the previous, longer import left behind: a shorter
+    // new file would otherwise strand its tail on the calendar as events
+    // no ICS file mentions.  Also drops any Settings → Events test alarm.
+    for stale in slot..alarm::N_ALARMS {
+        alarm::set_alarm_enabled_n(stale, false);
+        alarm::set_alarm_date_n(stale, 0, 0, 0);
+        alarm::set_alarm_silent_n(stale, false);
     }
     EVENTS_TOTAL.store(total, Ordering::Relaxed);
 
@@ -333,11 +340,18 @@ pub async fn ics_reload_task() {
                 let before = host_write_count();
                 Timer::after(SETTLE).await;
                 if host_write_count() == before {
+                    // Bank the count *now*, not after the import. A whole
+                    // file scan takes a while, and a host's unmount flush
+                    // landing during it would otherwise be recorded as
+                    // already-seen and never re-imported — leaving the
+                    // badge on the half-flushed calendar until a reboot.
+                    seen = before;
                     break;
                 }
             }
             defmt::info!("watch: USB write settled, re-reading ALARMS.ICS");
         } else {
+            seen = host_write_count();
             defmt::info!("watch: manual ALARMS.ICS reload");
         }
 
@@ -351,7 +365,6 @@ pub async fn ics_reload_task() {
         // Nudge the display loop so a visible calendar picks the new
         // events up straight away instead of at the next minute tick.
         crate::TOAST_SIGNAL.signal(());
-        seen = host_write_count();
     }
 }
 
@@ -492,11 +505,13 @@ fn index_clear() {
 /// The window anchors on the first event seen and only ever moves
 /// earlier, so an out-of-order file still indexes correctly as long as
 /// its events span less than [`INDEX_DAYS`].
-fn index_mark(event: &ics::Event) {
+fn index_mark(event: &ics::Event, tz_offset: i8) {
     use core::sync::atomic::Ordering;
 
-    let start = ics::days_from_civil(event.year, event.month, event.day);
-    let end = ics::days_from_civil(event.end_year, event.end_month, event.end_day).max(start);
+    // Local dates, not the raw parsed ones — see `local_span`.
+    let span = local_span(event, tz_offset);
+    let start = ics::days_from_civil(span.start.0, span.start.1, span.start.2);
+    let end = ics::days_from_civil(span.end.0, span.end.1, span.end.2).max(start);
 
     let Ok(start_i32) = i32::try_from(start) else {
         return;
@@ -714,25 +729,28 @@ async fn load_day(year: u16, month: u8, day: u8) {
     let mut overflow = 0u8;
 
     scan_ics(|event| {
-        let (sy, sm, sd, sh, smi, eh, emi) = local_times(event, tz_offset);
-        let start = ics::days_from_civil(sy, sm, sd);
+        let span = local_span(event, tz_offset);
+        let start = ics::days_from_civil(span.start.0, span.start.1, span.start.2);
         // A multi-day event belongs to every day it covers, but the
         // day view has no concept of "continues tomorrow", so it shows
-        // on each as a full day.
-        let end_day = ics::days_from_civil(
-            event.end_year,
-            event.end_month,
-            event.end_day,
-        )
-        .max(start);
+        // on each as a full day.  Same local dates the index keys off.
+        let end_day = ics::days_from_civil(span.end.0, span.end.1, span.end.2).max(start);
         if want < start || want > end_day {
             return core::ops::ControlFlow::Continue(());
         }
 
         // Clip to the requested day: a run-on event starts at 00:00 on
         // any day but its first, and ends at 23:59 on any but its last.
-        let (h, mi) = if want == start { (sh, smi) } else { (0, 0) };
-        let (eh, emi) = if want == end_day { (eh, emi) } else { (23, 59) };
+        let (h, mi) = if want == start {
+            span.start_time
+        } else {
+            (0, 0)
+        };
+        let (eh, emi) = if want == end_day {
+            span.end_time
+        } else {
+            (23, 59)
+        };
 
         if len >= DAY_CACHE_MAX {
             overflow = overflow.saturating_add(1);
@@ -771,14 +789,27 @@ async fn load_day(year: u16, month: u8, day: u8) {
     });
 }
 
-/// Local start/end of `event`, applying the UTC offset where the source
-/// asked for it.  Shared by the slot importer and the day cache so the
-/// two can't disagree about what time an event happens.
-#[cfg(feature = "embassy-core")]
-fn local_times(event: &ics::Event, tz_offset: i8) -> (u16, u8, u8, u8, u8, u8, u8) {
+/// One event's local wall-clock span: start date, end date, and the two
+/// times.  Applies the UTC offset where the source asked for it.
+///
+/// Every consumer goes through this — the alarm slots, the day index and
+/// the day cache — because they must agree on which *local* day an event
+/// falls on.  They used not to: the index keyed off the raw parsed date
+/// while the day cache shifted first, so with the default +2 offset an
+/// event at 22:00Z put its has-events dot on one day and its entry on the
+/// next.
+struct LocalSpan {
+    start: (u16, u8, u8),
+    end: (u16, u8, u8),
+    start_time: (u8, u8),
+    end_time: (u8, u8),
+}
+
+fn local_span(event: &ics::Event, tz_offset: i8) -> LocalSpan {
     // All-day events carry no meaningful clock time, so there is nothing
     // to shift — and shifting would push them onto the wrong day.
-    let (sy, sm, sd, sh, smi) = if event.start_is_utc && !event.all_day {
+    let shift = event.start_is_utc && !event.all_day;
+    let (sy, sm, sd, sh, smi) = if shift {
         shift_utc_to_local(
             event.year,
             event.month,
@@ -808,14 +839,34 @@ fn local_times(event: &ics::Event, tz_offset: i8) -> (u16, u8, u8, u8, u8, u8, u
             event.end_minute,
         )
     };
-    // Day-view assumes start and end are on the same day; multi-day
-    // events get clamped to 23:59 of the start day by the caller.
-    let (final_eh, final_emi) = if (ey, em, ed) == (sy, sm, sd) {
-        (eh, emi)
+    LocalSpan {
+        start: (sy, sm, sd),
+        end: (ey, em, ed),
+        start_time: (sh, smi),
+        end_time: (eh, emi),
+    }
+}
+
+/// Local start plus an end time clamped to the start day, for the alarm
+/// slots — those hold a single date, so a multi-day event runs to 23:59.
+#[cfg(feature = "embassy-core")]
+fn local_times(event: &ics::Event, tz_offset: i8) -> (u16, u8, u8, u8, u8, u8, u8) {
+    let span = local_span(event, tz_offset);
+    let (sy, sm, sd) = span.start;
+    let (final_eh, final_emi) = if span.end == span.start {
+        span.end_time
     } else {
         (23, 59)
     };
-    (sy, sm, sd, sh, smi, final_eh, final_emi)
+    (
+        sy,
+        sm,
+        sd,
+        span.start_time.0,
+        span.start_time.1,
+        final_eh,
+        final_emi,
+    )
 }
 
 /// First day the index has anything on — the calendar's fallback cursor
@@ -858,7 +909,6 @@ fn store_event(slot: usize, event: &ics::Event, tz_offset: i8) {
 /// arithmetic.  Returns the input unchanged if the date is outside
 /// fasttime's representable range (shouldn't happen for any realistic
 /// value).
-#[cfg(feature = "embassy-core")]
 fn shift_utc_to_local(
     year: u16,
     month: u8,
@@ -927,6 +977,32 @@ mod tests {
         }
     }
 
+    /// A UTC event as the Bornhack feed ships them — `Z`-suffixed, no
+    /// TZID.
+    fn utc_event(
+        start: (u16, u8, u8),
+        start_time: (u8, u8),
+        end: (u16, u8, u8),
+        end_time: (u8, u8),
+    ) -> ics::Event {
+        ics::Event {
+            year: start.0,
+            month: start.1,
+            day: start.2,
+            hour: start_time.0,
+            minute: start_time.1,
+            start_is_utc: true,
+            end_year: end.0,
+            end_month: end.1,
+            end_day: end.2,
+            end_hour: end_time.0,
+            end_minute: end_time.1,
+            end_is_utc: true,
+            all_day: false,
+            summary: [0; ics::SUMMARY_LEN],
+        }
+    }
+
     /// The index is global state; these tests mutate it, so they must not
     /// run concurrently.
     static INDEX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -940,7 +1016,7 @@ mod tests {
     #[test]
     fn index_marks_every_day_an_event_covers() {
         let _guard = exclusive();
-        index_mark(&event((2026, 7, 15), (2026, 7, 18)));
+        index_mark(&event((2026, 7, 15), (2026, 7, 18)), 0);
 
         assert!(!day_has_events(2026, 7, 14));
         for day in 15..=18 {
@@ -949,13 +1025,50 @@ mod tests {
         assert!(!day_has_events(2026, 7, 19));
     }
 
+    /// The month grid reads the day index; opening a day reads the day
+    /// cache.  Both must agree on which *local* day an event is on, or a
+    /// dot appears on one day and the event on another.
+    ///
+    /// The Bornhack feed is `Z`-suffixed UTC and the default offset is
+    /// +2, so any event from 22:00Z onward lands on the next local day.
+    #[test]
+    fn index_and_day_view_agree_on_the_local_day() {
+        let _guard = exclusive();
+        const TZ: i8 = 2;
+
+        // 22:00–23:00 UTC on the 17th is 00:00–01:00 local on the 18th.
+        let ev = utc_event((2026, 7, 17), (22, 0), (2026, 7, 17), (23, 0));
+        index_mark(&ev, TZ);
+
+        let span = local_span(&ev, TZ);
+        assert_eq!(span.start, (2026, 7, 18), "the day cache files it here");
+        assert!(
+            day_has_events(2026, 7, 18),
+            "so the dot must be on the 18th too"
+        );
+        assert!(
+            !day_has_events(2026, 7, 17),
+            "and not on the 17th, where the day view shows nothing"
+        );
+    }
+
+    /// The same shift must not happen to all-day events: they carry no
+    /// clock time, so shifting would move them off their own date.
+    #[test]
+    fn all_day_events_are_not_timezone_shifted() {
+        let _guard = exclusive();
+        index_mark(&event((2026, 7, 17), (2026, 7, 17)), 2);
+        assert!(day_has_events(2026, 7, 17));
+        assert!(!day_has_events(2026, 7, 18));
+    }
+
     #[test]
     fn index_handles_an_out_of_order_earlier_event() {
         let _guard = exclusive();
         // Anchored on July, then something in June turns up — exports are
         // chronological, but nothing guarantees it.
-        index_mark(&event((2026, 7, 15), (2026, 7, 15)));
-        index_mark(&event((2026, 6, 1), (2026, 6, 1)));
+        index_mark(&event((2026, 7, 15), (2026, 7, 15)), 0);
+        index_mark(&event((2026, 6, 1), (2026, 6, 1)), 0);
 
         assert!(day_has_events(2026, 6, 1), "earlier event lost the window");
         assert!(day_has_events(2026, 7, 15), "later event fell out");
@@ -965,11 +1078,11 @@ mod tests {
     fn a_stray_ancient_event_does_not_wipe_the_index() {
         let _guard = exclusive();
         // Anchor on a real programme...
-        index_mark(&event((2026, 7, 15), (2026, 7, 18)));
+        index_mark(&event((2026, 7, 15), (2026, 7, 18)), 0);
         // ...then a single event from years earlier turns up. Sliding the
         // window back that far would push the programme out of range and
         // leave the calendar with no dots at all.
-        index_mark(&event((2005, 1, 1), (2005, 1, 1)));
+        index_mark(&event((2005, 1, 1), (2005, 1, 1)), 0);
 
         assert!(day_has_events(2026, 7, 15), "the programme must survive");
         assert!(day_has_events(2026, 7, 18));
@@ -987,7 +1100,7 @@ mod tests {
         // 400 daily events is already well past `N_ALARMS`.
         let mut date = (2026u16, 1u8, 1u8);
         for _ in 0..400 {
-            index_mark(&event(date, date));
+            index_mark(&event(date, date), 0);
             let days = ics::days_from_civil(date.0, date.1, date.2) + 1;
             date = ics::civil_from_days(days).unwrap();
         }
@@ -1002,11 +1115,11 @@ mod tests {
         let _guard = exclusive();
         assert_eq!(first_indexed_day(), None, "empty index has no first day");
 
-        index_mark(&event((2026, 7, 15), (2026, 7, 15)));
-        index_mark(&event((2026, 7, 20), (2026, 7, 20)));
+        index_mark(&event((2026, 7, 15), (2026, 7, 15)), 0);
+        index_mark(&event((2026, 7, 20), (2026, 7, 20)), 0);
         assert_eq!(first_indexed_day(), Some((2026, 7, 15)));
 
-        index_mark(&event((2026, 7, 1), (2026, 7, 1)));
+        index_mark(&event((2026, 7, 1), (2026, 7, 1)), 0);
         assert_eq!(first_indexed_day(), Some((2026, 7, 1)));
     }
 
@@ -1047,7 +1160,7 @@ mod tests {
             let mut p = ics::Parser::new(&doc[pos..end]);
             for ev in &mut p {
                 total += 1;
-                index_mark(&ev);
+                index_mark(&ev, 0);
                 if armed < alarm::N_ALARMS - 1 {
                     armed += 1;
                 }
@@ -1097,7 +1210,7 @@ mod tests {
     #[test]
     fn days_beyond_the_index_window_are_not_claimed() {
         let _guard = exclusive();
-        index_mark(&event((2026, 1, 1), (2026, 1, 1)));
+        index_mark(&event((2026, 1, 1), (2026, 1, 1)), 0);
         // INDEX_DAYS is a little over two years from the anchor.
         let past_end = ics::civil_from_days(
             ics::days_from_civil(2026, 1, 1) + INDEX_DAYS as i64 + 1,
