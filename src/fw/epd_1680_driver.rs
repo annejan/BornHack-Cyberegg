@@ -44,6 +44,15 @@ pub const CANVAS_BYTES: usize = CANVAS_STRIDE * CANVAS_DIM as usize;
 /// Upscaled canvas width when `scale_fill` is on (152 × 5 / 4 = 190).
 const SCALED_DIM: usize = CANVAS_DIM as usize * 5 / 4;
 
+/// Force a full [`RefreshMode::Full`] bias-reset drive after this many delta
+/// refreshes.
+///
+/// The delta waveform leaves unchanged pixels completely undriven, so their
+/// bias drifts over a long run of partials and ghosting builds up. The
+/// `band_lut2` waveform behind `Full` drives *every* pixel — including ones the
+/// delta would code as ignore — which is what resets that bias.
+const FULL_REFRESH_EVERY: u32 = 40;
+
 /// Concrete  interface over SPI3 (mirrors the wiring built in `embassy.rs`).
 pub type Iface<'a> = Interface<
     ExclusiveDevice<Spim<'a>, Output<'a>, embassy_time::Delay>,
@@ -79,6 +88,10 @@ pub struct Driver<'a, const N: usize> {
     code_red: &'a mut [u8; N],
     /// When true, upscale the canvas (×1.25) to fill the panel; else centre 1:1.
     scale_fill: bool,
+    /// Delta drives since the last full bias-reset refresh. Reset by any
+    /// [`RefreshMode::Full`]; at [`FULL_REFRESH_EVERY`] the next `Fast` is
+    /// promoted to `Full`.
+    since_full: u32,
 }
 
 impl<'a, const N: usize> Driver<'a, N> {
@@ -126,6 +139,8 @@ impl<'a, const N: usize> Driver<'a, N> {
             code_bw,
             code_red,
             scale_fill,
+            // The boot paint is a Full, which resets this anyway.
+            since_full: 0,
         }
     }
 
@@ -308,6 +323,21 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
         // frame skips that group entirely (DELTA_LUT_NO_RED, selected by
         // `skip_red` below), so red changes stay on the fast path — slower than
         // a pure B/W delta, but no full-screen flash.
+        //
+        // De-ghost safety net: the delta waveform never drives unchanged pixels,
+        // so per-pixel bias accumulates across a run of partials. Every
+        // [`FULL_REFRESH_EVERY`] drives, promote to `Full` — the `band_lut2`
+        // bias-reset waveform applied to ALL pixels, which is what clears it.
+        let mode = match mode {
+            RefreshMode::Fast if self.since_full + 1 >= FULL_REFRESH_EVERY => {
+                defmt::debug!(
+                    "1680: {=u32} deltas since last bias reset — forcing full drive",
+                    self.since_full,
+                );
+                RefreshMode::Full
+            }
+            m => m,
+        };
         match mode {
             RefreshMode::Full => {
                 // Panel planes are already wire-convention (red = `(R=1,
@@ -315,6 +345,8 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
                 self.display
                     .full(&self.panel_bw[..n], &self.panel_red[..n])
                     .await?;
+                // Every pixel was driven by the bias-reset waveform.
+                self.since_full = 0;
             }
             RefreshMode::Fast => {
                 // Encode per-pixel delta codes: changed pixels get their target
@@ -338,30 +370,52 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
                         x1: self.width - 1,
                         y1: self.height - 1,
                     };
-                    // Skip the red drive phase entirely when no red changed.
-                    let skip_red = self.prev_red[..n] == self.panel_red[..n];
+                    // Zero the red-only group's TP whenever no pixel *being
+                    // driven* targets red, shortening the waveform by that
+                    // group's whole frame budget.
+                    //
+                    // Derived from the emitted codes, not from
+                    // `prev_red == panel_red`: a red pixel changing to white has
+                    // a changed red plane but drives no red, and the old test
+                    // would still have clocked the entire red group for nothing.
+                    // Red is the code `(BW=0, RED=1)` → L2, so look for any bit
+                    // set in red and clear in bw.
+                    let skip_red = !self.code_bw[..n]
+                        .iter()
+                        .zip(self.code_red[..n].iter())
+                        .any(|(b, r)| (r & !b) != 0);
                     self.display
                         .update_delta(&self.code_bw[..n], &self.code_red[..n], bbox, skip_red)
                         .await?;
+                    // Count only drives that actually happened — a no-op
+                    // refresh leaves no bias behind to reset.
+                    self.since_full = self.since_full.saturating_add(1);
                 }
             }
         }
         self.prev[..n].copy_from_slice(&self.panel_bw[..n]);
         self.prev_red[..n].copy_from_slice(&self.panel_red[..n]);
+        // Drop to ~1 µA until the next refresh. A finished drive otherwise
+        // leaves the controller at ~20 µA (datasheet Islp_VCI), which on an
+        // idle badge outweighs the SoC's own sleep draw. The next drive wakes
+        // it via hardware reset automatically — see `Display::deep_sleep`.
+        self.display.deep_sleep().await?;
         Ok(())
     }
 
-    /// Intentionally a no-op on the .
+    /// Put the controller into Deep Sleep Mode 1 (~1 µA).
     ///
-    /// Deep-sleep mode 1 only exits via a hardware reset, which clears the
-    /// controller RAM. The fast [`RefreshMode::Fast`] (`delta`) path relies on
-    /// that RAM persisting (the controller diffs against its latched previous
-    /// frame). Sleeping between refreshes would force a reset (RAM clear) on the
-    /// next refresh and blank the unchanged background. The full/partial
-    /// waveforms already leave the panel quiescent (`DisableAnalog |
-    /// DisableOsc`), so skipping the explicit deep sleep costs little — and
-    /// matches the validated bring-up, which never slept the panel.
+    /// [`refresh`](EpdDriver::refresh) already does this after every drive, so
+    /// this is only needed to sleep the panel outside the refresh path. It is
+    /// idempotent.
+    ///
+    /// This used to be a deliberate no-op, justified by "deep sleep clears the
+    /// controller RAM and the delta path needs it". Both halves were wrong:
+    /// mode 1 is documented as retaining RAM, and this driver rewrites *both*
+    /// RAM planes in full on every drive from its own host-side `prev` planes —
+    /// the controller never diffs anything. That reasoning described the
+    /// SSD1675B differential scheme, which this port does not use.
     async fn deep_sleep(&mut self) -> Result<(), <Self as EpdDriver>::Error> {
-        Ok(())
+        self.display.deep_sleep().await
     }
 }

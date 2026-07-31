@@ -339,9 +339,14 @@ async fn main(spawner: Spawner) {
         // x_offset = 8: the panel's leftmost visible pixel sits at controller
         // source 8, not 0 (SSD1680 has 176 sources; this module uses 152 of
         // them starting one byte in). Without it the image sits 8 px left.
-        let mut display = Display::new(iface, 152, 152, 8);
-        // Install the boot-probed OTP full waveform (shake repeats halved).
-        display.set_full_lut(otp_full_lut);
+        // No longer `mut`: nothing reconfigures the display here now that the
+        // OTP full-LUT override is not installed (see below).
+        let display = Display::new(iface, 152, 152, 8);
+        // NOT installed: `set_full_lut(otp_full_lut)` would override the
+        // crate's FULL_LUT, which is now the calibrated `band_lut2` bias-reset
+        // waveform used for screen transitions and the periodic de-ghost.
+        // Re-enable only to compare against the panel's own OTP waveform.
+        let _ = otp_full_lut;
 
         bornhack_aegg::fw::epd_1680_driver::Driver::new(
             display,
@@ -1049,6 +1054,11 @@ async fn display_loop_1680<D>(
 {
     use bornhack_aegg::epd_driver::RefreshMode;
 
+    // Screen shown by the previous iteration; 0xFF = none yet, so the first
+    // paint after boot isn't treated as a transition (the boot paint already
+    // ran a full drive).
+    let mut last_screen_1680: u8 = 0xFF;
+
     #[cfg(feature = "game")]
     let mut sprite_frame: u8 = 0;
     #[cfg(feature = "game")]
@@ -1084,9 +1094,29 @@ async fn display_loop_1680<D>(
         // The SSD1680 de-ghosts on the non-blink delta, so screen switches use
         // the fast windowed delta too — consume any pending full-refresh request
         // so the flag doesn't leak.
-        let _ = bornhack_aegg::FULL_REFRESH_PENDING
+        // Screen transitions (game → menu, menu → message, …) and anything that
+        // set FULL_REFRESH_PENDING drive the `band_lut2` bias-reset waveform
+        // over every pixel. That LUT is not delta-safe — its ignore row is
+        // driven rather than neutral — so it must never be paired with delta
+        // codes; `RefreshMode::Full` writes absolute colour planes.
+        //
+        // Everything else takes the `band_lut` delta. The driver additionally
+        // promotes every FULL_REFRESH_EVERY-th delta to Full by itself, so
+        // ghosting stays bounded even on a screen that never changes.
+        let pending_full = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed);
-        let mode = RefreshMode::Fast;
+        let screen_changed = last_screen_1680 != 0xFF && last_screen_1680 != active_screen;
+        last_screen_1680 = active_screen;
+        let mode = if pending_full || screen_changed {
+            defmt::debug!(
+                "1680: bias-reset refresh (screen_changed={=bool} pending={=bool})",
+                screen_changed,
+                pending_full,
+            );
+            RefreshMode::Full
+        } else {
+            RefreshMode::Fast
+        };
 
         // Drive to completion (not wrapped in a cancelling `select` — a dropped
         // mid-SPI refresh future could desync the controller). A button pressed
