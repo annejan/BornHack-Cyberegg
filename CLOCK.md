@@ -54,11 +54,13 @@ Once the BLE companion has set the clock, `BLE_TIME_LOCKED` is latched `true` an
 
 #### Timezone
 
-`TIMEZONE_OFFSET` (configured under **Settings → Timezone**) **is persisted** to flash and survives reboots. It is applied to the Unix timestamp to get local time:
+`TZ_OFFSET_QH` (configured under **Settings → Timezone**, or with the companion CLI `set tz.offset`) **is persisted** to flash and survives reboots. It counts quarter hours, so half- and quarter-hour zones such as UTC+5:30 work. It is applied to the Unix timestamp to get local time:
 
 ```
-local_time = unix_now() + (TIMEZONE_OFFSET as i32) * 3600
+local_time = unix_now() + (TZ_OFFSET_QH as i32) * 900
 ```
+
+The menu steps whole hours; `set tz.offset 5.5` (or `5.75`) sets the minutes, and the menu keeps them when stepping.
 
 The offset range is -12…+14 hours. Default is `+2` (CEST) after first boot.
 
@@ -193,7 +195,7 @@ At boot, the firmware:
 - Re-runs at every boot — edits while running don't take effect until reboot
 - Caps at 31 events (slots 1..31) or ~15–25 events depending on `SUMMARY` length (4 KiB effective read)
 - Multi-day events clamped to 23:59 of the start day
-- Times with `Z` suffix (UTC) are converted using `TIMEZONE_OFFSET`; floating times and `TZID=...:` values are taken at face value
+- Times with `Z` suffix (UTC) are converted using `TZ_OFFSET_QH`; floating times and `TZID=...:` values are taken at face value
 - The Bornhack programme export from <https://bornhack.dk/.../program/ics/> works directly — the parser handles `TZID=…:` parameters and CRLF line endings
 
 An example file (Bornhack 2026 opening + closing) ships at `assets/to-badge/ALARMS.ICS`.

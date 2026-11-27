@@ -3,7 +3,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::watch::{Sender, Watch};
 
 use crate::menu::ButtonId;
-use crate::{DISPLAY_STATE, update_health};
+use crate::update_health;
 
 macro_rules! update_button_health {
     ($pin:expr, $field:ident) => {
@@ -76,21 +76,21 @@ pub async fn run_buttons(
                     // Toggle at the 3 s mark; the overlay task shows the padlock
                     // (on lock) or clears it (on unlock) and wakes the render
                     // loop, so the change is visible immediately.
-                    crate::fw::lock::toggle();
-                    crate::fw::lock::poke();
+                    crate::lock::toggle();
+                    crate::lock::poke();
                     // Wait for release so this press is fully consumed and a
                     // release is guaranteed between a lock and the next unlock.
                     btn_can.wait_for_high().await;
-                } else if crate::fw::lock::is_active() {
+                } else if crate::lock::is_active() {
                     // Short press while locked → swallow, but re-show the hint.
-                    crate::fw::lock::poke();
+                    crate::lock::poke();
                 } else {
                     // Short press → normal Cancel.
                     handle_press(btn);
                 }
-            } else if crate::fw::lock::is_active() {
+            } else if crate::lock::is_active() {
                 // Locked: swallow the key but re-show the padlock + hint.
-                crate::fw::lock::poke();
+                crate::lock::poke();
             } else {
                 handle_press(btn);
             }
@@ -103,27 +103,7 @@ pub async fn run_buttons(
 /// Dispatch a button-down to the normal input sinks (flush combo → game →
 /// menu). Unchanged behaviour extracted so the lock logic can gate it.
 fn handle_press(btn: ButtonId) {
-    // Hidden display-flush combo watches every press globally (not just on the
-    // game screen, since ghosting isn't game-specific) and only intercepts the
-    // triggering press on a full match — same "background watcher" contract as
-    // the game's debug-cheat sequence.
-    if crate::display_flush::feed(btn) {
-        crate::FORCE_FLUSH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
-        return;
-    }
-
-    // Let the game handle the button first when its screen is active.
-    #[cfg(feature = "game")]
-    let consumed = {
-        let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
-        on_game && crate::game::input::dispatch(btn)
-    };
-    #[cfg(not(feature = "game"))]
-    let consumed = false;
-
-    if !consumed {
-        DISPLAY_STATE.lock(|f| f.borrow_mut().dispatch_button(btn));
-    }
+    crate::menu::dispatch_press(btn);
 }
 
 fn update_health_for(

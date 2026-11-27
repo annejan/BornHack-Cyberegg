@@ -4,19 +4,19 @@
 //! Toggling a cell also toggles its orthogonal neighbours.
 //! Goal: turn all lights off.
 //!
-//! Winning awards HAX (when money mode is on) plus this game's cooldown.
+//! Solving it awards HAX (when money mode is on) plus this game's cooldown,
+//! paid in `close()`.
 //!
 //! State is held in module-level atomics — no heap, no alloc.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
-use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::Text;
 
-use crate::{BLACK, TriColor, WHITE};
+use crate::menu::ButtonId;
+use crate::{BLACK, TriColor, ui};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -77,13 +77,13 @@ pub fn is_active() -> bool {
 pub fn open() {
     // Generate a solvable random puzzle by applying random toggles
     // from a solved (all-off) board.
-    let seed = seed();
+    let seed = crate::platform::seed_ticks_or_fixed();
     let mut board: u32 = 0;
     let mut rng = seed;
     // Apply 8–12 random toggles to guarantee solvability.
     let n_toggles = 8 + (rng % 5) as usize;
     for _ in 0..n_toggles {
-        rng = xorshift(rng);
+        rng = crate::platform::xorshift32(rng);
         let cell = (rng % 25) as usize;
         board = toggle(board, cell);
     }
@@ -100,7 +100,13 @@ pub fn open() {
 }
 
 pub fn close() {
-    ACTIVE.store(false, Ordering::Relaxed);
+    // A solved puzzle pays as a win, once, however the screen is left.
+    if ACTIVE.swap(false, Ordering::Relaxed) && SOLVED.load(Ordering::Relaxed) {
+        super::minigame::pay_result(
+            super::engine::MiniGame::LightsOut,
+            super::engine::GRADE_WIN,
+        );
+    }
     // Many fast LUT (Mode 1) refreshes happen during play; switch the
     // next refresh to the full OTP waveform (Mode 2) so any residual
     // ghosting from the cell grid is cleared in one cycle when we
@@ -108,30 +114,44 @@ pub fn close() {
     crate::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
+/// Route a button press while this mini-game is active.
+pub fn dispatch(btn: ButtonId) {
+    match btn {
+        ButtonId::Cancel => close(),
+        ButtonId::Up => cursor_up(),
+        ButtonId::Down => cursor_down(),
+        ButtonId::Left => cursor_left(),
+        ButtonId::Right => cursor_right(),
+        ButtonId::Fire | ButtonId::Execute => {
+            activate();
+        }
+    }
+}
+
 // ── Input handling ───────────────────────────────────────────────────────────
 
-pub fn cursor_up() {
+fn cursor_up() {
     let c = CURSOR.load(Ordering::Relaxed);
     if c >= GRID as u8 {
         CURSOR.store(c - GRID as u8, Ordering::Relaxed);
     }
 }
 
-pub fn cursor_down() {
+fn cursor_down() {
     let c = CURSOR.load(Ordering::Relaxed);
     if c + GRID as u8 <= 24 {
         CURSOR.store(c + GRID as u8, Ordering::Relaxed);
     }
 }
 
-pub fn cursor_left() {
+fn cursor_left() {
     let c = CURSOR.load(Ordering::Relaxed);
     if !c.is_multiple_of(GRID as u8) {
         CURSOR.store(c - 1, Ordering::Relaxed);
     }
 }
 
-pub fn cursor_right() {
+fn cursor_right() {
     let c = CURSOR.load(Ordering::Relaxed);
     if c % (GRID as u8) < (GRID as u8 - 1) {
         CURSOR.store(c + 1, Ordering::Relaxed);
@@ -139,11 +159,9 @@ pub fn cursor_right() {
 }
 
 /// Toggle the cell under the cursor (+ neighbours).
-pub fn activate() {
+fn activate() {
     if SOLVED.load(Ordering::Relaxed) {
-        // Puzzle already solved — Fire closes and awards reward.
-        super::lifecycle::award_inspiration(super::engine::MiniGame::LightsOut);
-        super::show_toast(super::Toast::MinigameWin);
+        // Puzzle already solved — Fire closes (`close` pays the win).
         close();
         return;
     }
@@ -196,26 +214,6 @@ fn toggle(mut board: u32, pos: usize) -> u32 {
     board
 }
 
-/// Simple xorshift32 PRNG.
-fn xorshift(mut x: u32) -> u32 {
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    x
-}
-
-/// Seed from embassy uptime or a fallback.
-fn seed() -> u32 {
-    #[cfg(feature = "embassy-core")]
-    {
-        embassy_time::Instant::now().as_ticks() as u32
-    }
-    #[cfg(not(feature = "embassy-core"))]
-    {
-        0xCAFE_BABE
-    }
-}
-
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
@@ -228,9 +226,7 @@ where
     let moves = MOVES.load(Ordering::Relaxed);
 
     // Background.
-    Rectangle::new(Point::zero(), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    crate::ui::clear_screen(display)?;
 
     // Draw 5×5 grid.
     for i in 0..25 {
@@ -259,34 +255,20 @@ where
         // survives the fast LUT refresh — the previous red stroke needed a
         // tri-colour update that's too slow for an interactive cursor.
         if i == cursor && !solved {
-            const THICK: i32 = 6;
-            let outer_x = x + 1;
-            let outer_y = y + 1;
-            let outer_w = CELL - 2;
-            let outer_h = CELL - 2;
-            let pixels = (0..outer_h).flat_map(move |dy| {
-                (0..outer_w).filter_map(move |dx| {
-                    let on_border =
-                        dx < THICK || dy < THICK || dx >= outer_w - THICK || dy >= outer_h - THICK;
-                    if !on_border {
-                        return None;
-                    }
-                    let px = outer_x + dx;
-                    let py = outer_y + dy;
-                    let color = if (px + py) & 1 == 0 { BLACK } else { WHITE };
-                    Some(Pixel(Point::new(px, py), color))
-                })
-            });
-            display.draw_iter(pixels)?;
+            ui::draw_dither_ring(
+                display,
+                Rectangle::new(
+                    Point::new(x + 1, y + 1),
+                    Size::new((CELL - 2) as u32, (CELL - 2) as u32),
+                ),
+                6,
+            )?;
         }
     }
 
     // Status text below the grid.
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Center)
-        .build();
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let centered = crate::ui::CENTERED_TOP;
+    let font = crate::ui::TEXT_BOLD_BLACK;
 
     let unsolvable = UNSOLVABLE.load(Ordering::Relaxed);
     if solved {
@@ -310,4 +292,45 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_REWARD};
+    use crate::game::{current_toast, minigame_pay_read, minigame_pay_setup, Toast};
+
+    const GAME: MiniGame = MiniGame::LightsOut;
+
+    fn open_and_cancel(solved: bool) {
+        open();
+        SOLVED.store(solved, Ordering::Relaxed);
+        dispatch(ButtonId::Cancel);
+    }
+
+    #[test]
+    fn a_solved_puzzle_closed_with_cancel_pays_the_win() {
+        let _g = minigame_pay_setup();
+        open_and_cancel(true);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_REWARD, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+        assert!(!is_active());
+    }
+
+    #[test]
+    fn closing_twice_pays_once() {
+        let _g = minigame_pay_setup();
+        open_and_cancel(true);
+        close();
+        close();
+        assert_eq!(minigame_pay_read(GAME).0, MINIGAME_HAX_REWARD);
+    }
+
+    #[test]
+    fn an_unsolved_puzzle_pays_nothing() {
+        let _g = minigame_pay_setup();
+        open_and_cancel(false);
+        assert_eq!(minigame_pay_read(GAME), (0, false));
+        assert_eq!(current_toast(), None);
+    }
 }

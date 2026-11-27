@@ -1,13 +1,9 @@
 pub mod battery;
+#[macro_use]
 pub mod board;
-/// BORNPETS.CFG parser — overrides game balance thresholds from the USB-MSC
-/// partition. Game-only: it reads `crate::game` threshold types.
-#[cfg(feature = "game")]
-pub mod bornpets_cfg;
 pub mod button;
 pub mod buzzer;
 pub mod device_id;
-pub mod emoji;
 /// SSD1675 panel wiring + tri-colour OTP/partial refresh machinery.
 #[cfg(feature = "ssd1675-driver")]
 pub mod epd;
@@ -18,6 +14,9 @@ pub mod epd_1675_driver;
 /// 200×200 panel, custom delta LUT for non-flashing partial updates.
 #[cfg(feature = "ssd1680-driver")]
 pub mod epd_1680_driver;
+/// `EPD.CFG` waveform tuning loader (SSD1680 and SSD1675 drivers).
+#[cfg(any(feature = "ssd1680-driver", feature = "ssd1675-driver"))]
+pub mod epd_cfg;
 pub mod factory_test;
 pub mod fat12;
 pub mod flash;
@@ -27,17 +26,15 @@ pub mod kv;
 pub mod qwiic;
 pub mod i2c_keyboard;
 pub mod led;
-/// Screen lock — Cancel-hold toggles a global input lock + red padlock overlay.
-pub mod lock;
 pub mod nfct;
 /// Buck/boost converter power-mode arbiter (`PS_SYNC` pin).
 pub mod power;
-/// PETS.CFG parser — registers custom pets from the USB-MSC partition.
-/// Game-only: it reads `crate::game` pet-registry types.
-#[cfg(feature = "game")]
-pub mod pets_cfg;
+/// Device-wide `"settings"` KV helpers + timezone and EPD tuning persistence.
+pub mod settings;
 pub mod storage;
 pub mod temperature;
+/// nRF52840 hardware TRNG register reader (`seed32`).
+pub mod trng;
 
 /// MeshCore networking stack (LoRa radio, BLE companion, contacts, channels, KV
 /// store).

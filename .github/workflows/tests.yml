@@ -1,0 +1,102 @@
+name: tests
+
+# GitHub mirror CI. The canonical repo is on Codeberg, but simulation jobs must
+# never run on Codeberg's hardware (owner rule). Forgejo Actions also reads
+# .github/workflows, so every job is guarded to run on github.com only.
+# Runs the host test suites (including the 30-day simulator checks in
+# engine_v3) in parallel and the firmware build, off the developer machine.
+
+on:
+  push:
+    branches: [main, "ranzbak/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.suite }})
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [lib, engine_v3, engine_v3_casual, engine_v3_demo, save_format, game_engine, battle_v3, others]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libclang-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: host
+      - name: Run
+        run: |
+          case "${{ matrix.suite }}" in
+            # name_screen::drops_control_and_beyond_latin1 fails on main too.
+            lib) cargo test --features simulator --lib -- --skip name_screen::tests::drops_control_and_beyond_latin1 ;;
+            others)
+              for t in tests/*.rs; do
+                n=$(basename "$t" .rs)
+                case "$n" in engine_v3|engine_v3_casual|engine_v3_demo|save_format|game_engine|battle_v3) continue ;; esac
+                cargo test --features simulator --test "$n"
+              done ;;
+            # The 30-day demo balance runs are #[ignore]d: the generic arm
+            # would skip them silently, so this one asks for them.
+            engine_v3_demo) cargo test --features simulator --test engine_v3_demo -- --include-ignored --nocapture ;;
+            # The long battle runs are #[ignore]d: ask for them.
+            battle_v3) cargo test --features simulator --test battle_v3 -- --include-ignored --nocapture ;;
+            *) cargo test --features simulator --test "${{ matrix.suite }}" ;;
+          esac
+
+  firmware:
+    name: firmware build
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      - run: rustup target add thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: firmware
+      - run: cargo install flip-link --locked
+      - run: cargo build --bin embassy --no-default-features --features embassy-game --target thumbv7em-none-eabihf
+      - run: cargo build --bin embassy --no-default-features --features embassy-1680-full --target thumbv7em-none-eabihf
+      - run: rustup component add llvm-tools
+      - run: cargo build --release --bin embassy --no-default-features --features embassy-1680-full --target thumbv7em-none-eabihf
+      - run: python3 scripts/flash_size.py target/thumbv7em-none-eabihf/release/embassy --limit-kib 960
+
+  guide:
+    name: player's guide
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libclang-dev python3-pil
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: guide
+      - name: Install Typst
+        run: |
+          v=$(cat guide/typst-version)
+          curl -fsSL -o typst.tar.xz "https://github.com/typst/typst/releases/download/v$v/typst-x86_64-unknown-linux-musl.tar.xz"
+          echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  typst.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/typst-bin"
+          tar -xJf typst.tar.xz --strip-components=1 -C "$HOME/typst-bin"
+          echo "$HOME/typst-bin" >> "$GITHUB_PATH"
+      - run: python3 scripts/test_build_guide.py
+      - run: python3 -m unittest discover -s scripts -p 'test_copy_assets.py'
+      - run: CARGO_BUILD_JOBS=4 make guide

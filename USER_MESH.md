@@ -14,6 +14,27 @@ Three things must match across all badges in the local mesh:
 
 If you can't see anyone else's adverts after a minute, double-check the preset.
 
+### Regions and the region filter
+
+Flood messages can be scoped to a MeshCore **region** so that only that
+region's repeaters relay them. The badge has a **global** region (it ships as
+`dk-bornhack`; the companion app's default flood scope replaces it), and each
+channel can **override** it with its own region (see *Channels* below). A
+channel's *effective* region is its override, or the global region when it has
+none.
+
+- **Sending:** messages you write on the badge go out with the channel's
+  effective region. Messages sent from the companion app use the scope the app
+  sets.
+- **Region filter off** (default): you see every message on your channels,
+  whatever region it was sent with.
+- **Region filter on** (**Config → MeshCore → Region filter**): a channel only
+  shows messages flooded with *that channel's* effective region. Messages with
+  another region **or no region at all** (unscoped / direct) are hidden.
+  Private messages, ACKs and other non-channel traffic are never filtered.
+
+The setting and the per-channel regions are remembered across reboots.
+
 ## Adverts (Advert screen)
 
 Whenever a badge / phone / repeater is alive on the mesh it periodically broadcasts an **advert** — its public name, identity hash and capabilities. Your badge logs these as they arrive.
@@ -56,7 +77,17 @@ Replies use the on-screen keyboard with ~70 emoji rendered as 13×13 bitmaps. Us
 
 The **Channel** screen is for group / room messages — same protocol, broadcast scope. Each row is one channel (e.g. the default `Public` channel that ships with the preset).
 
-Controls are the same as PMs. Anyone on the same preset hears everyone's messages in a public channel.
+Controls are the same as PMs, except that **EXE / Fire** in an open channel brings up a popup:
+
+| Item         | Action                                                      |
+| ------------ | ----------------------------------------------------------- |
+| Reply        | write a message on this channel                             |
+| Set region   | type a region override (e.g. `nl-ut`); submit empty to clear |
+| < Cancel     | close the popup                                             |
+
+The popup title shows the channel's effective region: `Rgn <name>` for an override, `Rgn default` when it follows the global region. A leading `#` is ignored; names are up to 20 characters and case-sensitive. Deleting or replacing a channel (e.g. from the app) clears its override.
+
+Anyone on the same preset hears everyone's messages in a public channel.
 
 ## My QR
 

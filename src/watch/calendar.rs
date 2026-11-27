@@ -35,45 +35,14 @@ use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::iso_8859_1::{FONT_6X13_BOLD, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyle, TextStyleBuilder};
-
-// ───────────────────────────────────────────────────────────────────────────
-// Fake-bold helper
-// ───────────────────────────────────────────────────────────────────────────
-//
-// embedded-graphics' iso_8859_1 catalogue stops at FONT_6X13_BOLD — there is
-// no FONT_6X10_BOLD.  Going up to 6×13 would force the calendar grid layout
-// to grow by 3 px per row; bumping COL_W is similarly disruptive elsewhere.
-// Instead, draw every 6×10 glyph twice — once at the requested point, once
-// at point.x + 1 — which doubles the stroke width without changing layout.
-// On the e-ink panel that's the difference between a 1-pixel-thin stroke and
-// a 2-pixel one, which is the readability win we're after.
-fn draw_bold<D>(
-    display: &mut D,
-    text: &str,
-    position: Point,
-    character_style: MonoTextStyle<'_, TriColor>,
-    text_style: TextStyle,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    Text::with_text_style(text, position, character_style, text_style).draw(display)?;
-    Text::with_text_style(
-        text,
-        Point::new(position.x + 1, position.y),
-        character_style,
-        text_style,
-    )
-    .draw(display)?;
-    Ok(())
-}
+use embedded_graphics::text::Text;
 
 use super::alarm::{
     N_ALARMS, alarm_day_n, alarm_enabled_n, alarm_end_hour_n, alarm_end_minute_n, alarm_hour_n,
     alarm_is_one_shot_n, alarm_minute_n, alarm_month_n, alarm_summary_n, alarm_year_n,
 };
 use crate::menu::ButtonId;
+use crate::ui;
 use crate::{BLACK, RED, TriColor, WHITE, draw_frame};
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -214,7 +183,7 @@ fn weekday_for(year: u16, month: u8, day: u8) -> u8 {
 
 /// Add `delta_days` to `(year, month, day)` and return the resulting
 /// date.  Returns the input unchanged on out-of-range arithmetic.
-fn add_days(year: u16, month: u8, day: u8, delta_days: i64) -> (u16, u8, u8) {
+pub(super) fn add_days(year: u16, month: u8, day: u8, delta_days: i64) -> (u16, u8, u8) {
     let Ok(d) = fasttime::Date::from_ymd(year as i32, month, day) else {
         return (year, month, day);
     };
@@ -388,21 +357,11 @@ fn dispatch_day_list(btn: ButtonId) -> bool {
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "embassy-core")]
-fn battery_pct() -> u8 {
-    crate::fw::battery::read_pct()
-}
-
-#[cfg(not(feature = "embassy-core"))]
-fn battery_pct() -> u8 {
-    100
-}
-
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let bat = battery_pct();
+    let bat = crate::platform::battery_pct();
     draw_frame(display, Some(("Calendar", &bat)), None)?;
 
     let mut events_buf = [EventRow {
@@ -440,14 +399,11 @@ where
         &mut buf,
         format_args!("{} {}", MONTH_ABBR[mon_idx], cursor.0),
     );
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let centered = crate::ui::CENTERED;
     Text::with_text_style(
         &buf,
         Point::new(76, MONTH_LABEL_Y),
-        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+        crate::ui::TEXT_BOLD_BLACK,
         centered,
     )
     .draw(display)?;
@@ -456,7 +412,7 @@ where
     let weekday_style = MonoTextStyle::new(&FONT_6X10, BLACK);
     for (col, name) in DAY_NAMES_SHORT.iter().enumerate() {
         let cx = GRID_LEFT_X + col as i32 * COL_W + COL_W / 2;
-        draw_bold(
+        ui::draw_text_fake_bold(
             display,
             name,
             Point::new(cx, WEEKDAY_STRIP_Y),
@@ -502,7 +458,7 @@ where
                 let fg = if is_today { WHITE } else { BLACK };
                 let mut nbuf: heapless::String<3> = heapless::String::new();
                 let _ = core::fmt::write(&mut nbuf, format_args!("{}", cell_date.2));
-                draw_bold(
+                ui::draw_text_fake_bold(
                     display,
                     &nbuf,
                     Point::new(cell_x + COL_W / 2, cell_y + ROW_H / 2 + 1),
@@ -539,12 +495,9 @@ where
         .filter(|ev| ev.year == cursor.0 && ev.month == cursor.1 && ev.day == cursor.2)
         .collect();
 
-    let left = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Left)
-        .build();
+    let left = crate::ui::MIDDLE_LEFT;
     if cursor_evs.is_empty() {
-        draw_bold(
+        ui::draw_text_fake_bold(
             display,
             "(no events)",
             Point::new(76, FOOTER_Y),
@@ -559,7 +512,7 @@ where
             &mut row,
             format_args!("{:02}:{:02} {}", ev0.hour, ev0.minute, summary.as_str()),
         );
-        draw_bold(
+        ui::draw_text_fake_bold(
             display,
             &row,
             Point::new(4, FOOTER_Y),
@@ -570,7 +523,7 @@ where
         if cursor_evs.len() > 1 {
             let mut more: heapless::String<24> = heapless::String::new();
             let _ = core::fmt::write(&mut more, format_args!("+ {} more", cursor_evs.len() - 1));
-            draw_bold(
+            ui::draw_text_fake_bold(
                 display,
                 &more,
                 Point::new(4, FOOTER_Y_2),
@@ -635,10 +588,7 @@ where
             .into_styled(PrimitiveStyle::with_fill(RED))
             .draw(display)?;
     }
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let centered = crate::ui::CENTERED;
     let header_fg = if is_today { WHITE } else { RED };
     Text::with_text_style(
         &buf,
@@ -713,10 +663,7 @@ where
     // a FONT_6X13_BOLD line with comfortable headroom; the bold weight
     // prints noticeably crisper on the e-paper's grey-ish whites).
     let label_style = MonoTextStyle::new(&FONT_6X13_BOLD, BLACK);
-    let right_align = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Right)
-        .build();
+    let right_align = crate::ui::MIDDLE_RIGHT;
     let mut h = tl_start_hour;
     while h <= tl_start_hour + HOURS_VISIBLE {
         let label_y = TL_TOP_Y + (h - tl_start_hour) * PX_PER_HOUR + 6;
@@ -735,10 +682,7 @@ where
         h += 1;
     }
 
-    let inside_left = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Left)
-        .build();
+    let inside_left = crate::ui::MIDDLE_LEFT;
 
     // Wall-clock-now in day-minutes, but only when the cursor day is
     // actually today — otherwise there's nothing to highlight as
@@ -845,10 +789,10 @@ where
         .iter()
         .any(|ev| (ev.hour as i32 * 60 + ev.minute as i32) >= (tl_start_hour + HOURS_VISIBLE) * 60);
     if above {
-        draw_bold(display, "^", Point::new(146, TL_TOP_Y + 4), arrow_style, centered)?;
+        ui::draw_text_fake_bold(display, "^", Point::new(146, TL_TOP_Y + 4), arrow_style, centered)?;
     }
     if below {
-        draw_bold(display, "v", Point::new(146, TL_BOT_Y - 4), arrow_style, centered)?;
+        ui::draw_text_fake_bold(display, "v", Point::new(146, TL_BOT_Y - 4), arrow_style, centered)?;
     }
 
     if day_evs.is_empty() {
@@ -856,7 +800,7 @@ where
         Text::with_text_style(
             "(no events)",
             Point::new(85, 90),
-            MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+            crate::ui::TEXT_BOLD_BLACK,
             centered,
         )
         .draw(display)?;
@@ -893,10 +837,7 @@ where
             .into_styled(PrimitiveStyle::with_fill(RED))
             .draw(display)?;
     }
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let centered = crate::ui::CENTERED;
     let header_fg = if is_today { WHITE } else { RED };
     Text::with_text_style(
         &buf,
@@ -917,7 +858,7 @@ where
         Text::with_text_style(
             "(no events)",
             Point::new(76, 90),
-            MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+            crate::ui::TEXT_BOLD_BLACK,
             centered,
         )
         .draw(display)?;
@@ -938,10 +879,7 @@ where
     DAY_LIST_SCROLL.store(scroll as u8, Ordering::Relaxed);
 
     let row_style = MonoTextStyle::new(&FONT_6X13_BOLD, BLACK);
-    let left_align = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Left)
-        .build();
+    let left_align = crate::ui::MIDDLE_LEFT;
 
     for r in 0..ROWS_VISIBLE {
         let idx = scroll + r;
@@ -971,10 +909,10 @@ where
     // v if rows hidden below.
     let arrow_style = MonoTextStyle::new(&FONT_6X10, BLACK);
     if scroll > 0 {
-        draw_bold(display, "^", Point::new(146, ROW_TOP_Y + 4), arrow_style, centered)?;
+        ui::draw_text_fake_bold(display, "^", Point::new(146, ROW_TOP_Y + 4), arrow_style, centered)?;
     }
     if (scroll + ROWS_VISIBLE) < day_evs.len() as i32 {
-        draw_bold(display, "v", Point::new(146, ROW_BOT_Y - 4), arrow_style, centered)?;
+        ui::draw_text_fake_bold(display, "v", Point::new(146, ROW_BOT_Y - 4), arrow_style, centered)?;
     }
 
     Ok(())

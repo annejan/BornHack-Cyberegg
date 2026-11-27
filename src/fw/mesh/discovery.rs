@@ -71,41 +71,36 @@ pub fn note(
 ) -> bool {
     let observed_at_secs = embassy_time::Instant::now().as_secs();
     CACHE.lock(|cell| {
-        let mut list = cell.borrow_mut();
-        // Same key already present: just refresh observation time + any
-        // metadata that may have changed (name, GPS).
-        if let Some(e) = list.iter_mut().find(|e| &e.pub_key == pub_key) {
-            e.observed_at_secs = observed_at_secs;
-            e.node_type = node_type;
-            e.gps_lat = gps_lat;
-            e.gps_lon = gps_lon;
-            e.advert_ts = advert_ts;
-            e.name.clear();
-            let _ = e.name.push_str(name);
-            return false;
-        }
-        // New key — append, evicting the oldest by observed time.
-        if list.is_full() {
-            let oldest_idx = list
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, e)| e.observed_at_secs)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            let _ = list.swap_remove(oldest_idx);
-        }
-        let mut name_buf: heapless::String<32> = heapless::String::new();
-        let _ = name_buf.push_str(name);
-        let _ = list.push(DiscoveryEntry {
-            pub_key: *pub_key,
-            name: name_buf,
-            node_type,
-            gps_lat,
-            gps_lon,
-            advert_ts,
-            observed_at_secs,
-        });
-        true
+        // Same key already present: refresh observation time + any metadata
+        // that may have changed (name, GPS). New key: append, evicting the
+        // oldest by observed time.
+        crate::evict_table::upsert_evict_oldest(
+            &mut cell.borrow_mut(),
+            |e| &e.pub_key == pub_key,
+            |e| e.observed_at_secs,
+            |e| {
+                e.observed_at_secs = observed_at_secs;
+                e.node_type = node_type;
+                e.gps_lat = gps_lat;
+                e.gps_lon = gps_lon;
+                e.advert_ts = advert_ts;
+                e.name.clear();
+                let _ = e.name.push_str(name);
+            },
+            || {
+                let mut name_buf: heapless::String<32> = heapless::String::new();
+                let _ = name_buf.push_str(name);
+                DiscoveryEntry {
+                    pub_key: *pub_key,
+                    name: name_buf,
+                    node_type,
+                    gps_lat,
+                    gps_lon,
+                    advert_ts,
+                    observed_at_secs,
+                }
+            },
+        )
     })
 }
 

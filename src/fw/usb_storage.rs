@@ -63,11 +63,11 @@ impl BlockDevice for FatBlockDevice {
         }
         // Blink the blue LED on every block write so the operator can see at
         // a glance which badge is still receiving data during mass-flashing.
-        // `BlinkOnce` auto-resets after ~50 ms, so a stream of writes shows
-        // up as flicker without needing a "turn off when idle" timer.
-        crate::fw::led::set_led(
-            &crate::fw::led::LED_BLUE,
-            crate::fw::led::LedState::BlinkOnce,
+        // Each write lights it for 50 ms, so a stream of writes keeps it lit
+        // and it goes dark by itself once writes stop.
+        crate::fw::led::set_color(
+            crate::fw::led::Rgb::BLUE,
+            embassy_time::Duration::from_millis(50),
         );
 
         let addr = flash::FAT_OFFSET + lba * 512;

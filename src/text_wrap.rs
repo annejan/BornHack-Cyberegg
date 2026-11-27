@@ -51,8 +51,8 @@ pub fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 32> 
         let cp = c as u32;
         if cp == 0xFE0E || cp == 0xFE0F {
             0
-        } else if crate::fw::emoji::atlas_index(cp).is_some() {
-            crate::fw::emoji::EMOJI_COLUMNS
+        } else if crate::emoji::atlas_index(cp).is_some() {
+            crate::emoji::EMOJI_COLUMNS
         } else {
             1
         }

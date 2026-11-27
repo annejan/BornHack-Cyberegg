@@ -34,7 +34,7 @@ use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 
 use super::clock;
 use super::ics::SUMMARY_LEN;
@@ -386,16 +386,7 @@ pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
     set_alarm_date_n(slot, year, month, day);
     set_alarm_time_n(slot, target_hour, target_min);
     let mut buf = [0u8; SUMMARY_LEN];
-    let mut i = 0usize;
-    for &b in summary {
-        if i >= SUMMARY_LEN {
-            break;
-        }
-        if (0x20..=0x7e).contains(&b) {
-            buf[i] = b;
-            i += 1;
-        }
-    }
+    super::ics::copy_ascii(&mut buf, summary);
     set_alarm_summary_n(slot, &buf);
     set_alarm_enabled_n(slot, true);
     Some((target_hour, target_min))
@@ -750,7 +741,7 @@ fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
 }
 
 /// Render a 13×13 red bell, centred at `(cx, cy)`, blitting the shared
-/// `fw::emoji::ATLAS_BELL` glyph in red instead of the default black.
+/// `emoji::ATLAS_BELL` glyph in red instead of the default black.
 ///
 /// Previously this function drew the bell from primitive shapes (circle
 /// dome + rectangles).  Now it shares the bitmap with in-message emoji
@@ -760,25 +751,25 @@ fn draw_bell<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    crate::fw::emoji::draw_emoji(
+    crate::emoji::draw_emoji(
         display,
-        crate::fw::emoji::ATLAS_BELL,
+        crate::emoji::ATLAS_BELL,
         Point::new(cx - 6, cy - 6),
         RED,
     )
 }
 
 /// Render a 13×13 red envelope, centred at `(cx, cy)`, blitting the
-/// shared `fw::emoji::ATLAS_ENVELOPE` glyph in red.  Same atlas bitmap
+/// shared `emoji::ATLAS_ENVELOPE` glyph in red.  Same atlas bitmap
 /// the in-message ✉ / 📧 / 📨 / 📩 codepoints use.
 #[cfg(feature = "mesh")]
 fn draw_envelope<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    crate::fw::emoji::draw_emoji(
+    crate::emoji::draw_emoji(
         display,
-        crate::fw::emoji::ATLAS_ENVELOPE,
+        crate::emoji::ATLAS_ENVELOPE,
         Point::new(cx - 6, cy - 6),
         RED,
     )
@@ -803,10 +794,7 @@ where
 {
     let bell_cx = 56i32;
     let bell_cy = 8i32;
-    let left = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Left)
-        .build();
+    let left = crate::ui::MIDDLE_LEFT;
 
     // Bell + optional HH:MM keep their existing positions.  Title text
     // sits left-aligned at x=4..~40, so anything we draw past the bell
@@ -877,10 +865,7 @@ where
     clock::draw_digit(display, clock::MM_TENS_X, clock::DIGIT_Y, m / 10)?;
     clock::draw_digit(display, clock::MM_ONES_X, clock::DIGIT_Y, m % 10)?;
 
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let centered = crate::ui::CENTERED;
 
     // Three info rows below the digits.  FONT_6X10 keeps them tight enough
     // that there's room for an underline / inverted bar beneath each without

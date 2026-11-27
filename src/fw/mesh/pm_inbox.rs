@@ -25,6 +25,26 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
+
+/// Signalled when a PM arrives while no phone is connected.
+pub static PM_LED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Blink the LED blue (50 ms each second) until the PM screen is viewed,
+/// which clears [`crate::PM_UNREAD`].
+#[embassy_executor::task]
+pub async fn pm_led_task() -> ! {
+    loop {
+        PM_LED.wait().await;
+        while crate::PM_UNREAD.load(Ordering::Relaxed) {
+            crate::fw::led::set_color(
+                crate::fw::led::Rgb::BLUE,
+                embassy_time::Duration::from_millis(50),
+            );
+            embassy_time::Timer::after_secs(1).await;
+        }
+    }
+}
 
 /// Maximum cached PMs (incoming + outgoing combined).  Each entry is
 /// ~226 B (130 text + 32 name + bookkeeping), so 32 = ~7.2 KiB total.
@@ -396,24 +416,16 @@ pub fn mark_read(pub_key: &[u8; 32]) {
             .min(255) as u8
     });
     READ_CURSORS.lock(|cell| {
-        let mut list = cell.borrow_mut();
-        if let Some(c) = list.iter_mut().find(|c| &c.pub_key == pub_key) {
-            c.last_read_secs = now;
-            return;
-        }
-        if list.is_full() {
-            let oldest_idx = list
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, c)| c.last_read_secs)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            let _ = list.swap_remove(oldest_idx);
-        }
-        let _ = list.push(ReadCursor {
-            pub_key: *pub_key,
-            last_read_secs: now,
-        });
+        crate::evict_table::upsert_evict_oldest(
+            &mut cell.borrow_mut(),
+            |c| &c.pub_key == pub_key,
+            |c| c.last_read_secs,
+            |c| c.last_read_secs = now,
+            || ReadCursor {
+                pub_key: *pub_key,
+                last_read_secs: now,
+            },
+        );
     });
     drop_unread(cleared);
 }
@@ -455,10 +467,10 @@ pub fn unread_total() -> u8 {
 
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 
 use crate::menu::ButtonId;
-use crate::{BLACK, TriColor, WHITE, draw_header, ui};
+use crate::{BLACK, TriColor, draw_header, ui};
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -646,16 +658,19 @@ where
     draw_header(display, "Messages", bat_prc)?;
     let summary = peer_list();
     if summary.is_empty() {
-        ui::draw_centered_message(display, "No messages yet", Point::new(76, 80))?;
+        ui::draw_text(
+            display,
+            "No messages yet",
+            Point::new(76, 80),
+            ui::TEXT_BOLD_BLACK,
+            ui::CENTERED,
+        )?;
         return Ok(());
     }
 
     let list_top: i32 = ui::TITLE_BAR_H as i32 + 2;
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
-    let right = TextStyleBuilder::new()
-        .baseline(Baseline::Bottom)
-        .alignment(Alignment::Right)
-        .build();
+    let bottom = crate::ui::BOTTOM_LEFT;
+    let right = crate::ui::BOTTOM_RIGHT;
     let total = summary.len() as u8;
     // The peer list can shrink (eviction) after `scroll` was set; re-clamp so
     // `total - scroll` can't underflow and the index below stays in range.
@@ -758,7 +773,7 @@ where
     // rows).  First line of each message gets `< 3m  ` prefix; the
     // rest indent to `BODY_X`.  Render the [scroll .. scroll +
     // THREAD_VISIBLE_LINES) window.
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    let bottom = crate::ui::BOTTOM_LEFT;
     let mut painted: u8 = 0;
     let mut skipped: u32 = 0;
     let body_top: i32 = ui::TITLE_BAR_H as i32 + 4;
@@ -820,7 +835,7 @@ where
                 // `emoji::draw_string` so emoji codepoints in the
                 // thread come out as monochrome icons instead of the
                 // font's missing-glyph indicator.
-                crate::fw::emoji::draw_string(
+                crate::emoji::draw_string(
                     display,
                     slice,
                     Point::new(BODY_X, row_y),
@@ -854,6 +869,5 @@ where
     // (25 chars, ~175 px) which ran off the right edge.
     let hint = "Fire reply  Esc back";
     Text::with_text_style(hint, Point::new(2, 152), ui::TEXT_BOLD_BLACK, bottom).draw(display)?;
-    let _ = WHITE;
     Ok(())
 }

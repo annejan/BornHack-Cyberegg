@@ -2,7 +2,7 @@
 
 > **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing instructions, [CLOCK.md](CLOCK.md) for watch/alarm/calendar docs, [CONTACTS_SCREEN.md](CONTACTS_SCREEN.md) for the meshcore chat UI.
 
-The BornPets game screen ships with five mini-games.  Each one is
+The BornPets game screen ships with four mini-games.  Each one is
 opened from the Play modal (`Game screen → Play → <name>`), runs as
 a full-screen takeover, and is exited with **Cancel**.
 
@@ -84,43 +84,6 @@ until you've turned everything off.
 
 ### Winning
 All lights off → inspiration awarded, game closes.
-
----
-
-## Nim
-
-Misère Nim with the classic 4 rows of `[1, 3, 5, 7]` sticks.
-
-### Mechanic
-You and the **EI** alternate turns.  On each turn, take **one or
-more sticks from a single row**.  Whoever is forced to take the
-**last stick on the board loses**.
-
-Each move is two-phase:
-
-1. **Row select** — Up/Down moves a dithered cursor between rows.
-   Press Fire to commit the row.
-2. **Count select** — Right shrinks the take-count, Left grows it
-   (the rightmost sticks turn dithered grey to mark them for
-   removal).  Press Fire to take them.
-
-### Difficulty
-- **Normal**: 35 % chance per EI move of playing a random legal
-  move instead of the optimal Nim strategy.
-- **Hard**: always optimal — XOR-strategy for standard Nim,
-  switching to the "leave an odd count of 1-piles" rule once
-  every pile has ≤1 stick (misère endgame).
-
-### Controls
-| Button         | Effect                                              |
-| -------------- | --------------------------------------------------- |
-| Up/Down        | Row select / change count (depending on phase).     |
-| Left/Right     | Change take-count (in count-select phase).          |
-| Fire / Execute | Commit the current row / count.                     |
-| Cancel         | Exit.                                               |
-
-### Winning
-Player avoids taking the last stick → inspiration awarded.
 
 ---
 

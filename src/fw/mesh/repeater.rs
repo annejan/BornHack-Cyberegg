@@ -13,6 +13,7 @@ use meshcore::dedup::{MsgHashRing, relay_hash};
 use meshcore::packet::{Message, RouteType};
 
 use super::device_identity::DeviceIdentity;
+use super::meshcore::insert_if_new;
 
 static RELAY_SEEN: Mutex<CriticalSectionRawMutex, RefCell<MsgHashRing<32>>> =
     Mutex::new(RefCell::new(MsgHashRing::new()));
@@ -35,15 +36,7 @@ pub fn try_relay(msg: &Message, identity: &DeviceIdentity) -> Option<crate::TxRe
     }
 
     let rh = relay_hash(msg.payload_type.to_u8(), &msg.payload);
-    let is_new = RELAY_SEEN.lock(|cell| {
-        let mut ring = cell.borrow_mut();
-        if ring.contains(rh) {
-            false
-        } else {
-            ring.insert(rh);
-            true
-        }
-    });
+    let is_new = RELAY_SEEN.lock(|cell| insert_if_new(&mut cell.borrow_mut(), rh));
     if !is_new {
         return None;
     }
@@ -65,6 +58,8 @@ pub fn try_relay(msg: &Message, identity: &DeviceIdentity) -> Option<crate::TxRe
         route: msg.route,
         version: msg.version,
         transport_code: msg.transport_code,
+        // Upstream relays keep both transport codes untouched.
+        transport_code_2: msg.transport_code_2,
         path_len_byte: new_path_len_byte,
         path: new_path,
         payload: msg.payload.clone(),

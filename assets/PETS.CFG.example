@@ -3,7 +3,7 @@
 # One "PREFIX=NAME" per line.  PREFIX is the pet's sprite-prefix byte (decimal):
 #   0,1,2 = the built-in pets (listing them just renames them)
 #   3,4   = reserved (sponsors, menu icons) — ignored
-#   5..7  = new custom pets
+#   5..8  = new custom pets
 # NAME is up to 16 ASCII chars, shown in "Choose your Pet".
 #
 # A pet's sprites are the matching PPAAFF.PCX files on the badge; each

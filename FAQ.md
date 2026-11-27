@@ -8,10 +8,12 @@ started see [QUICKSTART.md](QUICKSTART.md); for the one-page reference see
 
 The RGB LED does a short one-shot flash every time the e-paper screen refreshes.
 On most screens the picture is static, so this is rare. The **BornPet** screen is
-different: the pet has a slow "breathing" idle animation, so the badge wakes up
-every few seconds to draw the next frame — and each of those refreshes flashes
-the LED. Frames can look almost identical, so it feels like the LED is blinking
-"for no reason."
+different: the pet has an idle animation, and the badge wakes up to draw the next
+frame — and each of those refreshes flashes the LED. When the pet is idle, that
+is one frame every 5 minutes (it used to be every few seconds), because every
+refresh costs battery and wears the e-paper. While you feed, heal, play or
+exercise the pet, the action animates at full speed until it ends. The screen
+also redraws when something changes: a button press, a status word, a toast.
 
 It is not a fault and not (usually) a mesh message.
 
@@ -30,7 +32,7 @@ their own:
 | **My QR**, **Name**, **Token**, **Calendar** | No — drawn once, then idle until you press a button | **Lowest** |
 | Messages / Channels / Contacts | Only when relevant mesh traffic arrives | Low |
 | **Main**, **Watch** | Once a minute (to update the clock) | Medium |
-| **BornPet** | Every few seconds (idle animation) | **Highest** |
+| **BornPet** | One frame per 5 min when idle, plus events and actions | Low |
 
 **Battery tip:** to make a charge last as long as possible, leave the badge on
 **My QR** or **Name**. They sit completely idle — no periodic refresh, no LED

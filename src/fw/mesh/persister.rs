@@ -34,6 +34,7 @@ use crate::fw::kv;
 enum Which {
     Tz,
     BoostRx,
+    RxPowerSave,
     LoraRadio,
     OtherParams,
     Advert,
@@ -78,10 +79,11 @@ async fn settings_dispatch_loop() -> ! {
         let group_a = select4(w_tz(), w_boost_rx(), w_lora_radio(), w_other_params());
         let group_b = select4(w_advert(), w_path_hash(), w_node_name(), w_lora_disabled());
         let group_c = select4(w_ble_disabled(), w_factory_reset(), w_contact_reset(), w_clear_bonds());
-        let which = match select(select(group_a, group_b), group_c).await {
+        let which = match select(select(group_a, group_b), select(group_c, w_rx_power_save())).await {
             Either::First(Either::First(e)) => flatten(e),
             Either::First(Either::Second(e)) => flatten(e),
-            Either::Second(e) => flatten(e),
+            Either::Second(Either::First(e)) => flatten(e),
+            Either::Second(Either::Second(w)) => w,
         };
         dispatch(which).await;
     }
@@ -104,6 +106,10 @@ async fn w_tz() -> Which {
 async fn w_boost_rx() -> Which {
     crate::BOOST_RX_CHANGED_SIGNAL.wait().await;
     Which::BoostRx
+}
+async fn w_rx_power_save() -> Which {
+    crate::RX_POWER_SAVE_CHANGED_SIGNAL.wait().await;
+    Which::RxPowerSave
 }
 async fn w_lora_radio() -> Which {
     crate::LORA_RADIO_CHANGED_SIGNAL.wait().await;
@@ -152,9 +158,9 @@ async fn dispatch(which: Which) {
     use core::sync::atomic::Ordering::Relaxed;
     match which {
         Which::Tz => {
-            let offset = crate::TIMEZONE_OFFSET.load(Relaxed);
+            let offset = crate::TZ_OFFSET_QH.load(Relaxed);
             match settings::set_timezone(offset).await {
-                Ok(()) => defmt::debug!("settings: timezone={} persisted", offset),
+                Ok(()) => defmt::debug!("settings: timezone={} qh persisted", offset),
                 Err(e) => defmt::warn!("settings: timezone persist failed: {:?}", e),
             }
         }
@@ -164,15 +170,23 @@ async fn dispatch(which: Which) {
                 Ok(()) => defmt::debug!("settings: boost_rx={} persisted", enabled),
                 Err(e) => defmt::warn!("settings: boost_rx persist failed: {:?}", e),
             }
+            // The RxGain register is only rewritten when RX is re-armed, so
+            // without this the toggle waited for the next TX. A live
+            // reconfigure ends in `resume_rx`, which applies the new gain.
+            crate::LORA_RADIO_APPLY_SIGNAL.signal(());
+        }
+        Which::RxPowerSave => {
+            let on = crate::RX_POWER_SAVE.load(Relaxed);
+            match settings::set_rx_power_save(on).await {
+                Ok(()) => defmt::debug!("settings: rx_power_save={=bool} persisted", on),
+                Err(e) => defmt::warn!("settings: rx_power_save persist failed: {:?}", e),
+            }
+            // The live reconfigure ends in `resume_rx`, which re-arms RX
+            // duty-cycled or continuous to match.
+            crate::LORA_RADIO_APPLY_SIGNAL.signal(());
         }
         Which::LoraRadio => {
-            let mut rp = settings::get_radio_params_or_default().await;
-            rp.freq_hz = crate::LORA_FREQ_HZ.load(Relaxed);
-            rp.bw_hz = crate::LORA_BW_HZ.load(Relaxed);
-            rp.sf = crate::LORA_SF.load(Relaxed);
-            rp.cr = crate::LORA_CR.load(Relaxed);
-            rp.tx_power = crate::LORA_TX_POWER.load(Relaxed);
-            rp.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
+            let rp = crate::RadioParams::load_live();
             match settings::set_radio_params(rp).await {
                 Ok(()) => defmt::debug!("settings: radio params persisted"),
                 Err(e) => defmt::warn!("settings: radio params persist failed: {:?}", e),
@@ -191,9 +205,7 @@ async fn dispatch(which: Which) {
                     advert_loc_policy: 0,
                     multi_acks: 0,
                 });
-            op.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
-            op.multi_acks = crate::MULTI_ACKS.load(Relaxed);
-            op.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
+            op.overlay_live();
             match settings::set_other_params(op).await {
                 Ok(()) => defmt::debug!("settings: other_params persisted"),
                 Err(e) => defmt::warn!("settings: other_params persist failed: {:?}", e),
@@ -202,6 +214,11 @@ async fn dispatch(which: Which) {
             match settings::set_ignore_blink(ignore).await {
                 Ok(()) => defmt::debug!("settings: ignore_blink={=bool} persisted", ignore),
                 Err(e) => defmt::warn!("settings: ignore_blink persist failed: {:?}", e),
+            }
+            let region_filter = crate::REGION_FILTER.load(Relaxed);
+            match settings::set_region_filter(region_filter).await {
+                Ok(()) => defmt::debug!("settings: region_filter={=bool} persisted", region_filter),
+                Err(e) => defmt::warn!("settings: region_filter persist failed: {:?}", e),
             }
         }
         Which::Advert => {
@@ -228,8 +245,8 @@ async fn dispatch(which: Which) {
         Which::NodeName => {
             let (buf, n) = crate::NODE_NAME.lock(|cell| {
                 let s = cell.borrow();
-                let mut buf = [0u8; 31];
-                let n = s.len().min(31);
+                let mut buf = [0u8; crate::MAX_NODE_NAME];
+                let n = s.len().min(crate::MAX_NODE_NAME);
                 buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
                 (buf, n)
             });

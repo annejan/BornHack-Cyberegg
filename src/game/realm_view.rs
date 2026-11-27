@@ -7,10 +7,24 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK};
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor};
+
+const NO_PETS: &str = "No past pets yet";
+
+/// Fixed texts of the Realm screen (host-only, for the guide's word list).
+#[cfg(any(test, feature = "simulator"))]
+pub fn words() -> [&'static str; 5] {
+    [
+        NO_PETS,
+        "<name> (<kind>) - <d>d <h>h",
+        "<kind> Gen <n> - <d>d <h>h",
+        "V:<n>% C:<n>% R:<n>%",
+        "<n>/<m>",
+    ]
+}
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static SCROLL: AtomicU8 = AtomicU8::new(0);
@@ -29,27 +43,15 @@ pub fn close() {
 }
 
 pub fn scroll_up() {
+    let count = super::lifecycle::realm_count();
     let s = SCROLL.load(Ordering::Relaxed);
-    if s > 0 {
-        SCROLL.store(s - 1, Ordering::Relaxed);
-    } else {
-        // Wrap to the last pet instead of doing nothing at the top.
-        let count = super::lifecycle::realm_count();
-        if count > 0 {
-            SCROLL.store(count - 1, Ordering::Relaxed);
-        }
-    }
+    SCROLL.store(ui::wrap_prev(s, count), Ordering::Relaxed);
 }
 
 pub fn scroll_down() {
     let count = super::lifecycle::realm_count();
     let s = SCROLL.load(Ordering::Relaxed);
-    if s + 1 < count {
-        SCROLL.store(s + 1, Ordering::Relaxed);
-    } else if count > 0 {
-        // Wrap to the top instead of doing nothing at the bottom.
-        SCROLL.store(0, Ordering::Relaxed);
-    }
+    SCROLL.store(ui::wrap_next(s, count), Ordering::Relaxed);
 }
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
@@ -60,20 +62,18 @@ where
     let scroll = SCROLL.load(Ordering::Relaxed) as usize;
 
     // Background.
-    Rectangle::new(Point::zero(), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    crate::ui::clear_screen(display)?;
 
     // Title bar.
     ui::draw_title_bar(display, "Unicorn Realm", Point::zero(), 152)?;
 
     if count == 0 {
-        ui::draw_centered_message(display, "No past pets yet", Point::new(76, 85))?;
+        ui::draw_centered_message(display, NO_PETS, Point::new(76, 85))?;
         return Ok(());
     }
 
     // Show up to 4 pets per screen.
-    let left = TextStyleBuilder::new().baseline(Baseline::Top).build();
+    let left = crate::ui::TOP_LEFT;
 
     let visible = 4usize.min(count as usize - scroll);
     for i in 0..visible {
@@ -99,14 +99,13 @@ where
                 format_args!("{} Gen {} - {}", kind_name, pet.generation, pet.age_str()),
             );
         }
-        Text::with_text_style(line.as_str(), Point::new(4, y), TEXT_BOLD_BLACK, left)
-            .draw(display)?;
+        crate::ui::draw_text(display, line.as_str(), Point::new(4, y), TEXT_BOLD_BLACK, left)?;
 
         // Traits line.
         let mut traits: heapless::String<32> = heapless::String::new();
-        let vit_pct = pet.vitality as u32 * 100 / 65535;
-        let cur_pct = pet.curiosity as u32 * 100 / 65535;
-        let res_pct = pet.resilience as u32 * 100 / 65535;
+        let vit_pct = super::engine::trait_pct(pet.vitality);
+        let cur_pct = super::engine::trait_pct(pet.curiosity);
+        let res_pct = super::engine::trait_pct(pet.resilience);
         let _ = core::fmt::Write::write_fmt(
             &mut traits,
             format_args!("V:{}% C:{}% R:{}%", vit_pct, cur_pct, res_pct),
@@ -127,10 +126,7 @@ where
         let mut indicator: heapless::String<8> = heapless::String::new();
         let _ =
             core::fmt::Write::write_fmt(&mut indicator, format_args!("{}/{}", scroll + 1, count));
-        let right = TextStyleBuilder::new()
-            .baseline(Baseline::Bottom)
-            .alignment(embedded_graphics::text::Alignment::Right)
-            .build();
+        let right = crate::ui::BOTTOM_RIGHT;
         Text::with_text_style(indicator.as_str(), Point::new(148, 150), TEXT_BLACK, right)
             .draw(display)?;
     }

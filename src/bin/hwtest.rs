@@ -48,60 +48,16 @@ use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::pwm::{DutyCycle, SimplePwm};
 use embassy_nrf::qspi::{self, Qspi};
 use embassy_nrf::saadc::{self, ChannelConfig, Saadc};
-use embassy_nrf::spim::{self, Frequency, Spim};
+use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::{bind_interrupts, peripherals};
 use embassy_time::Timer;
 use panic_probe as _;
 
-// Board pin map — inlined (not using the main lib, which is gated on
-// `embassy-base` / `simulator`). Keep in sync with `src/fw/board.rs`.
-#[rustfmt::skip]
-macro_rules! board {
-    ($p:expr, led_red)    => { $p.P1_07 };
-    ($p:expr, led_green)  => { $p.P1_15 };
-    ($p:expr, led_blue)   => { $p.P0_02 };
-
-    ($p:expr, buzzer)     => { $p.P0_13 };
-
-    ($p:expr, epd_busy)   => { $p.P0_14 };
-    ($p:expr, epd_reset)  => { $p.P0_11 };
-    ($p:expr, epd_dc)     => { $p.P0_12 };
-    ($p:expr, epd_csn)    => { $p.P1_09 };
-    ($p:expr, epd_sck)    => { $p.P0_08 };
-    ($p:expr, epd_mosi)   => { $p.P0_27 };
-
-    ($p:expr, vbat)       => { $p.P0_31 };
-    ($p:expr, vbat_rd)    => { $p.P0_07 };
-    ($p:expr, ps_sync)    => { $p.P0_17 };
-
-    ($p:expr, btn_can)    => { $p.P0_06 };
-    ($p:expr, btn_exe)    => { $p.P0_26 };
-
-    ($p:expr, joy_up)     => { $p.P1_04 };
-    ($p:expr, joy_down)   => { $p.P1_03 };
-    ($p:expr, joy_left)   => { $p.P1_05 };
-    ($p:expr, joy_right)  => { $p.P1_01 };
-    ($p:expr, joy_fire)   => { $p.P1_02 };
-
-    ($p:expr, lora_dio1)  => { $p.P0_29 };
-    ($p:expr, lora_busy)  => { $p.P0_28 };
-    ($p:expr, lora_rf_sw) => { $p.P0_04 };
-    ($p:expr, lora_rst)   => { $p.P0_30 };
-    ($p:expr, lora_miso)  => { $p.P1_14 };
-    ($p:expr, lora_mosi)  => { $p.P0_03 };
-    ($p:expr, lora_sck)   => { $p.P1_13 };
-    ($p:expr, lora_nss)   => { $p.P1_12 };
-
-    ($p:expr, qwiic_sda)  => { $p.P1_10 };
-    ($p:expr, qwiic_scl)  => { $p.P1_11 };
-
-    ($p:expr, flash_csn)  => { $p.P0_25 };
-    ($p:expr, flash_sck)  => { $p.P0_21 };
-    ($p:expr, flash_io0)  => { $p.P0_20 };
-    ($p:expr, flash_io1)  => { $p.P0_24 };
-    ($p:expr, flash_io2)  => { $p.P0_22 };
-    ($p:expr, flash_io3)  => { $p.P0_23 };
-}
+// Board pin map — shared with the main app and the bootloader (this binary
+// cannot link the lib, so it `include!`s the file instead).
+include!("../fw/board.rs");
+// Shared raw-to-mV battery formula.
+include!("../fw/vbat_scale.rs");
 
 bind_interrupts!(struct Irqs {
     SAADC => saadc::InterruptHandler;
@@ -255,15 +211,17 @@ async fn main(_spawner: Spawner) {
     }
 
     // ── LoRa SX1262 ───────────────────────────────────────────────────────
-    if !probe_lora(
-        p.SPI2,
-        board!(p, lora_sck).into(),
-        board!(p, lora_mosi).into(),
-        board!(p, lora_miso).into(),
+    let (lora_sck, lora_mosi, lora_miso) = (
+        board!(p, lora_sck),
+        board!(p, lora_mosi),
+        board!(p, lora_miso),
+    );
+    if !sx1262_status_ok(
+        board!(p, lora_rf_sw).into(),
         board!(p, lora_rst).into(),
         board!(p, lora_nss).into(),
         board!(p, lora_busy).into(),
-        board!(p, lora_rf_sw).into(),
+        |cfg| Spim::new(board!(p, lora_spi), Irqs, lora_sck, lora_mosi, lora_miso, cfg),
     )
     .await
     {
@@ -428,7 +386,7 @@ async fn read_battery_mv(
     s.sample(&mut buf).await;
     rd.set_high();
 
-    ((buf[0].max(0) as u32) * 10800 / 4096) as u16
+    vbat_raw_to_mv(buf[0].max(0) as u32)
 }
 
 /// Read the QSPI flash JEDEC ID (opcode 0x9F). Returns true if the response
@@ -460,15 +418,8 @@ fn probe_qspi(
     jedec != [0x00; 3] && jedec != [0xFF; 3]
 }
 
-// nRF52840 CLOCK peripheral register addresses (@ 0x40000000).
-const CLOCK_TASKS_HFCLKSTART: *mut u32 = 0x4000_0000 as *mut u32;
-const CLOCK_TASKS_HFCLKSTOP: *mut u32 = 0x4000_0004 as *mut u32;
-const CLOCK_TASKS_LFCLKSTART: *mut u32 = 0x4000_0008 as *mut u32;
-const CLOCK_TASKS_LFCLKSTOP: *mut u32 = 0x4000_000C as *mut u32;
-const CLOCK_EVENTS_HFCLKSTARTED: *mut u32 = 0x4000_0100 as *mut u32;
-const CLOCK_EVENTS_LFCLKSTARTED: *mut u32 = 0x4000_0104 as *mut u32;
-const CLOCK_LFCLKSTAT: *const u32 = 0x4000_0418 as *const u32;
-const CLOCK_LFCLKSRC: *mut u32 = 0x4000_0518 as *mut u32;
+// nRF52840 CLOCK peripheral register addresses (shared with factory_test).
+include!("../fw/nrf_clock_regs.rs");
 
 /// Request the 32 MHz HFXO and wait up to 1 s for `HFCLKSTARTED`.
 ///
@@ -543,65 +494,5 @@ async fn probe_lfxo() -> bool {
     false
 }
 
-/// Reset the SX1262 and read its status over SPI. Returns true if the chip
-/// releases BUSY within 50 ms and returns a plausible status byte.
-#[allow(clippy::too_many_arguments)]
-async fn probe_lora<'a>(
-    spi_periph: embassy_nrf::Peri<'a, peripherals::SPI2>,
-    sck: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-    mosi: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-    miso: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-    rst: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-    nss: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-    busy: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-    rf_sw: embassy_nrf::Peri<'a, embassy_nrf::gpio::AnyPin>,
-) -> bool {
-    // Hold RF switch in a defined state.
-    let _rf_sw = Output::new(rf_sw, Level::Low, OutputDrive::Standard);
-    let mut rst_out = Output::new(rst, Level::Low, OutputDrive::Standard);
-    let mut nss_out = Output::new(nss, Level::High, OutputDrive::Standard);
-    let busy_in = Input::new(busy, Pull::None);
-
-    // Reset pulse: hold low ≥100 µs then release.
-    Timer::after_micros(500).await;
-    rst_out.set_high();
-
-    // Wait for BUSY to fall (chip ready), 50 ms timeout.
-    let mut ready = false;
-    for _ in 0..50u8 {
-        if !busy_in.is_high() {
-            ready = true;
-            break;
-        }
-        Timer::after_millis(1).await;
-    }
-    if !ready {
-        defmt::warn!("hwtest: LoRa BUSY stuck high after reset");
-        return false;
-    }
-
-    let mut spi_cfg = spim::Config::default();
-    spi_cfg.frequency = Frequency::M1;
-    let mut spi = Spim::new(spi_periph, Irqs, sck, mosi, miso, spi_cfg);
-
-    // GetStatus (0xC0) + NOP byte → status returned on MISO in the second byte.
-    let tx = [0xC0u8, 0x00];
-    let mut rx = [0u8; 2];
-    nss_out.set_low();
-    let r = spi.transfer(&mut rx, &tx).await;
-    nss_out.set_high();
-
-    match r {
-        Ok(()) => {
-            let status = rx[1];
-            defmt::info!("hwtest: LoRa GetStatus = 0x{:02X}", status);
-            // Chip mode bits [6:4]: 0=unused, 7=reserved. Valid modes are 2..=6.
-            let mode = (status >> 4) & 0x07;
-            mode != 0 && mode != 7 && status != 0xFF
-        }
-        Err(_) => {
-            defmt::warn!("hwtest: LoRa SPI transfer failed");
-            false
-        }
-    }
-}
+// SX1262 reset + GetStatus probe, shared with `fw/factory_test.rs`.
+include!("../fw/hw_probe.rs");

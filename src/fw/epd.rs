@@ -384,46 +384,6 @@ async fn probe_lut(
 /// over the persisted-KV value.
 pub static LUT_FILE_SPEED: AtomicI16 = AtomicI16::new(-1);
 
-/// Stream `file` through `scratch` line by line, invoking `f` once per
-/// text line (without its `\n`). Lines may span read-chunk boundaries —
-/// the partial tail is carried over between reads — so the file itself
-/// can be (much) larger than `scratch`. Errors on a read failure, a `f`
-/// parse error, or a single line longer than the whole scratch buffer.
-async fn for_each_file_line<F>(
-    file: &crate::fw::fat12::FileRef,
-    scratch: &mut [u8],
-    mut f: F,
-) -> Result<(), ()>
-where
-    F: FnMut(&[u8]) -> Result<(), crate::lut_file::LutCfgError>,
-{
-    let mut offset: u32 = 0;
-    let mut carry: usize = 0;
-    loop {
-        let n = match crate::fw::fat12::read_file(file, offset, &mut scratch[carry..]).await {
-            Ok(n) => n,
-            Err(_) => return Err(()),
-        };
-        offset = offset.saturating_add(n as u32);
-        let filled = carry + n;
-        let eof = n == 0 || offset >= file.size;
-
-        let consumed = crate::lut_file::drain_lines(&scratch[..filled], &mut f).map_err(|_| ())?;
-        if eof {
-            if consumed < filled {
-                // Final line without a trailing newline.
-                f(&scratch[consumed..filled]).map_err(|_| ())?;
-            }
-            return Ok(());
-        }
-        carry = filled - consumed;
-        if carry == scratch.len() {
-            return Err(()); // one line larger than the whole scratch buffer
-        }
-        scratch.copy_within(consumed..filled, 0);
-    }
-}
-
 /// Read and apply a custom `LUT.CFG` from the USB-MSC FAT partition into
 /// `lut_table`, in place.
 ///
@@ -467,7 +427,7 @@ async fn load_custom_lut(
     // Pass 1 — meta + full dry-run validation, streamed.
     let mut meta = MetaScan::new();
     let mut check = BandScan::validate();
-    let streamed = for_each_file_line(&file, scratch, |line| {
+    let streamed = crate::fw::fat12::for_each_line(&file, scratch, |line| {
         meta.feed_line(line)?;
         check.feed_line(line)
     })
@@ -499,7 +459,7 @@ async fn load_custom_lut(
     if has_waveform {
         // Pass 2 — apply (contents already validated above).
         let mut apply = BandScan::apply(lut_table);
-        if for_each_file_line(&file, scratch, |line| apply.feed_line(line))
+        if crate::fw::fat12::for_each_line(&file, scratch, |line| apply.feed_line(line))
             .await
             .is_err()
         {
@@ -793,13 +753,10 @@ pub static EPD_LUT_SPEED_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::ne
 /// value (e.g. from a build that allowed lower values) locking the user
 /// out of an unreadable display.
 ///
-/// Gated on `mesh`, not `embassy-base`: the settings KV store lives under
-/// `fw::mesh::settings`, so persistence only exists in mesh builds. In
-/// non-mesh configs (embassy-game / embassy-watch) the menu still tunes the
-/// live atomic; the value just isn't saved across reboots.
-#[cfg(feature = "mesh")]
+/// Persisted in the shared `"settings"` KV namespace (`fw::settings`), which
+/// every firmware build has, so this works with or without `mesh`.
 pub async fn load_persisted_lut_speed() {
-    let scale = crate::fw::mesh::settings::get_epd_lut_speed()
+    let scale = crate::fw::settings::get_epd_lut_speed()
         .await
         .unwrap_or(100)
         .max(EPD_LUT_SPEED_MIN);
@@ -835,25 +792,24 @@ pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
 #[cfg(feature = "embassy-core")]
 pub static EPD_TEMP_BIAS_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-// Gated on `mesh` (settings KV store) — see `load_persisted_lut_speed`.
-#[cfg(feature = "mesh")]
+// Persisted via `fw::settings` — see `load_persisted_lut_speed`.
 pub async fn load_persisted_temp_bias() {
-    let v = crate::fw::mesh::settings::get_epd_temp_bias_c10()
+    let v = crate::fw::settings::get_epd_temp_bias_c10()
         .await
         .unwrap_or(0)
         .clamp(EPD_TEMP_BIAS_MIN, EPD_TEMP_BIAS_MAX);
     EPD_TEMP_BIAS_C10.store(v, Ordering::Relaxed);
 }
 
-// Spawned only by the mesh settings persister; needs `fw::mesh::settings`.
-#[cfg(feature = "mesh")]
+// Spawned by the mesh settings persister, or by `fw::settings::persister_task`
+// in non-mesh builds.
 pub async fn epd_temp_bias_persist_loop() -> ! {
     loop {
         EPD_TEMP_BIAS_DIRTY.wait().await;
         let v = EPD_TEMP_BIAS_C10
             .load(Ordering::Relaxed)
             .clamp(EPD_TEMP_BIAS_MIN, EPD_TEMP_BIAS_MAX);
-        match crate::fw::mesh::settings::set_epd_temp_bias_c10(v).await {
+        match crate::fw::settings::set_epd_temp_bias_c10(v).await {
             Ok(()) => defmt::debug!("settings: epd_temp_bias_c10={} persisted", v),
             Err(e) => defmt::warn!("settings: epd_temp_bias_c10 persist failed: {:?}", e),
         }
@@ -892,16 +848,15 @@ pub fn current_lut_speed() -> u8 {
 
 /// Persister loop: waits on [`EPD_LUT_SPEED_DIRTY`], writes the current
 /// [`EPD_LUT_SPEED`] value to the `"settings"` KV namespace.  Spawned by
-/// [`crate::fw::mesh::persister::run`] alongside the other settings loops.
-// Gated on `mesh` (settings KV store) — see `load_persisted_lut_speed`.
-#[cfg(feature = "mesh")]
+/// [`crate::fw::mesh::persister::run`] alongside the other settings loops (or
+/// [`crate::fw::settings::persister_task`] in non-mesh builds).
 pub async fn epd_lut_speed_persist_loop() -> ! {
     loop {
         EPD_LUT_SPEED_DIRTY.wait().await;
         // Clamp to the lock-out floor before persisting so a future menu
         // bug can't write an unrecoverable value.
         let scale = EPD_LUT_SPEED.load(Ordering::Relaxed).max(EPD_LUT_SPEED_MIN);
-        match crate::fw::mesh::settings::set_epd_lut_speed(scale).await {
+        match crate::fw::settings::set_epd_lut_speed(scale).await {
             Ok(()) => defmt::debug!("settings: epd_lut_speed={} persisted", scale),
             Err(e) => defmt::warn!("settings: epd_lut_speed persist failed: {:?}", e),
         }

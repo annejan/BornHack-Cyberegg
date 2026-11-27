@@ -232,6 +232,23 @@ impl Contact {
         &self.name[..end]
     }
 
+    /// This contact as the companion protocol's contact record (`CONTACT`
+    /// / `NEW_ADVERT` body); the name is cut at the first zero byte.
+    pub fn as_companion(&self) -> meshcore_companion::response::NewAdvert<'_> {
+        meshcore_companion::response::NewAdvert {
+            pub_key: &self.pub_key,
+            adv_type: self.node_type,
+            flags: self.flags,
+            out_path_len: self.out_path_len,
+            out_path: &self.out_path,
+            name: self.name_bytes(),
+            last_advert_timestamp: self.last_advert_ts,
+            gps_lat: self.gps_lat,
+            gps_lon: self.gps_lon,
+            lastmod: self.lastmod,
+        }
+    }
+
     /// Parse from the raw `AddUpdateContact` (0x09) BLE payload.
     ///
     /// `buf` is the full write buffer starting with the 0x09 command byte.
@@ -489,20 +506,7 @@ fn slot_key(idx: usize) -> heapless::String<4> {
 /// the companion protocol identifies contacts by their first 6 pub_key bytes.
 fn index_key(pub_key: &[u8]) -> heapless::String<12> {
     let mut s = heapless::String::new();
-    for &b in &pub_key[..6.min(pub_key.len())] {
-        let hi = b >> 4;
-        let lo = b & 0xF;
-        let _ = s.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        let _ = s.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
-    }
+    crate::hex::push_lower(&mut s, &pub_key[..6.min(pub_key.len())]);
     s
 }
 
@@ -510,18 +514,7 @@ fn index_key(pub_key: &[u8]) -> heapless::String<12> {
 /// first byte of a contact's pub_key. Matches [`index_key`]'s encoding.
 fn hi_key(src_hash: u8) -> heapless::String<2> {
     let mut s = heapless::String::new();
-    let hi = src_hash >> 4;
-    let lo = src_hash & 0xF;
-    let _ = s.push(if hi < 10 {
-        (b'0' + hi) as char
-    } else {
-        (b'a' + hi - 10) as char
-    });
-    let _ = s.push(if lo < 10 {
-        (b'0' + lo) as char
-    } else {
-        (b'a' + lo - 10) as char
-    });
+    crate::hex::push_lower(&mut s, &[src_hash]);
     s
 }
 
@@ -863,11 +856,11 @@ impl ContactStore {
         // --- 1. Detect and wipe legacy records. ---
         if self.detect_legacy_records().await {
             defmt::warn!(
-                "contacts: record format mismatch — wiping store (blink LED, alpha-phase policy)"
+                "contacts: record format mismatch — wiping store (green LED, alpha-phase policy)"
             );
-            crate::fw::led::set_led(&crate::fw::led::LED_GREEN, crate::fw::led::LedState::Duty50);
+            crate::fw::led::set_color(crate::fw::led::Rgb::GREEN, crate::fw::led::FOREVER);
             self.wipe_contact_store().await;
-            crate::fw::led::set_led(&crate::fw::led::LED_GREEN, crate::fw::led::LedState::Off);
+            crate::fw::led::off();
         }
 
         // --- 2. Read/write meta. ---
@@ -1150,6 +1143,13 @@ impl ContactStore {
     ///
     /// The entire scan is a single pass over all slots.
     pub async fn add_or_update(&self, contact: &Contact) -> Result<AddResult, kv::KvError> {
+        // An all-zero pub_key is how a slot reads as deleted, so storing one
+        // would take a slot (or evict a real contact) that every lookup then
+        // skips. Upstream skips such empty slots for the same reason: the key
+        // is a null-key ECDH sink (MeshCore 060fd219).
+        if contact.is_deleted() {
+            return Err(kv::KvError::Other);
+        }
         let _guard = MUTATION_LOCK.lock().await;
         // --- Update path: contact already known via index ---
         if let Some(slot) = self.index_lookup(&contact.pub_key).await {

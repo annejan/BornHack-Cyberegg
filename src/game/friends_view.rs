@@ -14,22 +14,20 @@
 //! - **Detail**: full stats for one friend — kind, how long you've known
 //!   them, how long since their last beacon, their cached combat-stat
 //!   snapshot, and your head-to-head Battle record against them. That
-//!   record is kept in sync between both badges — see
-//!   `battle::challenge` (challenger's side) and
-//!   `battle::on_battle_result` (target's side), which both update
-//!   `friends::record_battle_vs` for the same pair of device IDs. Any
-//!   button returns to the list.
+//!   record is kept in sync between both badges — `battle_link` updates
+//!   it through `friends::note_fight` on both sides for the same pair of
+//!   device IDs. Any button returns to the list.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 
 use crate::menu::ButtonId;
 use crate::text_wrap::word_wrap;
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_BOLD_WHITE};
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor};
 
 const STATE_LIST: u8 = 0;
 const STATE_DETAIL: u8 = 1;
@@ -37,6 +35,32 @@ const STATE_DETAIL: u8 = 1;
 /// Characters per line at `FONT_7X13`(_BOLD) — 7px/glyph — leaving a
 /// few px of margin on the 152px-wide screen.
 const CHARS_PER_LINE: usize = 19;
+
+const NO_FRIENDS: &str = "No friends met yet";
+const DETAIL_TITLE: &str = "Friend Details";
+const DETAIL_HINT: &str = "Fire for details";
+const NO_SELECTION: &str = "No friend selected";
+const BAR_LABELS: [&str; 4] = ["Pow", "Grd", "Spd", "HP"];
+
+/// Fixed texts of the Friends screens (host-only, for the guide's word list).
+#[cfg(any(test, feature = "simulator"))]
+pub fn words() -> [&'static str; 13] {
+    [
+        NO_FRIENDS,
+        DETAIL_TITLE,
+        DETAIL_HINT,
+        BAR_LABELS[0],
+        BAR_LABELS[1],
+        BAR_LABELS[2],
+        BAR_LABELS[3],
+        "Met <d>d <h>h ago",
+        "Last seen <d>d <h>h ago",
+        "Battles: <w>W-<l>L",
+        "Back",
+        NO_SELECTION,
+        "<n>/<m>",
+    ]
+}
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static STATE: AtomicU8 = AtomicU8::new(STATE_LIST);
@@ -56,30 +80,6 @@ pub fn close() {
     ACTIVE.store(false, Ordering::Relaxed);
 }
 
-fn cursor_up() {
-    let c = CURSOR.load(Ordering::Relaxed);
-    if c > 0 {
-        CURSOR.store(c - 1, Ordering::Relaxed);
-    } else {
-        // Wrap to the last friend instead of doing nothing at the top.
-        let count = super::friends::count();
-        if count > 0 {
-            CURSOR.store(count - 1, Ordering::Relaxed);
-        }
-    }
-}
-
-fn cursor_down() {
-    let count = super::friends::count();
-    let c = CURSOR.load(Ordering::Relaxed);
-    if count > 0 && c + 1 < count {
-        CURSOR.store(c + 1, Ordering::Relaxed);
-    } else if count > 0 {
-        // Wrap to the top instead of doing nothing at the bottom.
-        CURSOR.store(0, Ordering::Relaxed);
-    }
-}
-
 /// Route a button press while the Friends screen is active. Owns its
 /// own input logic across the two sub-states (mirrors `battle_view`).
 pub fn handle_input(btn: ButtonId) {
@@ -90,8 +90,8 @@ pub fn handle_input(btn: ButtonId) {
     }
 
     match btn {
-        ButtonId::Up => cursor_up(),
-        ButtonId::Down => cursor_down(),
+        ButtonId::Up => super::friends::cursor_prev(&CURSOR),
+        ButtonId::Down => super::friends::cursor_next(&CURSOR),
         // Fire or Execute opens the detail view — accept both so Execute
         // doesn't silently close the list instead of confirming.
         ButtonId::Fire | ButtonId::Execute => {
@@ -101,16 +101,6 @@ pub fn handle_input(btn: ButtonId) {
         }
         _ => close(),
     }
-}
-
-/// Format ticks-since-first-met as "Xd Xh" (1 tick = 10s, same convention
-/// as `PetRecord::age_str`).
-fn since_str(ticks: u32) -> heapless::String<12> {
-    let hours = ticks / 360;
-    let days = hours / 24;
-    let mut s = heapless::String::new();
-    let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}d {}h", days, hours % 24));
-    s
 }
 
 /// Draw up to 2 word-wrapped lines of `label` starting at `(x, y)`,
@@ -125,34 +115,22 @@ fn draw_wrapped<D>(
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let left = TextStyleBuilder::new().baseline(Baseline::Top).build();
+    let left = crate::ui::TOP_LEFT;
     let bytes = label.as_bytes();
     let mut cursor_y = y;
     for (s, e) in word_wrap(bytes, CHARS_PER_LINE).iter().take(2) {
         let slice = core::str::from_utf8(&bytes[*s as usize..*e as usize]).unwrap_or("");
-        Text::with_text_style(slice, Point::new(x, cursor_y), style, left).draw(display)?;
+        crate::ui::draw_text(display, slice, Point::new(x, cursor_y), style, left)?;
         cursor_y += 13;
     }
     Ok(cursor_y)
-}
-
-fn friend_label(name: &str, kind_name: &str) -> heapless::String<32> {
-    let mut label = heapless::String::new();
-    if !name.is_empty() {
-        let _ = core::fmt::Write::write_fmt(&mut label, format_args!("{} ({})", name, kind_name));
-    } else {
-        let _ = core::fmt::Write::write_fmt(&mut label, format_args!("{}", kind_name));
-    }
-    label
 }
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    Rectangle::new(Point::zero(), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    crate::ui::clear_screen(display)?;
 
     if STATE.load(Ordering::Relaxed) == STATE_DETAIL {
         draw_detail(display)
@@ -169,7 +147,7 @@ where
 
     let count = super::friends::count();
     if count == 0 {
-        ui::draw_centered_message(display, "No friends met yet", Point::new(76, 85))?;
+        ui::draw_centered_message(display, NO_FRIENDS, Point::new(76, 85))?;
         return Ok(());
     }
 
@@ -196,8 +174,7 @@ where
                 .draw(display)?;
         }
 
-        let kind_name = super::engine::PetKind::from_u8(friend.pet_kind).name();
-        let label = friend_label(friend.name_str(), kind_name);
+        let label = friend.label();
         let style = if is_selected {
             TEXT_BOLD_WHITE
         } else {
@@ -211,17 +188,14 @@ where
         let mut indicator: heapless::String<8> = heapless::String::new();
         let _ =
             core::fmt::Write::write_fmt(&mut indicator, format_args!("{}/{}", cursor + 1, count));
-        let right = TextStyleBuilder::new()
-            .baseline(Baseline::Bottom)
-            .alignment(Alignment::Right)
-            .build();
+        let right = crate::ui::BOTTOM_RIGHT;
         Text::with_text_style(indicator.as_str(), Point::new(148, 150), TEXT_BLACK, right)
             .draw(display)?;
     }
 
-    let left_hint = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    let left_hint = crate::ui::BOTTOM_LEFT;
     Text::with_text_style(
-        "Fire for details",
+        DETAIL_HINT,
         Point::new(4, 150),
         TEXT_BLACK,
         left_hint,
@@ -231,21 +205,27 @@ where
     Ok(())
 }
 
+/// The HP bar's fill: the wire range `WIRE_HP` (15..=120) mapped to 0..=100.
+fn hp_bar_pct(hp: u8) -> u8 {
+    let (lo, hi) = super::engine::combat::WIRE_HP;
+    let span = (hi - lo) as u32;
+    ((hp.saturating_sub(lo) as u32 * 100) / span).min(100) as u8
+}
+
 fn draw_detail<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    ui::draw_title_bar(display, "Friend Details", Point::zero(), 152)?;
+    ui::draw_title_bar(display, DETAIL_TITLE, Point::zero(), 152)?;
 
     let idx = CURSOR.load(Ordering::Relaxed) as usize;
     let Some(friend) = super::friends::get(idx) else {
-        ui::draw_centered_message(display, "No friend selected", Point::new(76, 85))?;
+        ui::draw_centered_message(display, NO_SELECTION, Point::new(76, 85))?;
         return Ok(());
     };
 
-    let left = TextStyleBuilder::new().baseline(Baseline::Top).build();
-    let kind_name = super::engine::PetKind::from_u8(friend.pet_kind).name();
-    let label = friend_label(friend.name_str(), kind_name);
+    let left = crate::ui::TOP_LEFT;
+    let label = friend.label();
 
     let mut y = draw_wrapped(display, label.as_str(), 6, 22, TEXT_BOLD_BLACK)?;
     y += 2;
@@ -256,7 +236,7 @@ where
         &mut met,
         format_args!(
             "Met {} ago",
-            since_str(now.saturating_sub(friend.first_seen_tick))
+            super::engine::fmt_days_hours(now.saturating_sub(friend.first_seen_tick))
         ),
     );
     Text::with_text_style(met.as_str(), Point::new(6, y), TEXT_BLACK, left).draw(display)?;
@@ -267,24 +247,25 @@ where
         &mut seen,
         format_args!(
             "Last seen {} ago",
-            since_str(now.saturating_sub(friend.last_seen_tick))
+            super::engine::fmt_days_hours(now.saturating_sub(friend.last_seen_tick))
         ),
     );
     Text::with_text_style(seen.as_str(), Point::new(6, y), TEXT_BLACK, left).draw(display)?;
     y += 13 + 2;
 
-    // Cached combat-stat snapshot — see `battle::CombatStats`. Attack/
-    // Defense/Speed are already 1-100; HP (20-150) is normalized to the
-    // same 0-100 scale purely for this bar, not a raw stat value.
+    // Cached combat numbers (power, guard, speed, hp) from the friend's
+    // beacon. Power/guard/speed are shown as stored; hp (wire range
+    // 15-120) is normalized to the same 0-100 scale purely for this bar,
+    // not a raw stat value.
     const BAR_H: u32 = 12;
     const BAR_X: i32 = 36;
     let bars: [(&str, u8); 4] = [
-        ("Atk", friend.attack.min(100)),
-        ("Def", friend.defense.min(100)),
-        ("Spd", friend.speed.min(100)),
+        (BAR_LABELS[0], friend.power.min(100)),
+        (BAR_LABELS[1], friend.guard.min(100)),
+        (BAR_LABELS[2], friend.speed.min(100)),
         (
-            "HP",
-            (((friend.max_hp.saturating_sub(20) as u32) * 100) / 130).min(100) as u8,
+            BAR_LABELS[3],
+            hp_bar_pct(friend.hp),
         ),
     ];
     for (label, pct) in bars {
@@ -308,15 +289,31 @@ where
         &mut record,
         format_args!("Battles: {}W-{}L", friend.wins, friend.losses),
     );
-    let bottom_left = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    let bottom_left = crate::ui::BOTTOM_LEFT;
     Text::with_text_style(record.as_str(), Point::new(6, 150), TEXT_BOLD_BLACK, bottom_left)
         .draw(display)?;
 
-    let bottom_right = TextStyleBuilder::new()
-        .baseline(Baseline::Bottom)
-        .alignment(Alignment::Right)
-        .build();
+    let bottom_right = crate::ui::BOTTOM_RIGHT;
     Text::with_text_style("Back", Point::new(148, 150), TEXT_BLACK, bottom_right).draw(display)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hp_bar_spans_the_wire_range() {
+        assert_eq!(hp_bar_pct(15), 0);
+        assert_eq!(hp_bar_pct(120), 100);
+        assert_eq!(hp_bar_pct(255), 100);
+        assert_eq!(hp_bar_pct(67), 49);
+    }
+
+    #[test]
+    fn bar_labels_fit_and_name_the_snapshot_fields() {
+        assert_eq!(BAR_LABELS, ["Pow", "Grd", "Spd", "HP"]);
+        assert!(BAR_LABELS.iter().all(|l| l.len() <= 8));
+    }
 }

@@ -50,12 +50,12 @@ pub async fn load_or_create(kv: KvNamespace) -> DeviceIdentity {
                 "MeshCore identity: seed in flash has wrong length ({=usize}), regenerating",
                 n
             );
-            seed = trng_seed();
+            seed = crate::fw::trng::seed32();
             persist_seed(&kv, &seed).await;
         }
         Err(KvError::NotFound) => {
             defmt::info!("MeshCore identity: no keypair found, generating new one");
-            seed = trng_seed();
+            seed = crate::fw::trng::seed32();
             persist_seed(&kv, &seed).await;
         }
         Err(e) => {
@@ -63,7 +63,7 @@ pub async fn load_or_create(kv: KvNamespace) -> DeviceIdentity {
                 "MeshCore identity: KV read error ({:?}), using ephemeral keypair",
                 e
             );
-            seed = trng_seed();
+            seed = crate::fw::trng::seed32();
             // Don't persist — storage may be broken; an ephemeral key is
             // better than a boot loop.
         }
@@ -76,7 +76,7 @@ pub async fn load_or_create(kv: KvNamespace) -> DeviceIdentity {
 ///
 /// Call this when the user requests a key rotation via the menu.
 pub async fn regenerate(kv: KvNamespace) -> DeviceIdentity {
-    let seed = trng_seed();
+    let seed = crate::fw::trng::seed32();
     persist_seed(&kv, &seed).await;
     defmt::info!("MeshCore identity: keypair regenerated");
     derive_identity(&seed)
@@ -104,40 +104,5 @@ fn derive_identity(seed: &[u8; 32]) -> DeviceIdentity {
 async fn persist_seed(kv: &KvNamespace, seed: &[u8; 32]) {
     if let Err(e) = kv.set(KV_SEED_KEY, seed, true).await {
         defmt::warn!("MeshCore identity: failed to persist seed: {:?}", e);
-    }
-}
-
-/// Generate 32 random bytes from the nRF52840 on-chip hardware TRNG.
-///
-/// Uses blocking PAC register access — only called during startup so
-/// blocking is acceptable.  The bias-correction filter (DERCEN) is enabled
-/// for better statistical quality at ~85 µA extra current during generation.
-///
-/// Safe to call before embassy-nrf takes ownership of the RNG peripheral,
-/// because it accesses registers directly without the embassy wrapper.
-pub fn trng_seed() -> [u8; 32] {
-    // nRF52840 RNG register offsets (Product Spec §6.19)
-    const RNG_BASE: u32 = 0x4000_D000;
-    const TASKS_START: u32 = RNG_BASE;
-    const TASKS_STOP: u32 = RNG_BASE + 0x004;
-    const EVENTS_VALRDY: u32 = RNG_BASE + 0x100;
-    const CONFIG: u32 = RNG_BASE + 0x504; // bit 0: DERCEN
-    const VALUE: u32 = RNG_BASE + 0x508;
-
-    // Safety: valid nRF52840 RNG register addresses, only accessed here
-    // during single-threaded startup before any tasks are spawned.
-    unsafe {
-        (CONFIG as *mut u32).write_volatile(1); // DERCEN = 1
-        (TASKS_START as *mut u32).write_volatile(1);
-
-        let mut seed = [0u8; 32];
-        for byte in &mut seed {
-            while (EVENTS_VALRDY as *const u32).read_volatile() == 0 {}
-            *byte = (VALUE as *const u32).read_volatile() as u8;
-            (EVENTS_VALRDY as *mut u32).write_volatile(0);
-        }
-
-        (TASKS_STOP as *mut u32).write_volatile(1);
-        seed
     }
 }

@@ -28,8 +28,9 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 use heapless::format;
+use meshcore::payload::advert::DeviceRole;
 
 use super::contacts::{Contact, ContactStore, FLAG_FAVORITE, MAX_CONTACTS, OUT_PATH_UNKNOWN};
 use super::{TxPrivateMsg, TxRequest, msg_queue, tx_send};
@@ -183,27 +184,16 @@ static OBSERVATIONS: Mutex<
 pub fn note_observed(pub_key: &[u8; 32]) {
     let secs = embassy_time::Instant::now().as_secs();
     OBSERVATIONS.lock(|cell| {
-        let mut list = cell.borrow_mut();
-        // If we already have an entry for this key, just update it.
-        if let Some(e) = list.iter_mut().find(|e| &e.pub_key == pub_key) {
-            e.secs = secs;
-            return;
-        }
-        // New key — append, evicting the oldest if full.
-        if list.is_full() {
-            // Find min-secs index and remove.
-            let oldest_idx = list
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, e)| e.secs)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            let _ = list.swap_remove(oldest_idx);
-        }
-        let _ = list.push(Observation {
-            pub_key: *pub_key,
-            secs,
-        });
+        crate::evict_table::upsert_evict_oldest(
+            &mut cell.borrow_mut(),
+            |e| &e.pub_key == pub_key,
+            |e| e.secs,
+            |e| e.secs = secs,
+            || Observation {
+                pub_key: *pub_key,
+                secs,
+            },
+        );
     });
 }
 
@@ -422,10 +412,10 @@ impl Filter {
         match self {
             Filter::All => true,
             Filter::Favorites => e.is_favorite(),
-            Filter::Chat => e.node_type == 1,
-            Filter::Repeaters => e.node_type == 2,
-            Filter::Rooms => e.node_type == 3,
-            Filter::Sensors => e.node_type == 4,
+            Filter::Chat => DeviceRole::from(e.node_type) == DeviceRole::ChatNode,
+            Filter::Repeaters => DeviceRole::from(e.node_type) == DeviceRole::Repeater,
+            Filter::Rooms => DeviceRole::from(e.node_type) == DeviceRole::RoomServer,
+            Filter::Sensors => DeviceRole::from(e.node_type) == DeviceRole::Sensor,
         }
     }
 }
@@ -665,14 +655,19 @@ fn fmt_relative(observed_at_secs: Option<u64>) -> heapless::String<8> {
     super::time_fmt::fmt_relative_secs(now.saturating_sub(seen))
 }
 
+/// Only chat nodes can be sent a PM.
+fn is_chat_node(node_type: u8) -> bool {
+    DeviceRole::from(node_type) == DeviceRole::ChatNode
+}
+
 fn role_glyph(node_type: u8) -> Option<&'static str> {
-    match node_type {
+    match DeviceRole::from(node_type) {
         // Chat node — no glyph (the common case stays visually quiet).
-        1 => None,
-        2 => Some("R"), // Repeater
-        3 => Some("#"), // Room server
-        4 => Some("S"), // Sensor
-        _ => Some("?"),
+        DeviceRole::ChatNode => None,
+        DeviceRole::Repeater => Some("R"),
+        DeviceRole::RoomServer => Some("#"),
+        DeviceRole::Sensor => Some("S"),
+        DeviceRole::Unknown => Some("?"),
     }
 }
 
@@ -721,7 +716,7 @@ fn popup_items(
         // Heard-but-not-saved.  Add is primary; PM still works (we
         // have the pub_key) for chat nodes even before Adding.
         let _ = v.push(PopupAction::Add);
-        if node_type == 1 {
+        if is_chat_node(node_type) {
             let _ = v.push(PopupAction::Pm);
         }
         let _ = v.push(PopupAction::Info);
@@ -733,7 +728,7 @@ fn popup_items(
     } else {
         PopupAction::Save
     };
-    if node_type == 1 {
+    if is_chat_node(node_type) {
         // Chat Node — PM is the most common action.
         let _ = v.push(PopupAction::Pm);
         let _ = v.push(PopupAction::Info);
@@ -838,7 +833,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                             target,
                             // Wrap to the last item instead of doing
                             // nothing at the top.
-                            pos: if pos > 0 { pos - 1 } else { n.saturating_sub(1) },
+                            pos: ui::wrap_prev(pos, n),
                         };
                         false
                     }
@@ -847,7 +842,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                             target,
                             // Wrap to the top instead of doing nothing at
                             // the bottom.
-                            pos: if pos + 1 < n { pos + 1 } else { 0 },
+                            pos: ui::wrap_next(pos, n),
                         };
                         false
                     }
@@ -920,7 +915,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                 ButtonId::Fire | ButtonId::Execute => {
                     // Open PM compose if this contact is a chat node.
                     if let Some(entry) = filtered_get(filter, target)
-                        && entry.node_type == 1
+                        && is_chat_node(entry.node_type)
                     {
                         b.mode = Mode::List;
                         start_pm_compose(entry.pub_key);
@@ -937,7 +932,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                         // Wrap to the last filter instead of doing nothing
                         // at the top.
                         b.mode = Mode::FilterPicker {
-                            pos: if pos > 0 { pos - 1 } else { n.saturating_sub(1) },
+                            pos: ui::wrap_prev(pos, n),
                         };
                         false
                     }
@@ -945,7 +940,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                         // Wrap to the top instead of doing nothing at the
                         // bottom.
                         b.mode = Mode::FilterPicker {
-                            pos: if pos + 1 < n { pos + 1 } else { 0 },
+                            pos: ui::wrap_next(pos, n),
                         };
                         false
                     }
@@ -1022,11 +1017,8 @@ where
     D: DrawTarget<Color = TriColor>,
 {
     let list_top: i32 = ui::TITLE_BAR_H as i32 + 2;
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
-    let right = TextStyleBuilder::new()
-        .baseline(Baseline::Bottom)
-        .alignment(Alignment::Right)
-        .build();
+    let bottom = crate::ui::BOTTOM_LEFT;
+    let right = crate::ui::BOTTOM_RIGHT;
 
     CACHED_CONTACTS.lock(|c| -> Result<(), D::Error> {
         let list = c.borrow();
@@ -1099,13 +1091,13 @@ where
                 Text::with_text_style(g, Point::new(name_x, row_mid + 5), txt_style, bottom)
                     .draw(display)?;
             }
-            Text::with_text_style(
+            crate::ui::draw_text(
+                display,
                 truncated,
                 Point::new(name_x + name_offset, row_mid + 5),
                 txt_style,
                 bottom,
-            )
-            .draw(display)?;
+            )?;
 
             // Last-seen, right-aligned.
             let rel = fmt_relative(entry.observed_at_secs);
@@ -1159,7 +1151,7 @@ where
     .into_styled(PrimitiveStyle::with_fill(WHITE))
     .draw(display)?;
 
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    let bottom = crate::ui::BOTTOM_LEFT;
     let style_bold = ui::TEXT_BOLD_BLACK;
     let style_small = ui::TEXT_BLACK;
 
@@ -1173,12 +1165,12 @@ where
     ui::draw_text(display, name, Point::new(4, 32), style_bold, bottom)?;
 
     // Role
-    let role = match entry.node_type {
-        1 => "Chat Node",
-        2 => "Repeater",
-        3 => "Room Server",
-        4 => "Sensor",
-        _ => "Unknown role",
+    let role = match DeviceRole::from(entry.node_type) {
+        DeviceRole::ChatNode => "Chat Node",
+        DeviceRole::Repeater => "Repeater",
+        DeviceRole::RoomServer => "Room Server",
+        DeviceRole::Sensor => "Sensor",
+        DeviceRole::Unknown => "Unknown role",
     };
     Text::with_text_style(role, Point::new(4, 48), style_small, bottom).draw(display)?;
 

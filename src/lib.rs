@@ -40,7 +40,7 @@
 //!   NFC tag, LoRa radio, BLE companion, MeshCore plumbing, FAT12 reader,
 //!   ekv-backed kv store, sponsors slideshow.  Embassy only.
 //! - `game` — virtual-pet lifecycle (hunger / inspiration / health /
-//!   tiredness), mini-games (black-hole, NIM, lights-out, tic-tac-toe,
+//!   tiredness), mini-games (black-hole, lights-out, tic-tac-toe,
 //!   sprite engine), station bonuses, action-feedback toasts.  Gated by `game`.
 //! - `watch` — Casio-style digital + analog clock face, alarms with per-day
 //!   mask and weekly repeats, multi-slot alarm state.  Gated by `watch`.
@@ -59,8 +59,8 @@
 //! lives at `0x00000000`–`0x0000FFFF` (64 KiB) and hands off to the app
 //! at `0x00010000`.  The main app's `memory-fw.x` accordingly sets
 //! `FLASH ORIGIN = 0x00010000` and `LENGTH = 960K`.  The bootloader is a
-//! standalone Cargo project, *not* in this workspace and *not* tracked
-//! in git — see the README for build steps.
+//! standalone Cargo project (tracked in git, but *not* part of this
+//! workspace) — see the README for build steps.
 
 // The library only has meaningful content when building the main firmware
 // or simulator. Other binaries (e.g. `hwtest`) build against an empty
@@ -79,58 +79,16 @@ pub enum ScreenError {
 
 #[cfg(feature = "embassy-core")]
 pub mod fw;
-// `fw::emoji` is pure embedded-graphics glyph rendering (no embassy/HAL deps)
-// and is shared with the `watch` face, which the simulator also compiles.
-// The simulator doesn't pull in the rest of `fw` (battery, board, radio, …),
-// so expose just this one submodule there to keep `crate::fw::emoji::*`
-// resolving. Guarded against `embassy-base` so the two `mod fw` blocks are
-// mutually exclusive.
-#[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
-pub mod fw {
-    pub mod emoji;
-
-    /// Screen lock — shares the real firmware module so the padlock overlay and
-    /// lock state render identically in the simulator. The Cancel-hold toggle
-    /// lives in the firmware-only `fw::button`, so in the sim the lock just
-    /// stays inactive unless toggled programmatically.
-    #[path = "lock.rs"]
-    pub mod lock;
-
-    /// Host-simulator stubs for the shared settings menu, which reads these EPD
-    /// tuning atomics/consts (`menu.rs`). The host has no e-paper panel, so the
-    /// state is inert — the menu's adjust actions still update the live value
-    /// but the `*_DIRTY` persist signals are `embassy-base`-gated in the real
-    /// `fw::epd`, so nothing is written. Values MUST mirror `src/fw/epd.rs`.
-    pub mod epd {
-        use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8};
-        pub const EPD_LUT_SPEED_MIN: u8 = 30;
-        pub static EPD_LUT_SPEED: AtomicU8 = AtomicU8::new(100);
-        pub const EPD_TEMP_BIAS_MIN: i8 = -50;
-        pub const EPD_TEMP_BIAS_MAX: i8 = 50;
-        pub const EPD_TEMP_BIAS_STEP: i8 = 5;
-        pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
-        pub static EPD_VARIANT_IS_B: AtomicBool = AtomicBool::new(false);
-        pub static EPD_CUSTOM_LUT_ACTIVE: AtomicBool = AtomicBool::new(false);
-    }
-
-    /// Host-simulator stub: no Qwiic I2C bus off-badge, so the scan overlay is
-    /// never active, open/close are no-ops, and `draw` (only reached when
-    /// `is_active()` is true) never runs but must still type-check.
-    pub mod qwiic {
-        use embedded_graphics::draw_target::DrawTarget;
-        pub fn is_active() -> bool {
-            false
-        }
-        pub fn open() {}
-        pub fn close() {}
-        pub fn draw<D>(_display: &mut D) -> Result<(), D::Error>
-        where
-            D: DrawTarget<Color = crate::TriColor>,
-        {
-            Ok(())
-        }
-    }
-}
+/// Pure embedded-graphics emoji glyph rendering (no embassy/HAL deps); shared
+/// by `ui::draw_text`, the `watch` face and the simulator.
+pub mod emoji;
+/// Screen lock — padlock overlay + lock state. The Cancel-hold toggle lives in
+/// the firmware-only `fw::button`, so in the simulator the lock just stays
+/// inactive unless toggled programmatically.
+pub mod lock;
+/// Companion text CLI — pure logic, compiled on the host so its unit tests run.
+#[cfg(any(feature = "mesh", feature = "simulator"))]
+pub mod mesh_cli;
 #[cfg(feature = "game")]
 pub mod game;
 /// Unified EPD pixel colour (`EpdColor`; `TriColor` alias) shared by every panel
@@ -139,20 +97,35 @@ pub mod color;
 /// Panel-agnostic e-paper driver trait implemented by each controller adapter.
 #[cfg(feature = "embassy-core")]
 pub mod epd_driver;
+pub mod button_seq;
+pub mod cfg_text;
 pub mod display_flush;
+#[cfg(feature = "heapless")]
+pub mod evict_table;
+pub mod refresh_decision;
+#[cfg(feature = "simulator")]
+pub mod guide;
+pub mod hex;
 pub mod menu;
 pub mod lut_file;
+/// LoRa preamble and duty-cycled receive timing (pure; host-tested).
+pub mod lora_timing;
 pub mod name_screen;
 pub mod nfc_ndef;
+pub mod platform;
 #[cfg(feature = "mesh")]
 pub mod qr_screen;
 #[cfg(feature = "signed-channel")]
 pub mod signed_channel;
+#[cfg(feature = "simulator")]
+pub mod sim_support;
+pub mod sync;
 pub mod text_entry;
 pub mod text_wrap;
 pub mod ui;
 #[cfg(feature = "watch")]
 pub mod watch;
+#[cfg(feature = "embassy-core")]
 use core::cell::RefCell;
 use core::result::Result;
 use core::result::Result::Ok;
@@ -164,7 +137,7 @@ use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 #[cfg(feature = "embassy-core")]
 use heapless::format;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
@@ -210,14 +183,33 @@ pub const MINIGAME_WIN_INDEX: usize = 12;
 /// overwrites this from persisted KV via [`fw::mesh::settings::get_boost_rx`].
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(true);
 
+/// Receive power save: duty-cycled RX sized for MeshCore 1.16+ preambles
+/// ([`lora_timing::rx_power_save_periods`]). Default: off (continuous RX).
+/// Boot path overwrites this from persisted KV via
+/// [`fw::mesh::settings::get_rx_power_save`]; the SX1262 driver reads it every
+/// time it re-arms receive.
+pub static RX_POWER_SAVE: AtomicBool = AtomicBool::new(false);
+
 /// UTC offset in whole hours (-12..=+14).  Default: +2 (Europe/Copenhagen
 /// summer time / CEST) — matches Bornhack's typical July/August venue.
 /// User can override via Settings → Timezone; the kv-stored value loads
 /// at boot and shadows this default, so changing this only affects fresh
 /// badges that have never had a timezone set.
-pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(2);
+///
+/// Stored in quarter hours (UTC+2 = 8, UTC+5:30 = 22) so the half- and
+/// quarter-hour zones MeshCore's `set tz.offset` accepts since 1.18 fit.
+pub static TZ_OFFSET_QH: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(8);
+/// Lowest offset, UTC-12, in quarter hours.
+pub const TZ_OFFSET_QH_MIN: i8 = -48;
+/// Highest offset, UTC+14, in quarter hours.
+pub const TZ_OFFSET_QH_MAX: i8 = 56;
 
-/// Fired when `TIMEZONE_OFFSET` changes so the BLE task can persist it.
+/// The local-time offset from UTC in seconds.
+pub fn tz_offset_secs() -> i64 {
+    TZ_OFFSET_QH.load(core::sync::atomic::Ordering::Relaxed) as i64 * 900
+}
+
+/// Fired when `TZ_OFFSET_QH` changes so the BLE task can persist it.
 #[cfg(feature = "embassy-core")]
 pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
@@ -280,6 +272,34 @@ pub static LORA_TX_POWER: AtomicI8 = AtomicI8::new(DEFAULT_RADIO.tx_power);
 /// Menu-togglable; runtime relay behavior is wired up via the BLE task.
 pub static LORA_CLIENT_REPEAT: AtomicBool = AtomicBool::new(DEFAULT_RADIO.client_repeat);
 
+impl RadioParams {
+    /// Snapshot of the live `LORA_*` atomics.
+    pub fn load_live() -> Self {
+        use core::sync::atomic::Ordering::Relaxed;
+        Self {
+            freq_hz: LORA_FREQ_HZ.load(Relaxed),
+            bw_hz: LORA_BW_HZ.load(Relaxed),
+            sf: LORA_SF.load(Relaxed),
+            cr: LORA_CR.load(Relaxed),
+            tx_power: LORA_TX_POWER.load(Relaxed),
+            client_repeat: LORA_CLIENT_REPEAT.load(Relaxed),
+        }
+    }
+
+    /// Write every field to the live `LORA_*` atomics. Does not signal the
+    /// persister or the radio; callers fire `LORA_RADIO_CHANGED_SIGNAL`
+    /// themselves when needed.
+    pub fn store_live(&self) {
+        use core::sync::atomic::Ordering::Relaxed;
+        LORA_FREQ_HZ.store(self.freq_hz, Relaxed);
+        LORA_BW_HZ.store(self.bw_hz, Relaxed);
+        LORA_SF.store(self.sf, Relaxed);
+        LORA_CR.store(self.cr, Relaxed);
+        LORA_TX_POWER.store(self.tx_power, Relaxed);
+        LORA_CLIENT_REPEAT.store(self.client_repeat, Relaxed);
+    }
+}
+
 /// `OtherParams.advert_loc_policy` — share this node's position in adverts.
 pub static ADVERT_LOC_POLICY: AtomicBool = AtomicBool::new(false);
 /// `OtherParams.multi_acks` — number of aggregated ACKs (1 or 2).
@@ -318,7 +338,7 @@ pub static ADVERT_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::
 pub static LORA_RADIO_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired by `persister::lora_radio_loop` after a successful flash write
-/// of the new radio params.  Consumed by `meshcore::run_meshcore_listener`,
+/// of the new radio params or the boost-RX flag.  Consumed by `meshcore::run_meshcore_listener`,
 /// which puts the SX1262 into standby, calls `reconfigure_radio`, and
 /// resumes RX.  Decoupling this from `LORA_RADIO_CHANGED_SIGNAL` is
 /// required because `embassy_sync::signal::Signal` only wakes a single
@@ -346,8 +366,8 @@ pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// One-shot request for the next EPD refresh to use the slow full
-/// waveform (`ssd1675::UpdateMode::Mode2`) instead of the fast LUT
-/// (`ssd1675::UpdateMode::Mode1`).  The display loop in `embassy.rs`
+/// tri-colour waveform (`RefreshMode::Full`) instead of the fast partial
+/// update (`RefreshMode::Fast`).  The display loop in `embassy.rs`
 /// `swap`s the flag back to `false` after consuming it, so a mini-game
 /// can simply set this to `true` on close to clear residual ghosting
 /// from its many fast updates in one full-cycle refresh.
@@ -363,6 +383,12 @@ pub static FORCE_FLUSH_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// When true, #blinkme channel LED commands are ignored.
 pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);
+
+/// When true, incoming region-scoped (TransportFlood) packets whose transport
+/// code does not match our flood-scope key are dropped.  When false (default)
+/// they are still shown, but never relayed by client-repeat.  Toggled from the
+/// MeshCore → Region filter menu entry.
+pub static REGION_FILTER: AtomicBool = AtomicBool::new(false);
 
 /// When true, the pet severity-change buzzer alert is suppressed.
 /// Toggled from the Bornagotchi → Mute menu entry.
@@ -455,6 +481,8 @@ pub fn set_wall_clock(unix_secs: u32) {
             ticks_base: embassy_time::Instant::now().as_ticks(),
         });
     });
+    // First clock of the boot: let the pet catch up on the off-time.
+    game::lifecycle::on_wall_clock_set(unix_secs);
 }
 
 /// Latched once the BLE companion has set the wall clock via
@@ -479,30 +507,38 @@ pub fn unix_now() -> Option<u32> {
     })
 }
 
+/// Like [`unix_now`], but strictly increasing across calls (the reference's
+/// `getCurrentTimeUnique`), so back-to-back CLI commands never reuse a
+/// timestamp and trip the receiver's replay protection.
+#[cfg(feature = "embassy-core")]
+pub fn unix_now_unique() -> Option<u32> {
+    static LAST_UNIQUE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let now = unix_now()?;
+    let prev = LAST_UNIQUE
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+            Some(if now <= last { last + 1 } else { now })
+        })
+        .unwrap_or(0);
+    Some(if now <= prev { prev + 1 } else { now })
+}
+
+/// Maximum node-name length in bytes (MeshCore `node_name[32] - 1`).
+pub const MAX_NODE_NAME: usize = 31;
+
 /// MeshCore node name cached from KV for synchronous access by the display
 /// renderer. Populated by the BLE task at startup (after reading from flash)
 /// and on every SET_ADVERT_NAME update.  Empty until the BLE task has
 /// initialized.
-#[cfg(feature = "embassy-core")]
-pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31>>> =
-    Mutex::new(RefCell::new(heapless::String::new()));
-
-#[cfg(feature = "simulator")]
-pub static NODE_NAME: std::sync::Mutex<RefCell<heapless::String<31>>> =
-    std::sync::Mutex::new(RefCell::new(heapless::String::new()));
+pub static NODE_NAME: sync::SharedCell<heapless::String<MAX_NODE_NAME>> =
+    sync::SharedCell::new(heapless::String::new());
 
 /// This badge's Ed25519 public key, populated once at boot by
 /// `bin/embassy.rs` after `device_identity::load_or_create()` completes.
 /// Read by the "My QR" screen to build the meshcore contact URL; all zeros
 /// before mesh init runs (the QR screen treats that as "key not ready yet"
 /// and shows a placeholder).
-#[cfg(all(feature = "embassy-core", feature = "mesh"))]
-pub static MY_PUB_KEY: Mutex<CriticalSectionRawMutex, RefCell<[u8; 32]>> =
-    Mutex::new(RefCell::new([0u8; 32]));
-
-#[cfg(all(feature = "simulator", feature = "mesh"))]
-pub static MY_PUB_KEY: std::sync::Mutex<RefCell<[u8; 32]>> =
-    std::sync::Mutex::new(RefCell::new([0u8; 32]));
+#[cfg(all(any(feature = "embassy-core", feature = "simulator"), feature = "mesh"))]
+pub static MY_PUB_KEY: sync::SharedCell<[u8; 32]> = sync::SharedCell::new([0u8; 32]);
 
 /// Lowercase hex of `bytes` (`n_bytes` of them) into a `String<32>`.
 /// Used to render pub_key prefixes (`pub_key[..8]` → 16-char hex) and
@@ -512,20 +548,7 @@ pub static MY_PUB_KEY: std::sync::Mutex<RefCell<[u8; 32]>> =
 pub fn hex_prefix(bytes: &[u8], n_bytes: usize) -> heapless::String<32> {
     let mut out: heapless::String<32> = heapless::String::new();
     let take = n_bytes.min(bytes.len()).min(16);
-    for &b in bytes.iter().take(take) {
-        let hi = b >> 4;
-        let lo = b & 0xF;
-        let _ = out.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        let _ = out.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
-    }
+    hex::push_lower(&mut out, &bytes[..take]);
     out
 }
 
@@ -543,81 +566,40 @@ pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
 
 /// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is
 /// ignored.
-#[cfg(feature = "embassy-core")]
 pub fn update_node_name(name: &[u8]) {
     if let Ok(s) = core::str::from_utf8(name) {
-        NODE_NAME.lock(|cell| {
-            let mut stored = cell.borrow_mut();
+        NODE_NAME.with_mut(|stored| {
             stored.clear();
             let _ = stored.push_str(truncate_str(s, 31));
         });
     }
 }
 
-/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is
-/// ignored.
-#[cfg(feature = "simulator")]
-pub fn update_node_name(name: &[u8]) {
-    if let Ok(s) = core::str::from_utf8(name) {
-        let guard = NODE_NAME.lock().unwrap();
-        let mut stored = guard.borrow_mut();
-        stored.clear();
-        let _ = stored.push_str(truncate_str(s, 31));
-    }
-}
-
 // (mesh statics moved to fw/mesh/mod.rs)
 
-// Macro for embassy - immutable access
 /// Access the shared `DisplayState` immutably.
 /// Usage: `with_display_state!(|s| s.active_screen())`
-#[cfg(feature = "embassy-core")]
 #[macro_export]
 macro_rules! with_display_state {
     ($f:expr) => {
-        DISPLAY_STATE.lock(|cell| {
-            let state = cell.borrow();
+        DISPLAY_STATE.with(|state| {
             let f: &dyn Fn(&$crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
-            f(&state)
+            f(state)
         })
     };
 }
 
 /// Access the shared `DisplayState` mutably.
 /// Usage: `with_display_state_mut!(|s| s.dispatch_button(btn))`
-#[cfg(feature = "embassy-core")]
 #[macro_export]
 macro_rules! with_display_state_mut {
     ($f:expr) => {
-        DISPLAY_STATE.lock(|cell| {
-            let mut state = cell.borrow_mut();
+        DISPLAY_STATE.with_mut(|state| {
             let f: &dyn Fn(&mut $crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ =
                 &$f;
-            f(&mut state)
+            f(state)
         })
     };
-}
-
-#[cfg(feature = "simulator")]
-#[macro_export]
-macro_rules! with_display_state {
-    ($f:expr) => {{
-        let guard = DISPLAY_STATE.lock().unwrap();
-        let state = guard.borrow();
-        let f: &dyn Fn(&$crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
-        f(&state)
-    }};
-}
-
-#[cfg(feature = "simulator")]
-#[macro_export]
-macro_rules! with_display_state_mut {
-    ($f:expr) => {{
-        let guard = DISPLAY_STATE.lock().unwrap();
-        let mut state = guard.borrow_mut();
-        let f: &dyn Fn(&mut $crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
-        f(&mut state)
-    }};
 }
 
 // Position of the animated circle
@@ -643,28 +625,17 @@ where
 {
     // Text entry: full-screen text input takes priority over all screens.
     if text_entry::is_active() {
-        #[cfg(feature = "embassy-core")]
-        return text_entry::TEXT_ENTRY.lock(|cell| {
-            let borrow = cell.borrow();
-            if let Some(ref entry) = *borrow {
+        return text_entry::TEXT_ENTRY.with(|entry| {
+            if let Some(entry) = entry {
                 text_entry::draw_text_entry(display, entry)
             } else {
                 Ok(())
             }
         });
-        #[cfg(feature = "simulator")]
-        return {
-            let guard = text_entry::TEXT_ENTRY.lock().unwrap();
-            let borrow = guard.borrow();
-            if let Some(ref entry) = *borrow {
-                text_entry::draw_text_entry(display, entry)
-            } else {
-                Ok(())
-            }
-        };
     }
 
     // Qwiic Scan: full-screen I2C bus-scanner overlay.
+    #[cfg(feature = "embassy-core")]
     if fw::qwiic::is_active() {
         return fw::qwiic::draw(display);
     }
@@ -681,10 +652,10 @@ where
         return game::traits_view::draw(display);
     }
 
-    // Health status: full-screen weight/diabetes modifiers view.
+    // Diary: the last cause events.
     #[cfg(feature = "game")]
-    if game::health_view::is_active() {
-        return game::health_view::draw(display);
+    if game::diary_view::is_active() {
+        return game::diary_view::draw(display);
     }
 
     // Friends: full-screen list of pets met over the SHDW mesh channel.
@@ -741,8 +712,8 @@ where
     // overlay, so pairing still takes priority. Transient: shown for a few
     // seconds after each key touch while locked, then hidden (keys stay
     // locked) so the screen underneath stays readable.
-    if fw::lock::overlay_visible() {
-        fw::lock::draw(display)?;
+    if lock::overlay_visible() {
+        lock::draw(display)?;
     }
 
     // BLE pairing PIN overlay — drawn last so it appears on every screen,
@@ -765,10 +736,7 @@ where
     if passkey_val == u32::MAX {
         return Ok(());
     }
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let centered = crate::ui::CENTERED;
     Rectangle::new(Point::new(20, 48), Size::new(112, 62))
         .into_styled(PrimitiveStyle::with_fill(WHITE))
         .draw(display)?;
@@ -815,11 +783,10 @@ pub fn draw_frame<D>(
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    let bottom = crate::ui::BOTTOM_LEFT;
 
     let body_start = if let Some((title, bat_prc)) = header {
-        Text::with_text_style(title, Point::new(4, 14), ui::TEXT_BOLD_BLACK, bottom)
-            .draw(display)?;
+        ui::draw_text(display, title, Point::new(4, 14), ui::TEXT_BOLD_BLACK, bottom)?;
         draw_battery_icon(display, 128, 2, *bat_prc)?;
         Rectangle::new(Point::new(0, 16), Size::new(152, 1))
             .into_styled(PrimitiveStyle::with_fill(BLACK))
@@ -834,16 +801,13 @@ where
         Rectangle::new(Point::new(0, footer_y - 2), Size::new(152, 1))
             .into_styled(PrimitiveStyle::with_fill(BLACK))
             .draw(display)?;
-        Text::with_text_style(
+        ui::draw_text(
+            display,
             text,
             Point::new(76, footer_y + 5),
             ui::TEXT_BOLD_BLACK,
-            TextStyleBuilder::new()
-                .baseline(Baseline::Middle)
-                .alignment(Alignment::Center)
-                .build(),
-        )
-        .draw(display)?;
+            crate::ui::CENTERED,
+        )?;
         footer_y - 4
     } else {
         152
@@ -859,6 +823,53 @@ where
     D: DrawTarget<Color = TriColor>,
 {
     draw_frame(display, Some((title, bat_prc)), None)?;
+    Ok(())
+}
+
+/// Width of the [`draw_battery_bar`] indicator, in pixels.
+pub const BATTERY_BAR_W: u32 = 4;
+/// Height of the [`draw_battery_bar`] indicator, in pixels.
+///
+/// Four segments of 3 px separated by three single-pixel gaps: `4*3 + 3 = 15`.
+pub const BATTERY_BAR_H: u32 = 15;
+/// Number of charge segments in [`draw_battery_bar`].
+const BATTERY_BAR_SEGMENTS: u32 = 4;
+
+/// Draw a compact vertical battery bar with its top-left corner at `(x, y)`.
+///
+/// [`BATTERY_BAR_W`]×[`BATTERY_BAR_H`] px, split into [`BATTERY_BAR_SEGMENTS`]
+/// segments that fill from the bottom up — one segment per 25 %. Any charge at
+/// all lights the first segment, so a live battery never reads as empty.
+///
+/// This is the game screen's indicator: the full [`draw_battery_icon`] is 24 px
+/// wide and crowds the game menu icon, so the game screen uses this and hugs
+/// the right edge instead.
+///
+/// Below 5 % the segments are drawn in red, matching [`draw_battery_icon`].
+///
+/// Unlit segments are left blank rather than outlined — at 4×3 px an outline
+/// leaves a 2×1 interior and reads as noise. There is also no charging
+/// indicator: the bolt [`draw_battery_icon`] draws needs more width than this
+/// has.
+pub fn draw_battery_bar<D>(display: &mut D, x: i32, y: i32, pct: u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let color = if pct < 5 { RED } else { BLACK };
+    // Segment height, derived so segments + 1 px gaps exactly fill the bar.
+    let gaps = BATTERY_BAR_SEGMENTS - 1;
+    let seg_h = (BATTERY_BAR_H - gaps) / BATTERY_BAR_SEGMENTS;
+
+    // Round up, so 1 % lights one segment and only 0 % reads as empty.
+    let lit = (pct.min(100) as u32 * BATTERY_BAR_SEGMENTS).div_ceil(100);
+
+    for seg in 0..lit {
+        // seg 0 is the bottom segment; walk upward from the bar's base.
+        let seg_y = y + (BATTERY_BAR_H - (seg + 1) * seg_h - seg) as i32;
+        Rectangle::new(Point::new(x, seg_y), Size::new(BATTERY_BAR_W, seg_h))
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(display)?;
+    }
     Ok(())
 }
 
@@ -901,10 +912,7 @@ where
     // drawn as inverted pixels — WHITE where fill is BLACK, BLACK
     // where the interior is empty (WHITE).  Visible regardless of
     // current charge level.
-    #[cfg(feature = "embassy-core")]
-    let charging = fw::battery::is_charging();
-    #[cfg(not(feature = "embassy-core"))]
-    let charging = false;
+    let charging = platform::is_charging();
 
     if charging {
         // 4×8 lightning bolt mask — top bit = leftmost pixel.
@@ -932,6 +940,12 @@ where
     Ok(())
 }
 
+/// True while the About screen is open.
+#[cfg(feature = "embassy-core")]
+pub fn about_active() -> bool {
+    with_display_state!(|state| state.current_screen().is_about())
+}
+
 fn draw_screen_main<D>(display: &mut D, _health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -942,6 +956,8 @@ where
         (s.is_about(), s.about_page())
     });
     if about {
+        #[cfg(feature = "embassy-core")]
+        fw::led::ABOUT_RAINBOW.signal(());
         return menu::draw_about(display, about_page);
     }
 
@@ -960,24 +976,8 @@ where
         return menu::draw_confirm(display, prompt);
     }
 
-    // Build the device ID string for the header title.
-    #[cfg(feature = "embassy-core")]
-    let device_id = {
-        let id = fw::device_id::get_bytes();
-        let mut s: heapless::String<15> = heapless::String::new();
-        let _ = s.push_str("Cyber ");
-        // Æ in UTF-8
-        let _ = s.push('\u{00C6}');
-        let _ = s.push_str("gg ");
-        let _ = s.push_str(core::str::from_utf8(&id).unwrap_or("????"));
-        s
-    };
-    #[cfg(not(feature = "embassy-core"))]
-    let device_id: heapless::String<15> = {
-        let mut s = heapless::String::new();
-        let _ = s.push_str("Cyber \u{00C6}gg A3F7");
-        s
-    };
+    // Device label ("Cyber Ægg <id>") for the header title.
+    let device_id = platform::device_label();
 
     // Build the footer: node name + time
     #[cfg(feature = "embassy-core")]
@@ -990,7 +990,7 @@ where
             }
         });
         if let Some(unix) = unix_now() {
-            let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
+            let offset_secs = tz_offset_secs();
             let local = (unix as i64 + offset_secs) as u32;
             let h = (local % 86400) / 3600;
             let m = (local % 3600) / 60;
@@ -1041,10 +1041,7 @@ fn draw_screen_lora<D>(display: &mut D, _bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let center = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let center = crate::ui::CENTERED;
     Text::with_text_style(
         "Channels (no mesh)",
         Point::new(76, 76),

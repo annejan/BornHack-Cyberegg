@@ -25,6 +25,9 @@
 //! let mv = battery::read_mv();
 //! ```
 
+// Shared raw-to-mV formula (also used by the factory test and hwtest).
+include!("vbat_scale.rs");
+
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
@@ -112,8 +115,7 @@ impl BatteryMonitor {
         // Disable the divider to save power.
         self.vbat_rd.set_high();
 
-        let raw = sum / 3;
-        ((raw * 10800) / 4096) as u16
+        vbat_raw_to_mv(sum / 3)
     }
 }
 

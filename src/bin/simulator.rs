@@ -3,39 +3,12 @@ extern crate embedded_graphics as eg;
 extern crate embedded_graphics_simulator as simulator;
 
 use bornhack_aegg::menu::ButtonId;
-use bornhack_aegg::{DISPLAY_STATE, TriColor, draw_graphics, with_display_state_mut};
+use bornhack_aegg::draw_graphics;
+use bornhack_aegg::sim_support::{self, TriColorDisplay, install_pets_from_repo_cfg};
 use eg::pixelcolor::Rgb888;
 use eg::prelude::*;
 use embedded_graphics_simulator::sdl2::Keycode;
 use embedded_graphics_simulator::{OutputSettings, SimulatorDisplay, SimulatorEvent, Window};
-
-/// Adapter that translates TriColor draw calls to an Rgb888 SimulatorDisplay.
-struct TriColorDisplay<'a>(&'a mut SimulatorDisplay<Rgb888>);
-
-impl DrawTarget for TriColorDisplay<'_> {
-    type Color = TriColor;
-    type Error = core::convert::Infallible;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<TriColor>>,
-    {
-        self.0
-            .draw_iter(
-                pixels
-                    .into_iter()
-                    .map(|Pixel(p, c)| Pixel(p, Rgb888::from(c))),
-            )
-            .unwrap();
-        Ok(())
-    }
-}
-
-impl OriginDimensions for TriColorDisplay<'_> {
-    fn size(&self) -> Size {
-        self.0.size()
-    }
-}
 
 /// Map SDL keycode to ButtonId.
 ///
@@ -60,6 +33,9 @@ fn key_to_button(k: Keycode) -> Option<ButtonId> {
 fn main() -> Result<(), core::convert::Infallible> {
     use std::time::{Duration, Instant};
 
+    #[cfg(feature = "game")]
+    install_pets_from_repo_cfg();
+
     let mut display: SimulatorDisplay<Rgb888> = SimulatorDisplay::new(Size::new(152, 152));
     let mut window = Window::new("BornPets simulator", &OutputSettings::default());
 
@@ -74,6 +50,8 @@ fn main() -> Result<(), core::convert::Infallible> {
     let frame_period = Duration::from_millis(200);
     let mut next_frame = Instant::now() + frame_period;
     let mut need_redraw = true;
+    // F12 saves the live screen for the guide: how many have been saved.
+    let mut manual_shots = 0u32;
 
     'running: loop {
         let now = Instant::now();
@@ -105,6 +83,26 @@ fn main() -> Result<(), core::convert::Infallible> {
         for event in window.events() {
             match event {
                 SimulatorEvent::Quit => break 'running,
+                SimulatorEvent::KeyDown {
+                    keycode: Keycode::F12,
+                    ..
+                } => {
+                    let path = std::path::PathBuf::from(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/guide/build/screens"
+                    ))
+                    .join(format!("manual-{manual_shots}.png"));
+                    let saved = std::fs::create_dir_all(path.parent().unwrap())
+                        .map_err(|e| e.to_string())
+                        .and_then(|()| sim_support::save_png(&display, &path));
+                    match saved {
+                        Ok(()) => {
+                            println!("saved {}", path.display());
+                            manual_shots += 1;
+                        }
+                        Err(e) => eprintln!("F12: {e}"),
+                    }
+                }
                 SimulatorEvent::KeyDown { keycode, .. } => {
                     if let Some(btn) = key_to_button(keycode) {
                         handle_button(btn);
@@ -122,15 +120,7 @@ fn main() -> Result<(), core::convert::Infallible> {
     Ok(())
 }
 
-/// Route a button press: game first (if active), then menu.
+/// Route a button press: flush combo, game (if active), then menu.
 fn handle_button(btn: ButtonId) {
-    #[cfg(feature = "game")]
-    {
-        let on_game =
-            bornhack_aegg::with_display_state!(|s| s.active_screen()) == bornhack_aegg::SCREEN_GAME;
-        if on_game && bornhack_aegg::game::input::dispatch(btn) {
-            return;
-        }
-    }
-    with_display_state_mut!(|s| s.dispatch_button(btn));
+    bornhack_aegg::menu::dispatch_press(btn);
 }

@@ -137,6 +137,7 @@ dependencies = [
  "embedded-hal-bus",
  "fasttime",
  "heapless 0.9.3",
+ "image",
  "meshcore",
  "meshcore-companion",
  "nrf-mpsl",

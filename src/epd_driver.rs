@@ -51,6 +51,22 @@ pub trait EpdDriver: DrawTarget<Color = EpdColor> + OriginDimensions {
     /// # Errors
     /// Propagates the underlying bus error.
     async fn deep_sleep(&mut self) -> Result<(), <Self as EpdDriver>::Error>;
+
+    /// Idle time (ms) after the last completed refresh at which
+    /// [`settle`](Self::settle) should run, or `None` when nothing waits for
+    /// one. A driver whose fast path can leave pixels short of saturation (the
+    /// SSD1680 preview) returns `Some`; the default has nothing to settle.
+    fn settle_due_in_ms(&self) -> Option<u32> {
+        None
+    }
+
+    /// Finish any pixels a fast path left short of saturation. Default: no-op.
+    ///
+    /// # Errors
+    /// Propagates the underlying bus error.
+    async fn settle(&mut self) -> Result<(), <Self as EpdDriver>::Error> {
+        Ok(())
+    }
 }
 
 /// Raw access to a driver's B/W and Red planes for the direct-write sprite/PCX

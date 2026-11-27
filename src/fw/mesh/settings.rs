@@ -20,6 +20,7 @@
 //! | `"other"`        | manual_add, telemetry, advert_loc, multi_acks  | 6     |
 //! | `"autoadd"`      | autoadd_config + autoadd_max_hops              | 2     |
 //! | `"path_hash"`    | path_hash_mode (0/1/2)                         | 1     |
+//! | `"rx_save"`      | RX power save on/off (duty-cycled receive)     | 1     |
 //! | `"epd_lut"`      | EPD LUT cycle-duration scale override          | 1     |
 //!
 //! # Companion protocol mapping
@@ -42,9 +43,13 @@ use crate::fw::kv;
 // Shared KV namespace
 // ---------------------------------------------------------------------------
 
-fn ns() -> kv::KvNamespace {
-    kv::namespace("settings")
-}
+use crate::fw::settings::{get_flag, get_u8, ns, set_flag, set_u8};
+// Device-wide settings live in `fw::settings` (available without `mesh`);
+// re-exported so mesh callers keep using `settings::get_timezone` etc.
+pub use crate::fw::settings::{
+    get_epd_lut_speed, get_epd_temp_bias_c10, get_timezone, set_epd_lut_speed,
+    set_epd_temp_bias_c10, set_timezone,
+};
 
 // ---------------------------------------------------------------------------
 // Device identity  (Ed25519 keypair)
@@ -73,8 +78,7 @@ pub async fn delete_identity() {
 // Node name  (CMD_SET_ADVERT_NAME  0x08)
 // ---------------------------------------------------------------------------
 
-/// Maximum node name length in bytes (matches MeshCore `node_name[32] - 1`).
-pub const MAX_NODE_NAME: usize = 31;
+pub use crate::MAX_NODE_NAME;
 
 /// Read the persisted node name into `buf`.
 ///
@@ -195,15 +199,26 @@ pub async fn set_position(p: Position) -> Result<(), kv::KvError> {
 // ---------------------------------------------------------------------------
 
 pub async fn get_ignore_blink() -> bool {
-    let mut b = [0u8; 1];
-    match ns().get("no_blink", &mut b).await {
-        Ok(1) => b[0] != 0,
-        _ => false,
-    }
+    get_flag("no_blink", false).await
 }
 
 pub async fn set_ignore_blink(ignore: bool) -> Result<(), kv::KvError> {
-    ns().set("no_blink", &[ignore as u8], true).await
+    set_flag("no_blink", ignore).await
+}
+
+// ---------------------------------------------------------------------------
+// Region filter  (menu only — not part of the companion protocol)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted incoming region-filter flag.  Returns `false`
+/// (accept other regions) if not stored.
+pub async fn get_region_filter() -> bool {
+    get_flag("rgn_filt", false).await
+}
+
+/// Persist the incoming region-filter flag to flash.
+pub async fn set_region_filter(on: bool) -> Result<(), kv::KvError> {
+    set_flag("rgn_filt", on).await
 }
 
 // ---------------------------------------------------------------------------
@@ -213,16 +228,12 @@ pub async fn set_ignore_blink(ignore: bool) -> Result<(), kv::KvError> {
 /// Read the persisted LoRa enabled flag.  Returns `true` (enabled) if not
 /// stored.
 pub async fn get_lora_enabled() -> bool {
-    let mut b = [0u8; 1];
-    match ns().get("lora_en", &mut b).await {
-        Ok(1) => b[0] != 0,
-        _ => true,
-    }
+    get_flag("lora_en", true).await
 }
 
 /// Persist the LoRa enabled flag to flash.
 pub async fn set_lora_enabled(enabled: bool) -> Result<(), kv::KvError> {
-    ns().set("lora_en", &[enabled as u8], true).await
+    set_flag("lora_en", enabled).await
 }
 
 // ---------------------------------------------------------------------------
@@ -232,16 +243,12 @@ pub async fn set_lora_enabled(enabled: bool) -> Result<(), kv::KvError> {
 /// Read the persisted BLE enabled flag.  Returns `true` (enabled) if not
 /// stored.
 pub async fn get_ble_enabled() -> bool {
-    let mut b = [0u8; 1];
-    match ns().get("ble_en", &mut b).await {
-        Ok(1) => b[0] != 0,
-        _ => true,
-    }
+    get_flag("ble_en", true).await
 }
 
 /// Persist the BLE enabled flag to flash.
 pub async fn set_ble_enabled(enabled: bool) -> Result<(), kv::KvError> {
-    ns().set("ble_en", &[enabled as u8], true).await
+    set_flag("ble_en", enabled).await
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +313,32 @@ pub struct OtherParams {
 }
 
 impl OtherParams {
+    /// Overlay the live atomics (`ADVERT_LOC_POLICY`, `MULTI_ACKS`,
+    /// `TELEMETRY_MODE_BASE`) onto this struct. `manual_add_contacts` is not
+    /// held in an atomic and is left untouched.
+    pub fn overlay_live(&mut self) {
+        use core::sync::atomic::Ordering::Relaxed;
+        self.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
+        self.multi_acks = crate::MULTI_ACKS.load(Relaxed);
+        self.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
+    }
+
+    /// Write the live atomics from this struct. `multi_acks` is clamped into
+    /// the menu-exposed range (0 -> 1, max 2) and `telemetry_mode_base` to
+    /// 0..=2. Only the base telemetry mode is exposed on the badge; loc/env
+    /// stay 0 (no GPS, no env sensors).
+    pub fn store_live(&self) {
+        use core::sync::atomic::Ordering::Relaxed;
+        crate::ADVERT_LOC_POLICY.store(self.advert_loc_policy != 0, Relaxed);
+        let ma = if self.multi_acks == 0 {
+            1
+        } else {
+            self.multi_acks.min(2)
+        };
+        crate::MULTI_ACKS.store(ma, Relaxed);
+        crate::TELEMETRY_MODE_BASE.store(self.telemetry_mode_base.min(2), Relaxed);
+    }
+
     fn to_bytes(self) -> [u8; 6] {
         [
             self.manual_add_contacts,
@@ -363,28 +396,6 @@ pub async fn set_autoadd_config(config: u8, max_hops: u8) -> Result<(), kv::KvEr
 // Boost RX gain  (menu toggle, persisted locally)
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Timezone offset  (menu stepper, persisted locally)
-// ---------------------------------------------------------------------------
-
-/// Read the persisted UTC hour offset (-12..=+14).  Returns +2 (CEST,
-/// Europe/Copenhagen summer) when no value has been stored yet — most
-/// badges ship into a Bornhack-style summer venue, so this saves the
-/// user from immediately having to flip Settings → Timezone before the
-/// clock face shows the right time.
-pub async fn get_timezone() -> i8 {
-    let mut b = [0u8; 1];
-    match ns().get("tz", &mut b).await {
-        Ok(1) => b[0] as i8,
-        _ => 2,
-    }
-}
-
-/// Persist the UTC hour offset to flash.
-pub async fn set_timezone(offset: i8) -> Result<(), kv::KvError> {
-    ns().set("tz", &[offset as u8], true).await
-}
-
 /// Read the persisted boost-RX flag.
 ///
 /// Returns `true` on first boot (no KV value yet) to match MeshCore 1.15.0's
@@ -392,16 +403,27 @@ pub async fn set_timezone(offset: i8) -> Result<(), kv::KvError> {
 /// user toggles the menu setting at least once, the persisted value wins
 /// — even an explicit `false` sticks across reboots.
 pub async fn get_boost_rx() -> bool {
-    let mut b = [0u8; 1];
-    match ns().get("boost_rx", &mut b).await {
-        Ok(1) => b[0] != 0,
-        _ => true,
-    }
+    get_flag("boost_rx", true).await
 }
 
 /// Persist the boost-RX flag to flash.
 pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
-    ns().set("boost_rx", &[enabled as u8], true).await
+    set_flag("boost_rx", enabled).await
+}
+
+// ---------------------------------------------------------------------------
+// RX power save  (menu toggle, persisted locally)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted receive power-save flag. Returns `false` (continuous
+/// RX) on first boot.
+pub async fn get_rx_power_save() -> bool {
+    get_flag("rx_save", false).await
+}
+
+/// Persist the receive power-save flag to flash.
+pub async fn set_rx_power_save(on: bool) -> Result<(), kv::KvError> {
+    set_flag("rx_save", on).await
 }
 
 // ---------------------------------------------------------------------------
@@ -419,11 +441,18 @@ pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
 // The companion `SET_FLOOD_SCOPE` (0x36) command lets ops re-key or clear
 // the scope at runtime, and the change is persisted so it survives reboots.
 
-/// First-boot default flood-scope key: SHA-256-truncated from `"dk-bornhack"`.
+/// First-boot default flood-scope key for the `dk-bornhack` region.
 /// Derived on demand — no flash write at first boot.  Used only when neither
 /// the MeshCore-1.15 `def_scope` slot nor a phone-set scope is present.
+///
+/// Uses [`meshcore::packet::region_key`], i.e. `SHA-256("#dk-bornhack")[0..16]`.
+/// This previously called `channel::key_from_hashtag("dk-bornhack")`, which
+/// hashes the bare name (and lowercases it) — a different key, so every
+/// region-scoped flood packet carried a transport code no reference node could
+/// match, and every inbound one was dropped as a region mismatch. Region keys
+/// and channel keys are separate derivations; do not swap them back.
 pub fn dk_bornhack_default_scope() -> [u8; 16] {
-    meshcore::channel::key_from_hashtag("dk-bornhack")
+    meshcore::packet::region_key("dk-bornhack")
 }
 
 // ---------------------------------------------------------------------------
@@ -530,50 +559,10 @@ pub async fn set_tuning_params(p: TuningParams) -> Result<(), kv::KvError> {
 /// Read the path hash mode (0 = 1-byte hashes, 1/2 = extended).  Returns 0 if
 /// not stored.
 pub async fn get_path_hash_mode() -> u8 {
-    let mut b = [0u8; 1];
-    match ns().get("path_hash", &mut b).await {
-        Ok(1) => b[0],
-        _ => 0,
-    }
+    get_u8("path_hash").await.unwrap_or(0)
 }
 
 /// Persist the path hash mode to flash.
 pub async fn set_path_hash_mode(mode: u8) -> Result<(), kv::KvError> {
-    ns().set("path_hash", &[mode], true).await
-}
-
-// ---------------------------------------------------------------------------
-// EPD LUT cycle-duration scale (per-refresh patching of SSD1675/B OTP LUT)
-// ---------------------------------------------------------------------------
-
-/// Read the persisted EPD LUT cycle-duration scale override, or `None` if
-/// the user has never adjusted it (caller should fall back to the
-/// per-variant default in the ssd1675 driver).
-pub async fn get_epd_lut_speed() -> Option<u8> {
-    let mut b = [0u8; 1];
-    match ns().get("epd_lut", &mut b).await {
-        Ok(1) => Some(b[0]),
-        _ => None,
-    }
-}
-
-/// Persist the EPD LUT cycle-duration scale (`0..=200`, `100` = OEM speed,
-/// `0` = no delay).
-pub async fn set_epd_lut_speed(scale: u8) -> Result<(), kv::KvError> {
-    ns().set("epd_lut", &[scale], true).await
-}
-
-/// Read the persisted EPD temperature-bias override (°C × 10, range
-/// ±50), or `None` if the user has never adjusted it.
-pub async fn get_epd_temp_bias_c10() -> Option<i8> {
-    let mut b = [0u8; 1];
-    match ns().get("epd_tb", &mut b).await {
-        Ok(1) => Some(b[0] as i8),
-        _ => None,
-    }
-}
-
-/// Persist the EPD temperature-bias override (°C × 10).
-pub async fn set_epd_temp_bias_c10(bias: i8) -> Result<(), kv::KvError> {
-    ns().set("epd_tb", &[bias as u8], true).await
+    set_u8("path_hash", mode).await
 }

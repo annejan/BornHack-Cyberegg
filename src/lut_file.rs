@@ -246,9 +246,9 @@ pub fn validate_bands(data: &[u8]) -> Result<(), LutCfgError> {
 /// incomplete line, which the caller carries over into the next read
 /// chunk. Building block for streaming a file through a scratch buffer
 /// smaller than the file.
-pub fn drain_lines<F>(buf: &[u8], f: &mut F) -> Result<usize, LutCfgError>
+pub fn drain_lines<E, F>(buf: &[u8], f: &mut F) -> Result<usize, E>
 where
-    F: FnMut(&[u8]) -> Result<(), LutCfgError>,
+    F: FnMut(&[u8]) -> Result<(), E>,
 {
     let mut start = 0;
     while let Some(pos) = buf[start..].iter().position(|&b| b == b'\n') {
@@ -263,14 +263,9 @@ where
 // ---------------------------------------------------------------------------
 
 /// Split one line into `(key, value)`, or `None` for comments / blanks /
-/// lines without `=`.
+/// lines without `=`. `#` only starts a comment at the start of a line here.
 fn kv_of_line(line: &[u8]) -> Option<(&[u8], &[u8])> {
-    let line = trim(line);
-    if line.is_empty() || line[0] == b'#' {
-        return None;
-    }
-    let eq = line.iter().position(|&b| b == b'=')?;
-    Some((trim(&line[..eq]), trim(&line[eq + 1..])))
+    crate::cfg_text::kv_of_line(line, false)
 }
 
 fn parse_variant(val: &[u8]) -> Result<LutVariant, LutCfgError> {
@@ -290,37 +285,14 @@ fn decode_exact(src: &[u8], dst: &mut [u8]) -> Result<(), LutCfgError> {
         return Err(LutCfgError::WrongLen);
     }
     for (i, out) in dst.iter_mut().enumerate() {
-        let hi = hex_val(src[2 * i]).ok_or(LutCfgError::BadHex)?;
-        let lo = hex_val(src[2 * i + 1]).ok_or(LutCfgError::BadHex)?;
+        let hi = crate::hex::val(src[2 * i]).ok_or(LutCfgError::BadHex)?;
+        let lo = crate::hex::val(src[2 * i + 1]).ok_or(LutCfgError::BadHex)?;
         *out = (hi << 4) | lo;
     }
     Ok(())
 }
 
-fn hex_val(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
-}
-
-/// Parse a non-empty ASCII decimal into a `u32`, or `None` on any
-/// non-digit / empty / overflow.
-fn parse_dec(s: &[u8]) -> Option<u32> {
-    if s.is_empty() {
-        return None;
-    }
-    let mut v: u32 = 0;
-    for &c in s {
-        if !c.is_ascii_digit() {
-            return None;
-        }
-        v = v.checked_mul(10)?.checked_add((c - b'0') as u32)?;
-    }
-    Some(v)
-}
+use crate::cfg_text::parse_dec_u32 as parse_dec;
 
 fn u8_in_range(v: u32) -> Option<u8> {
     (v <= 255).then_some(v as u8)
@@ -333,25 +305,6 @@ fn strip_prefix_ci<'a>(s: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
     } else {
         None
     }
-}
-
-/// Trim leading/trailing ASCII whitespace (incl. a trailing `\r`).
-fn trim(mut s: &[u8]) -> &[u8] {
-    while let [first, rest @ ..] = s {
-        if first.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    while let [rest @ .., last] = s {
-        if last.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    s
 }
 
 #[cfg(test)]
@@ -508,7 +461,7 @@ mod tests {
     /// Push `data` through the scanners the way the firmware's chunked
     /// file reader does: read `chunk`-sized pieces into a window buffer,
     /// drain complete lines, carry the partial tail over. Mirrors
-    /// `epd::for_each_file_line`.
+    /// `fat12::for_each_line`.
     fn stream_chunked<F>(data: &[u8], window: usize, chunk: usize, f: &mut F)
     where
         F: FnMut(&[u8]) -> Result<(), LutCfgError>,
@@ -615,7 +568,7 @@ mod tests {
         let mut seen: std::vec::Vec<std::vec::Vec<u8>> = vec![];
         let consumed = drain_lines(b"a=1\nb=2\npartial", &mut |l: &[u8]| {
             seen.push(l.to_vec());
-            Ok(())
+            Ok::<(), LutCfgError>(())
         })
         .unwrap();
         assert_eq!(consumed, 8);

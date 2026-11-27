@@ -7,6 +7,7 @@ docs
 .claude
 CLAUDE.MD
 *.txt
+!assets/asset-changes.txt
 .rules
 MERGE_NOTES.md
 
@@ -14,3 +15,12 @@ MERGE_NOTES.md
 firmware/*
 !firmware/.gitkeep
 !firmware/README.md
+
+# Player's guide build output (scripts/build_guide.py)
+/guide/build/
+/guide/out/
+!/guide/fonts/*.txt
+
+# Python bytecode
+__pycache__/
+*.pyc

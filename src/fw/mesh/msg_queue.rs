@@ -119,10 +119,8 @@ fn advance(idx: u16) -> u16 {
 /// Format a slot index as a 2-character lowercase hex string.
 fn slot_key(idx: u16) -> heapless::String<2> {
     let slot = idx as u8; // idx is always < 256
-    let nibble = |n: u8| -> char { (if n < 10 { b'0' + n } else { b'a' + n - 10 }) as char };
     let mut s = heapless::String::<2>::new();
-    s.push(nibble(slot >> 4)).ok();
-    s.push(nibble(slot & 0xf)).ok();
+    crate::hex::push_lower(&mut s, &[slot]);
     s
 }
 

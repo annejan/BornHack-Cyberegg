@@ -24,7 +24,8 @@ BL_ELF = bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
         sim flash flash-release flash-release-debug run-release-debug \
         flash-game flash-mesh \
         monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
-        fw-watch flash-watch fw-bin-release bl-bin
+        fw-watch flash-watch fw-bin-release bl-bin \
+        guide guide-pdf readme-shots
 
 # ---------- Full build (game + mesh) ----------
 
@@ -297,3 +298,12 @@ fw-bin-release:
 	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
 	@echo "app bin (pass to the DFU flasher):       $(abspath $(FW_OUT)/cyber-aegg.bin)"
 	@echo "app hex (nrfjprog / nRF Connect Prog.):  $(abspath $(FW_OUT)/cyber-aegg.hex)"
+
+# ---------- Player's guide (Typst PDF, see scripts/build_guide.py) ----------
+
+guide: ; python3 scripts/build_guide.py
+
+guide-pdf: ; python3 scripts/build_guide.py --pdf-only
+
+# README screenshots (screenshots/, see scripts/readme_shots.py)
+readme-shots: ; python3 scripts/readme_shots.py

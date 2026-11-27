@@ -1,13 +1,100 @@
-use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::{Text};
 
-use crate::{BLACK, RED, TriColor, WHITE};
+use crate::{BLACK, TriColor, WHITE};
+
+// ── Boilerplate macros ──────────────────────────────────────────────────────
+
+/// Generate the `label` / `action` pair for an `AtomicBool` menu toggle.
+/// `$when_true` / `$when_false` are the label texts for the atomic being
+/// `true` / `false`.  The optional `signal = path, cfg = meta` pair is sent
+/// (under that cfg) after the store.
+macro_rules! bool_toggle {
+    (
+        $label:ident, $action:ident, $atomic:path, $when_true:expr, $when_false:expr
+        $(, signal = $sig:path, cfg = $cfg:meta)?
+    ) => {
+        fn $label() -> &'static str {
+            if $atomic.load(Ordering::Relaxed) {
+                $when_true
+            } else {
+                $when_false
+            }
+        }
+
+        fn $action() {
+            let cur = $atomic.load(Ordering::Relaxed);
+            $atomic.store(!cur, Ordering::Relaxed);
+            $(
+                #[cfg($cfg)]
+                $sig.signal(());
+            )?
+        }
+    };
+}
+
+/// Generate the `inc` / `dec` actions for an integer atomic that moves by
+/// `step` and does nothing (no store, no signal) once `min` / `max` would be
+/// crossed.  The optional `signal = path, cfg = meta` pair is sent (under that
+/// cfg) after a store.
+macro_rules! atomic_stepper {
+    (
+        $inc:ident, $dec:ident, $atomic:path, min = $min:expr, max = $max:expr, step = $step:expr
+        $(, signal = $sig:path, cfg = $cfg:meta)?
+    ) => {
+        fn $inc() {
+            let v = $atomic.load(Ordering::Relaxed);
+            if let Some(n) = v.checked_add($step).filter(|&n| n <= $max) {
+                $atomic.store(n, Ordering::Relaxed);
+                $(
+                    #[cfg($cfg)]
+                    $sig.signal(());
+                )?
+            }
+        }
+
+        #[allow(unused_comparisons)] // `min = 0` on an unsigned atomic
+        fn $dec() {
+            let v = $atomic.load(Ordering::Relaxed);
+            if let Some(n) = v.checked_sub($step).filter(|&n| n >= $min) {
+                $atomic.store(n, Ordering::Relaxed);
+                $(
+                    #[cfg($cfg)]
+                    $sig.signal(());
+                )?
+            }
+        }
+    };
+}
+
+// ── Button dispatch ─────────────────────────────────────────────────────────
+
+/// Route one (already lock-filtered) button press: the hidden display-flush
+/// combo first, then the game screen (when active), then the menu. Shared by
+/// the firmware button task and the simulator. In the simulator the flush
+/// combo is recognised (and its final press swallowed) but nothing consumes
+/// `FORCE_FLUSH_PENDING`, as there is no e-paper to de-ghost.
+pub fn dispatch_press(btn: ButtonId) {
+    if crate::display_flush::feed(btn) {
+        crate::FORCE_FLUSH_PENDING.store(true, Ordering::Relaxed);
+        return;
+    }
+
+    #[cfg(feature = "game")]
+    {
+        let on_game = DISPLAY_STATE.with(|s| s.active_screen()) == crate::SCREEN_GAME;
+        if on_game && crate::game::input::dispatch(btn) {
+            return;
+        }
+    }
+
+    DISPLAY_STATE.with_mut(|s| s.dispatch_button(btn));
+}
 
 // ── Screen identifiers ──────────────────────────────────────────────────────
 
@@ -534,38 +621,22 @@ impl<const M: usize> DisplayState<M> {
         // Text entry intercepts all input when active.
         if crate::text_entry::is_active() {
             let done = {
-                #[cfg(feature = "embassy-core")]
-                {
-                    crate::text_entry::TEXT_ENTRY.lock(|cell| {
-                        let mut borrow = cell.borrow_mut();
-                        if let Some(ref mut entry) = *borrow {
-                            entry.dispatch(btn)
-                        } else {
-                            false
-                        }
-                    })
-                }
-                #[cfg(feature = "simulator")]
-                {
-                    let guard = crate::text_entry::TEXT_ENTRY.lock().unwrap();
-                    let mut borrow = guard.borrow_mut();
-                    if let Some(ref mut entry) = *borrow {
+                crate::text_entry::TEXT_ENTRY.with_mut(|entry| {
+                    if let Some(entry) = entry {
                         entry.dispatch(btn)
                     } else {
                         false
                     }
-                }
+                })
             };
             if done {
-                #[cfg(feature = "embassy-core")]
                 crate::text_entry::TEXT_ENTRY.lock(|cell| cell.replace(None));
-                #[cfg(feature = "simulator")]
-                crate::text_entry::TEXT_ENTRY.lock().unwrap().replace(None);
             }
             return;
         }
 
         // Qwiic Scan intercepts all input when active — any button closes it.
+        #[cfg(feature = "embassy-core")]
         if crate::fw::qwiic::is_active() {
             crate::fw::qwiic::close();
             crate::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
@@ -745,20 +816,27 @@ pub fn request_screen(screen: u8) {
 // ── Action / label helpers
 // ────────────────────────────────────────────────────
 
-fn label_boost_rx() -> &'static str {
-    if crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed) {
-        "Boost RX: ON"
-    } else {
-        "Boost RX: OFF"
-    }
-}
+bool_toggle!(
+    label_boost_rx,
+    action_boost_rx,
+    crate::BOOSTED_RX_GAIN,
+    "Boost RX: ON",
+    "Boost RX: OFF",
+    signal = crate::BOOST_RX_CHANGED_SIGNAL,
+    cfg = feature = "mesh"
+);
 
-fn action_boost_rx() {
-    let current = crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed);
-    crate::BOOSTED_RX_GAIN.store(!current, Ordering::Relaxed);
-    #[cfg(feature = "mesh")]
-    crate::BOOST_RX_CHANGED_SIGNAL.signal(());
-}
+// Duty-cycled receive, sized for MeshCore 1.16+ senders (32-symbol preamble
+// at SF ≤ 8); continuous receive when off or above SF8.
+bool_toggle!(
+    label_rx_power_save,
+    action_rx_power_save,
+    crate::RX_POWER_SAVE,
+    "RX save: ON",
+    "RX save: OFF",
+    signal = crate::RX_POWER_SAVE_CHANGED_SIGNAL,
+    cfg = feature = "mesh"
+);
 
 fn action_reset_channels() {
     #[cfg(feature = "mesh")]
@@ -783,57 +861,40 @@ fn fmt_tx_power(buf: &mut heapless::String<24>) {
     let _ = write!(buf, "TX: {} dBm", v);
 }
 
-fn action_tx_power_inc() {
-    let v = crate::LORA_TX_POWER.load(Ordering::Relaxed);
-    if v < 22 {
-        crate::LORA_TX_POWER.store(v + 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
-    }
-}
-
-fn action_tx_power_dec() {
-    let v = crate::LORA_TX_POWER.load(Ordering::Relaxed);
-    if v > -9 {
-        crate::LORA_TX_POWER.store(v - 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
-    }
-}
+atomic_stepper!(
+    action_tx_power_inc,
+    action_tx_power_dec,
+    crate::LORA_TX_POWER,
+    min = -9,
+    max = 22,
+    step = 1,
+    signal = crate::LORA_RADIO_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
 // ── Client-repeat toggle ────────────────────────────────────────────────────
 
-fn label_client_repeat() -> &'static str {
-    if crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed) {
-        "Repeat: ON"
-    } else {
-        "Repeat: OFF"
-    }
-}
-
-fn action_client_repeat_toggle() {
-    let cur = crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed);
-    crate::LORA_CLIENT_REPEAT.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-    crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
-}
+bool_toggle!(
+    label_client_repeat,
+    action_client_repeat_toggle,
+    crate::LORA_CLIENT_REPEAT,
+    "Repeat: ON",
+    "Repeat: OFF",
+    signal = crate::LORA_RADIO_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
 // ── Share location (advert_loc_policy) ─────────────────────────────────────
 
-fn label_advert_loc() -> &'static str {
-    if crate::ADVERT_LOC_POLICY.load(Ordering::Relaxed) {
-        "Share Loc: ON"
-    } else {
-        "Share Loc: OFF"
-    }
-}
-
-fn action_advert_loc() {
-    let cur = crate::ADVERT_LOC_POLICY.load(Ordering::Relaxed);
-    crate::ADVERT_LOC_POLICY.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-    crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
-}
+bool_toggle!(
+    label_advert_loc,
+    action_advert_loc,
+    crate::ADVERT_LOC_POLICY,
+    "Share Loc: ON",
+    "Share Loc: OFF",
+    signal = crate::OTHER_PARAMS_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
 // ── Multi-ACK stepper ──────────────────────────────────────────────────────
 
@@ -844,23 +905,16 @@ fn label_multi_acks() -> &'static str {
     }
 }
 
-fn action_multi_acks_inc() {
-    let v = crate::MULTI_ACKS.load(Ordering::Relaxed);
-    if v < 2 {
-        crate::MULTI_ACKS.store(v + 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-        crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
-    }
-}
-
-fn action_multi_acks_dec() {
-    let v = crate::MULTI_ACKS.load(Ordering::Relaxed);
-    if v > 1 {
-        crate::MULTI_ACKS.store(v - 1, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-        crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
-    }
-}
+atomic_stepper!(
+    action_multi_acks_inc,
+    action_multi_acks_dec,
+    crate::MULTI_ACKS,
+    min = 1,
+    max = 2,
+    step = 1,
+    signal = crate::OTHER_PARAMS_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
 // ── Path hash length stepper ───────────────────────────────────────────────
 
@@ -878,29 +932,23 @@ fn label_path_hash() -> &'static str {
     "Path Hash: 1B"
 }
 
-fn action_path_hash_inc() {
-    #[cfg(feature = "mesh")]
-    {
-        let v = crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed);
-        if v < 2 {
-            crate::fw::mesh::PATH_HASH_MODE.store(v + 1, Ordering::Relaxed);
-            #[cfg(feature = "embassy-core")]
-            crate::PATH_HASH_CHANGED_SIGNAL.signal(());
-        }
-    }
-}
+#[cfg(feature = "mesh")]
+atomic_stepper!(
+    action_path_hash_inc,
+    action_path_hash_dec,
+    crate::fw::mesh::PATH_HASH_MODE,
+    min = 0,
+    max = 2,
+    step = 1,
+    signal = crate::PATH_HASH_CHANGED_SIGNAL,
+    cfg = feature = "embassy-core"
+);
 
-fn action_path_hash_dec() {
-    #[cfg(feature = "mesh")]
-    {
-        let v = crate::fw::mesh::PATH_HASH_MODE.load(Ordering::Relaxed);
-        if v > 0 {
-            crate::fw::mesh::PATH_HASH_MODE.store(v - 1, Ordering::Relaxed);
-            #[cfg(feature = "embassy-core")]
-            crate::PATH_HASH_CHANGED_SIGNAL.signal(());
-        }
-    }
-}
+#[cfg(not(feature = "mesh"))]
+fn action_path_hash_inc() {}
+
+#[cfg(not(feature = "mesh"))]
+fn action_path_hash_dec() {}
 
 // ── EPD LUT speed stepper ─────────────────────────────────────────────────
 //
@@ -1012,20 +1060,15 @@ fn action_epd_temp_bias_dec() {
 
 // ── Advert scheduling ──────────────────────────────────────────────────────
 
-fn label_advert_enabled() -> &'static str {
-    if crate::ADVERT_ENABLED.load(Ordering::Relaxed) {
-        "Adverts: ON"
-    } else {
-        "Adverts: OFF"
-    }
-}
-
-fn action_advert_toggle() {
-    let cur = crate::ADVERT_ENABLED.load(Ordering::Relaxed);
-    crate::ADVERT_ENABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-    crate::ADVERT_CHANGED_SIGNAL.signal(());
-}
+bool_toggle!(
+    label_advert_enabled,
+    action_advert_toggle,
+    crate::ADVERT_ENABLED,
+    "Adverts: ON",
+    "Adverts: OFF",
+    signal = crate::ADVERT_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
 /// Interval presets (hours): 2, 4, 8, 16, 32, 64, 96.
 static ADVERT_INTERVAL_STEPS: [u8; 7] = [2, 4, 8, 16, 32, 64, 96];
@@ -1103,18 +1146,15 @@ fn label_telemetry_share() -> &'static str {
 
 // ── Ignore blink toggle ────────────────────────────────────────────────────
 
-fn label_game_mute() -> &'static str {
-    if crate::GAME_MUTE.load(Ordering::Relaxed) {
-        "Mute (On)"
-    } else {
-        "Mute (Off)"
-    }
-}
-
-fn action_game_mute_toggle() {
-    let cur = crate::GAME_MUTE.load(Ordering::Relaxed);
-    crate::GAME_MUTE.store(!cur, Ordering::Relaxed);
-}
+const LABEL_MUTE_ON: &str = "Mute (On)";
+const LABEL_MUTE_OFF: &str = "Mute (Off)";
+bool_toggle!(
+    label_game_mute,
+    action_game_mute_toggle,
+    crate::GAME_MUTE,
+    LABEL_MUTE_ON,
+    LABEL_MUTE_OFF
+);
 
 fn label_game_enabled() -> &'static str {
     #[cfg(feature = "game")]
@@ -1142,20 +1182,15 @@ fn action_game_enabled_toggle() {
     }
 }
 
-fn label_boot_chime() -> &'static str {
-    if crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed) {
-        "Boot chime: On"
-    } else {
-        "Boot chime: Off"
-    }
-}
-
-fn action_boot_chime_toggle() {
-    let cur = crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed);
-    crate::BOOT_CHIME_ENABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "embassy-core", feature = "watch"))]
-    crate::watch::SETTINGS_DIRTY_SIGNAL.signal(());
-}
+bool_toggle!(
+    label_boot_chime,
+    action_boot_chime_toggle,
+    crate::BOOT_CHIME_ENABLED,
+    "Boot chime: On",
+    "Boot chime: Off",
+    signal = crate::watch::SETTINGS_DIRTY_SIGNAL,
+    cfg = all(feature = "embassy-core", feature = "watch")
+);
 
 // ── Notification sound steppers (mesh only) ────────────────────────────────
 //
@@ -1202,20 +1237,26 @@ mod sound_menu {
     }
 }
 
-fn label_ignore_blink() -> &'static str {
-    if crate::IGNORE_BLINK.load(Ordering::Relaxed) {
-        "Ignore Blink: ON"
-    } else {
-        "Ignore Blink: OFF"
-    }
-}
+bool_toggle!(
+    label_ignore_blink,
+    action_ignore_blink,
+    crate::IGNORE_BLINK,
+    "Ignore Blink: ON",
+    "Ignore Blink: OFF",
+    signal = crate::OTHER_PARAMS_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
-fn action_ignore_blink() {
-    let cur = crate::IGNORE_BLINK.load(Ordering::Relaxed);
-    crate::IGNORE_BLINK.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-core"))]
-    crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
-}
+// Persisted alongside ignore_blink by the OtherParams persister arm.
+bool_toggle!(
+    label_region_filter,
+    action_region_filter,
+    crate::REGION_FILTER,
+    "Region filter: ON",
+    "Region filter: OFF",
+    signal = crate::OTHER_PARAMS_CHANGED_SIGNAL,
+    cfg = all(feature = "mesh", feature = "embassy-core")
+);
 
 fn action_telemetry_toggle() {
     // Cycle: No (0) → Contacts (1) → Yes (2) → No.
@@ -1264,20 +1305,16 @@ fn label_ble_name() -> &'static str {
     unsafe { core::str::from_utf8_unchecked(&*BLE_NAME_BUF.0.get()) }
 }
 
-fn label_ble_enabled() -> &'static str {
-    if crate::BLE_DISABLED.load(Ordering::Relaxed) {
-        "BLE: OFF"
-    } else {
-        "BLE: ON"
-    }
-}
-
-fn action_ble_toggle() {
-    let cur = crate::BLE_DISABLED.load(Ordering::Relaxed);
-    crate::BLE_DISABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(feature = "embassy-core")]
-    crate::BLE_DISABLED_CHANGED.signal(());
-}
+// BLE_DISABLED is the inverted flag: `true` means the radio is off.
+bool_toggle!(
+    label_ble_enabled,
+    action_ble_toggle,
+    crate::BLE_DISABLED,
+    "BLE: OFF",
+    "BLE: ON",
+    signal = crate::BLE_DISABLED_CHANGED,
+    cfg = feature = "embassy-core"
+);
 
 fn action_clear_bonds() {
     #[cfg(all(feature = "mesh", feature = "embassy-core"))]
@@ -1286,13 +1323,16 @@ fn action_clear_bonds() {
 
 // ── LoRa enable/disable ────────────────────────────────────────────────────
 
-fn label_lora_enabled() -> &'static str {
-    if crate::LORA_DISABLED.load(Ordering::Relaxed) {
-        "LoRa: OFF"
-    } else {
-        "LoRa: ON"
-    }
-}
+// LORA_DISABLED is the inverted flag: `true` means the radio is off.
+bool_toggle!(
+    label_lora_enabled,
+    action_lora_toggle,
+    crate::LORA_DISABLED,
+    "LoRa: OFF",
+    "LoRa: ON",
+    signal = crate::LORA_DISABLED_CHANGED,
+    cfg = feature = "embassy-core"
+);
 
 // ── Set Name (via text entry) ───────────────────────────────────────────────
 
@@ -1315,64 +1355,47 @@ fn action_show_qr() {
 }
 
 fn action_set_name() {
-    #[cfg(feature = "embassy-core")]
-    let prefill = crate::NODE_NAME.lock(|cell| {
-        let s = cell.borrow();
-        let mut buf = [0u8; 31];
-        let n = s.len().min(31);
+    let prefill = crate::NODE_NAME.with(|s| {
+        let mut buf = [0u8; crate::MAX_NODE_NAME];
+        let n = s.len().min(crate::MAX_NODE_NAME);
         buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
         (buf, n)
     });
-    #[cfg(feature = "simulator")]
-    let prefill = {
-        let guard = crate::NODE_NAME.lock().unwrap();
-        let s = guard.borrow();
-        let mut buf = [0u8; 31];
-        let n = s.len().min(31);
-        buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
-        (buf, n)
-    };
     crate::text_entry::begin(
         &prefill.0[..prefill.1],
-        31,
+        crate::MAX_NODE_NAME as u8,
         on_name_complete,
         "Set Node Name",
         true,
     );
 }
 
-fn action_lora_toggle() {
-    let cur = crate::LORA_DISABLED.load(Ordering::Relaxed);
-    crate::LORA_DISABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(feature = "embassy-core")]
-    crate::LORA_DISABLED_CHANGED.signal(());
-}
-
 fn fmt_timezone(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
-    let offset = crate::TIMEZONE_OFFSET
+    let qh = crate::TZ_OFFSET_QH
         .load(Ordering::Relaxed)
-        .clamp(-12, 14);
-    let _ = write!(buf, "UTC{:+}", offset);
-}
-
-fn action_tz_inc() {
-    let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
-    if v < 14 {
-        crate::TIMEZONE_OFFSET.store(v + 1, Ordering::Relaxed);
-        #[cfg(feature = "embassy-core")]
-        crate::TZ_CHANGED_SIGNAL.signal(());
+        .clamp(crate::TZ_OFFSET_QH_MIN, crate::TZ_OFFSET_QH_MAX);
+    let sign = if qh < 0 { '-' } else { '+' };
+    let (h, m) = (qh.unsigned_abs() / 4, qh.unsigned_abs() % 4 * 15);
+    if m == 0 {
+        let _ = write!(buf, "UTC{}{}", sign, h);
+    } else {
+        let _ = write!(buf, "UTC{}{}:{:02}", sign, h, m);
     }
 }
 
-fn action_tz_dec() {
-    let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
-    if v > -12 {
-        crate::TIMEZONE_OFFSET.store(v - 1, Ordering::Relaxed);
-        #[cfg(feature = "embassy-core")]
-        crate::TZ_CHANGED_SIGNAL.signal(());
-    }
-}
+// Whole-hour steps; a half- or quarter-hour zone set over the CLI keeps
+// its minutes.
+atomic_stepper!(
+    action_tz_inc,
+    action_tz_dec,
+    crate::TZ_OFFSET_QH,
+    min = crate::TZ_OFFSET_QH_MIN,
+    max = crate::TZ_OFFSET_QH_MAX,
+    step = 4,
+    signal = crate::TZ_CHANGED_SIGNAL,
+    cfg = feature = "embassy-core"
+);
 
 #[cfg(feature = "watch")]
 fn fmt_alarm_hour(buf: &mut heapless::String<24>) {
@@ -1739,7 +1762,7 @@ static ADVERTS_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static LORA_MENU_ITEMS: [MenuItem; 5] = [
+static LORA_MENU_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1751,6 +1774,10 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: label_boost_rx,
         kind: MenuItemKind::Action(action_boost_rx),
+    },
+    MenuItem {
+        label: label_rx_power_save,
+        kind: MenuItemKind::Action(action_rx_power_save),
     },
     MenuItem {
         label: || "Radio Presets",
@@ -1766,7 +1793,7 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static MESHCORE_MENU_ITEMS: [MenuItem; 12] = [
+static MESHCORE_MENU_ITEMS: [MenuItem; 13] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1812,6 +1839,10 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 12] = [
     MenuItem {
         label: label_ignore_blink,
         kind: MenuItemKind::Action(action_ignore_blink),
+    },
+    MenuItem {
+        label: label_region_filter,
+        kind: MenuItemKind::Action(action_region_filter),
     },
     MenuItem {
         label: || "",
@@ -1884,6 +1915,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "I2C Scan",
         kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "embassy-core")]
             crate::fw::qwiic::open();
         }),
     },
@@ -1960,7 +1992,28 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     },
 ];
 
-static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
+/// Main-menu rows the guide explains.
+const LABEL_BORNAGOTCHI: &str = "Bornagotchi";
+const LABEL_UNICORN_REALM: &str = "Unicorn Realm";
+const LABEL_MODE: &str = "Mode:";
+const LABEL_RESET_PET: &str = "Reset Pet";
+const PROMPT_RESET_PET: &str = "Reset pet?";
+
+/// The fixed labels (host-only, for the guide's word list).
+#[cfg(any(test, feature = "simulator"))]
+pub fn main_menu_words() -> [&'static str; 7] {
+    [
+        LABEL_RESET_PET,
+        PROMPT_RESET_PET,
+        LABEL_BORNAGOTCHI,
+        LABEL_UNICORN_REALM,
+        LABEL_MODE,
+        LABEL_MUTE_ON,
+        LABEL_MUTE_OFF,
+    ]
+}
+
+static BORNAGOTCHI_ITEMS: [MenuItem; 9] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1982,27 +2035,78 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
         },
     },
     MenuItem {
+        label: label_demo_mode,
+        kind: MenuItemKind::Action(action_demo_toggle),
+    },
+    MenuItem {
+        label: label_demo_care,
+        kind: MenuItemKind::Action(action_demo_care_toggle),
+    },
+    MenuItem {
         label: || "",
         kind: MenuItemKind::Separator,
     },
     MenuItem {
-        label: || "Reset Pet",
+        label: || LABEL_RESET_PET,
         kind: MenuItemKind::Confirm {
-            prompt: "Reset pet?",
+            prompt: PROMPT_RESET_PET,
             action: || {
                 #[cfg(feature = "game")]
-                crate::game::pet_select::open_new_generation();
+                {
+                    crate::game::pet_select::open_new_generation();
+                    // The picker only renders on the game screen, so jump
+                    // there — otherwise it sits open and invisible behind
+                    // the settings menu and eats the next button press.
+                    request_screen(crate::SCREEN_GAME);
+                }
             },
         },
     },
     MenuItem {
-        label: || "Unicorn Realm",
+        label: || LABEL_UNICORN_REALM,
         kind: MenuItemKind::Action(|| {
             #[cfg(feature = "game")]
             crate::game::realm_view::open();
         }),
     },
 ];
+
+fn label_demo_mode() -> &'static str {
+    #[cfg(feature = "game")]
+    {
+        crate::game::lifecycle::demo_menu_label()
+    }
+    #[cfg(not(feature = "game"))]
+    {
+        "Demo: no pet"
+    }
+}
+
+/// A refused toggle changes nothing; the label already says why.
+fn action_demo_toggle() {
+    #[cfg(feature = "game")]
+    {
+        let _ = crate::game::lifecycle::toggle_demo();
+    }
+}
+
+fn label_demo_care() -> &'static str {
+    #[cfg(feature = "game")]
+    {
+        crate::game::lifecycle::demo_care_label()
+    }
+    #[cfg(not(feature = "game"))]
+    {
+        "Demo care: instant"
+    }
+}
+
+fn action_demo_care_toggle() {
+    #[cfg(feature = "game")]
+    {
+        crate::game::lifecycle::toggle_demo_care();
+    }
+}
 
 fn fmt_game_mode(buf: &mut heapless::String<24>) {
     use core::fmt::Write;
@@ -2011,7 +2115,7 @@ fn fmt_game_mode(buf: &mut heapless::String<24>) {
         let mode = crate::game::settings::pending_mode();
         let needs_reboot = crate::game::settings::pending_differs_from_active();
         let suffix = if needs_reboot { "*" } else { "" };
-        let _ = write!(buf, "Mode: {}{}", mode.label(), suffix);
+        let _ = write!(buf, "{} {}{}", LABEL_MODE, mode.label(), suffix);
     }
     #[cfg(not(feature = "game"))]
     {
@@ -2227,7 +2331,7 @@ fn apply_lora_preset(idx: usize) {
 
 static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
-        label: || "Bornagotchi",
+        label: || LABEL_BORNAGOTCHI,
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
     },
     MenuItem {
@@ -2317,18 +2421,9 @@ const WATCH_ENABLED: bool = true;
 #[cfg(not(feature = "watch"))]
 const WATCH_ENABLED: bool = false;
 
-#[cfg(feature = "simulator")]
-use std::sync::Mutex;
+type DisplayMutex = crate::sync::SharedCell<DisplayState<SCREEN_COUNT>, crate::sync::ThreadMode>;
 
-#[cfg(feature = "embassy-core")]
-use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
-
-#[cfg(feature = "embassy-core")]
-type DisplayMutex = Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>>;
-#[cfg(feature = "simulator")]
-type DisplayMutex = Mutex<RefCell<DisplayState<SCREEN_COUNT>>>;
-
-pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayState::new(
+pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(DisplayState::new(
     [
         ScreenState::new(&GAME_ITEMS),
         ScreenState::new(&MAIN_ITEMS),
@@ -2357,24 +2452,31 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         // module still exists but draws a "(key not ready)" placeholder.
         true,
     ],
-)));
+));
 
 // ── Scrolling menu renderer
 // ───────────────────────────────────────────────────
 
 /// Geometry constants for the 152×152 display.
 ///
-/// The menu occupies y = 38..106, leaving room for the header (dots, battery,
-/// device ID) above and the status banner below.
+/// The menu occupies y = 38..128, leaving room for the header (dots, battery,
+/// device ID) above and the footer below — `draw_frame` puts its divider at
+/// y = 138, so the box clears it by 10 px.
 const MENU_X: i32 = 4;
 const MENU_Y: i32 = 38;
 const MENU_W: u32 = 144;
 const ROW_H: i32 = 22;
-const NUM_ROWS: usize = 3; // one above, center, one below
+/// Rows drawn per page. Four fills the space between header and footer; the
+/// selection no longer sits in the geometric middle, see [`SELECTED_ROW`].
+const NUM_ROWS: usize = 4;
+/// Which row carries the selection: one item above it, two below. Keeping it at
+/// row 1 preserves the previous look — the highlight stays where it was and the
+/// extra row appears underneath, rather than shifting the whole list up.
+const SELECTED_ROW: usize = 1;
 
-/// Draw a scrolling 3-item menu centered on `pos`.
+/// Draw a scrolling menu of [`NUM_ROWS`] items with `pos` on [`SELECTED_ROW`].
 ///
-/// - Center row: black background, white text (inverted).
+/// - Selected row: black background, white text (inverted).
 /// - Adjacent rows (if items exist): black text on white background.
 /// - A 1 px border frames the entire menu area.
 /// - Submenu items have " >" appended to their label.
@@ -2387,10 +2489,7 @@ pub fn draw_menu<D>(
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let text_style = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    let text_style = crate::ui::CENTERED;
     let menu_h = ROW_H * NUM_ROWS as i32 + 2;
 
     // Outer border
@@ -2400,10 +2499,10 @@ where
 
     for row in 0..NUM_ROWS {
         // item_idx: negative means "before the list" (no item to show).
-        let item_idx = (pos as isize) + (row as isize) - 1;
+        let item_idx = (pos as isize) + (row as isize) - SELECTED_ROW as isize;
         let row_y = MENU_Y + 1 + row as i32 * ROW_H;
         let text_y = row_y + ROW_H / 2;
-        let is_center = row == 1;
+        let is_center = row == SELECTED_ROW;
 
         if is_center {
             Rectangle::new(
@@ -2464,13 +2563,13 @@ where
                         let _ = label.push_str(" >");
                     }
                 }
-                Text::with_text_style(
+                crate::ui::draw_text(
+                    display,
                     &label,
                     Point::new(MENU_X + MENU_W as i32 / 2, text_y),
                     MonoTextStyle::new(&FONT_7X13_BOLD, fg),
                     text_style,
-                )
-                .draw(display)?;
+                )?;
             }
         }
     }
@@ -2485,21 +2584,13 @@ pub fn draw_about<D>(display: &mut D, page: u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let center = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Center)
-        .build();
+    let font = crate::ui::TEXT_BOLD_BLACK;
+    let center = crate::ui::CENTERED_TOP;
 
     let x = 76; // center
 
     // Border
-    Rectangle::new(Point::new(0, 0), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
-        .draw(display)?;
-    Rectangle::new(Point::new(2, 2), Size::new(148, 148))
-        .into_styled(PrimitiveStyle::with_stroke(RED, 1))
-        .draw(display)?;
+    crate::ui::draw_screen_border(display, 1)?;
 
     // Title area — same on every page
     let mut y = 12;
@@ -2626,25 +2717,14 @@ pub fn draw_lora_radio<D>(display: &mut D, page: u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let center = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Center)
-        .build();
-    let left = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Left)
-        .build();
+    let font_bold = crate::ui::TEXT_BOLD_BLACK;
+    let center = crate::ui::CENTERED_TOP;
+    let left = crate::ui::TOP_LEFT;
 
     let x = 76;
 
     // Borders
-    Rectangle::new(Point::new(0, 0), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
-        .draw(display)?;
-    Rectangle::new(Point::new(2, 2), Size::new(148, 148))
-        .into_styled(PrimitiveStyle::with_stroke(RED, 1))
-        .draw(display)?;
+    crate::ui::draw_screen_border(display, 1)?;
 
     // Title
     let mut y = 8;
@@ -2684,7 +2764,7 @@ where
     Rectangle::new(Point::new(6, y - 2), Size::new(140, 18))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
-    let font_white = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+    let font_white = crate::ui::TEXT_BOLD_WHITE;
     let mut title_line: heapless::String<40> = heapless::String::new();
     let _ = title_line.push_str(if is_active { "* " } else { "  " });
     let _ = title_line.push_str(title);
@@ -2750,20 +2830,12 @@ pub fn draw_confirm<D>(display: &mut D, prompt: &str) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let center = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Center)
-        .build();
+    let font = crate::ui::TEXT_BOLD_BLACK;
+    let center = crate::ui::CENTERED_TOP;
     let x = 76;
 
     // Full-screen border — red inner frame to signal a destructive action.
-    Rectangle::new(Point::new(0, 0), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
-        .draw(display)?;
-    Rectangle::new(Point::new(2, 2), Size::new(148, 148))
-        .into_styled(PrimitiveStyle::with_stroke(RED, 2))
-        .draw(display)?;
+    crate::ui::draw_screen_border(display, 2)?;
 
     Text::with_text_style("Are you sure?", Point::new(x, 24), font, center).draw(display)?;
 
@@ -2779,7 +2851,7 @@ where
         Rectangle::new(Point::new(6, 56), Size::new(140, 20))
             .into_styled(PrimitiveStyle::with_fill(BLACK))
             .draw(display)?;
-        let font_white = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+        let font_white = crate::ui::TEXT_BOLD_WHITE;
         Text::with_text_style(prompt, Point::new(x, 60), font_white, center).draw(display)?;
     } else {
         let mut y = 54;
@@ -2843,5 +2915,72 @@ mod tests {
         let items = [action()];
         assert_eq!(first_selectable(&items), Some(0));
         assert_eq!(last_selectable(&items), Some(0));
+    }
+
+    /// The game settings menu has the two demo rows between Mode and Reset
+    /// Pet, and every label they can show fits a menu row: `MENU_W` less
+    /// the 1 px border each side, in columns of the row font (the rows are
+    /// drawn centred, with no stepper arrows).
+    #[cfg(feature = "game")]
+    #[test]
+    fn game_settings_has_the_demo_rows() {
+        use crate::game::engine::{GameState, PetKind, Phase};
+        use crate::game::lifecycle::set_state_for_test;
+        const ROW_COLS: usize =
+            (MENU_W as usize - 2) / FONT_7X13_BOLD.character_size.width as usize;
+        assert_eq!(ROW_COLS, 20);
+        assert_eq!(BORNAGOTCHI_ITEMS.len(), 9);
+        assert!(matches!(
+            BORNAGOTCHI_ITEMS[3].kind,
+            MenuItemKind::ValueStepper { .. }
+        ));
+        assert!(matches!(BORNAGOTCHI_ITEMS[4].kind, MenuItemKind::Action(_)));
+        assert!(matches!(BORNAGOTCHI_ITEMS[5].kind, MenuItemKind::Action(_)));
+        assert!(matches!(BORNAGOTCHI_ITEMS[6].kind, MenuItemKind::Separator));
+        assert_eq!((BORNAGOTCHI_ITEMS[7].label)(), "Reset Pet");
+
+        let _guard = crate::game::lock_test_state();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut states: Vec<Option<GameState>> = vec![None];
+        states.push(Some(GameState::new_egg(7, PetKind(0))));
+        for health in [30, 60] {
+            for demo in [false, true] {
+                for animated in [false, true] {
+                    let mut s = GameState::new_egg(7, PetKind(0));
+                    s.phase = Phase::Active;
+                    s.health = (health * 655) as u16;
+                    s.demo.on = demo;
+                    s.demo.animated = animated;
+                    states.push(Some(s));
+                }
+            }
+        }
+        let mut frozen = GameState::new_egg(7, PetKind(0));
+        frozen.phase = Phase::Active;
+        frozen.hibernating = true;
+        states.push(Some(frozen));
+        let mut gone = GameState::new_egg(7, PetKind(0));
+        gone.phase = Phase::Gone;
+        states.push(Some(gone));
+        for st in states {
+            set_state_for_test(st);
+            for row in [4, 5] {
+                let l = (BORNAGOTCHI_ITEMS[row].label)();
+                assert!(l.len() <= ROW_COLS, "{l:?} is {} columns", l.len());
+                seen.insert(l);
+            }
+        }
+        set_state_for_test(None);
+        for l in [
+            "Demo mode: on",
+            "Demo mode: off",
+            "Demo: fix me first",
+            "Demo: frozen",
+            "Demo: no pet",
+            "Demo care: instant",
+            "Demo care: animated",
+        ] {
+            assert!(seen.contains(l), "{l:?} never shown");
+        }
     }
 }

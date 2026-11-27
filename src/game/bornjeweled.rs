@@ -12,7 +12,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle};
 use embedded_graphics::text::{Alignment, Text};
 
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor};
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
@@ -62,12 +62,12 @@ static GAME_RNG: AtomicU32 = AtomicU32::new(0xDEAD_BEEF);
 fn seed_rng() {
     #[cfg(feature = "embassy-core")]
     {
-        let s = embassy_time::Instant::now().as_ticks() as u32;
+        let s = crate::platform::seed_ticks_or_fixed();
         GAME_RNG.store(s.max(1), Ordering::Relaxed);
     }
     #[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
     {
-        let s = super::lifecycle::sim_elapsed_ms() as u32;
+        let s = crate::platform::uptime_ms_u32();
         GAME_RNG.store(s.max(1), Ordering::Relaxed);
         return;
     }
@@ -77,20 +77,18 @@ fn seed_rng() {
     }
 }
 
-fn entropy_byte() -> u8 {
+fn next_rand_byte() -> u8 {
     let mut s = GAME_RNG.load(Ordering::Relaxed);
     if s == 0 {
         s = 0xDEAD_BEEF;
     }
-    s ^= s << 13;
-    s ^= s >> 17;
-    s ^= s << 5;
+    s = crate::platform::xorshift32(s);
     GAME_RNG.store(s, Ordering::Relaxed);
     (s >> 24) as u8
 }
 
 fn random_gem() -> u8 {
-    (entropy_byte() % 6) + 1
+    (next_rand_byte() % 6) + 1
 }
 
 pub fn is_active() -> bool {
@@ -122,8 +120,10 @@ pub fn close() {
         // game that scored at least one cleared row.
         let score = SCORE.load(Ordering::Relaxed);
         if score > 0 {
-            super::lifecycle::award_inspiration(super::engine::MiniGame::BornJeweled);
-            super::show_toast(super::Toast::MinigameWin);
+            super::minigame::pay_result(
+                super::engine::MiniGame::BornJeweled,
+                super::engine::GRADE_WIN,
+            );
         }
     }
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
@@ -425,9 +425,7 @@ where
     // Full-screen white wipe so the previous frame's content (game
     // icons, pet area, leftover toast, …) doesn't bleed through under
     // and around the board.
-    Rectangle::new(Point::zero(), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    crate::ui::clear_screen(display)?;
 
     for idx in 0..CELLS {
         let gem = BOARD[idx].load(Ordering::Relaxed);
@@ -497,12 +495,7 @@ where
     if RESULT.load(Ordering::Relaxed) == RESULT_GAME_OVER {
         // Frame the centre of the board in white so the overlay text is
         // readable on top of whatever gem layout was last shown.
-        Rectangle::new(Point::new(20, 60), Size::new(112, 50))
-            .into_styled(PrimitiveStyle::with_fill(WHITE))
-            .draw(display)?;
-        Rectangle::new(Point::new(20, 60), Size::new(112, 50))
-            .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
-            .draw(display)?;
+        crate::ui::draw_popover_frame(display, Point::new(20, 60), Size::new(112, 50), 2)?;
         Text::with_alignment(
             "Game Over",
             Point::new(76, 78),
@@ -529,4 +522,29 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_REWARD};
+    use crate::game::{minigame_pay_read, minigame_pay_setup};
+
+    #[test]
+    fn a_scored_game_pays_once_and_a_zero_score_pays_nothing() {
+        let _g = minigame_pay_setup();
+        open();
+        SCORE.store(0, Ordering::Relaxed);
+        close();
+        assert_eq!(minigame_pay_read(MiniGame::BornJeweled), (0, false));
+
+        open();
+        SCORE.store(3, Ordering::Relaxed);
+        close();
+        close();
+        assert_eq!(
+            minigame_pay_read(MiniGame::BornJeweled),
+            (MINIGAME_HAX_REWARD, true)
+        );
+    }
 }

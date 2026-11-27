@@ -38,20 +38,22 @@ const PCX_HEADER_SIZE: usize = 128;
 // than caching every filename — at 4 × 21 × 4 = 336 bytes it accepts
 // any number of sprite files without a hardcoded cap.
 
-/// Pet/category-prefix range covered by the catalogue.  `PP=0` Bartholomeus,
-/// `1` Cat, `2` Slug, `3` sponsors, `4` menu icons, `5..7` custom pets from
-/// `PETS.CFG`.  Sized to cover every valid pet prefix so custom pets get
+/// Pet/category-prefix range covered by the catalogue.  `PP=3` is the sponsor
+/// slideshow and `4` the menu icons; every other prefix is a pet slot, filled
+/// by whatever `PETS.CFG` declares.  Sized to cover every valid pet prefix so
+/// pets get
 /// per-animation frame counts from the same scan — keep in sync with
 /// [`crate::game::pet_registry::MAX_PET_PREFIX`].  Kept small (paired with a
 /// u16 presence cell below) because the debug build is RAM-tight — growing
 /// this table overflows the stack and corrupts adjacent statics.
 #[cfg(feature = "embassy-core")]
-const PP_MAX: usize = 8;
+const PP_MAX: usize = 9;
 /// Anim-id range covered.  Anim ids go 0x00..=0x14 (start screen + 20
 /// lifecycle anims), plus 0x23-0x28 (Exercising/Medicating/Drinking/
 /// Ozempic/Rehab/OnlyPets — picked starting at 0x20 to land clear of
 /// 0x15-0x1F, which `assets/to-badge/MANIFEST.TXT` reserves for other,
-/// currently-unbuilt features).  41 entries covers up to 0x28 inclusive.
+/// currently-unbuilt features), and the v3 state art 0x29-0x35 (Tipsy ..
+/// Washing, plus Relaxing at 0x0E).  54 entries cover up to 0x35 inclusive.
 /// This bound is checked on both the write side (`init`, scanning the
 /// FAT12 catalog at boot) and the read side (`count_anim_frames`) — an
 /// anim id at or past this value is silently never catalogued, which is
@@ -60,17 +62,50 @@ const PP_MAX: usize = 8;
 /// notice them, so the game falls back to the no-artwork debug-text
 /// path.  Keep this at least one past the highest `anim_id`.
 #[cfg(feature = "embassy-core")]
-const AA_MAX: usize = 41;
+const AA_MAX: usize = 54;
+// The v3 art goes up to row 0x35 (Washing); a smaller cap hides it.
+#[cfg(feature = "embassy-core")]
+const _: () = assert!(AA_MAX > 0x35);
 /// Maximum frame index per animation (bit position in the u16 presence cell).
 /// No animation exceeds a handful of frames; 16 is ample.
 #[cfg(feature = "embassy-core")]
 const FF_MAX: u8 = 16;
 
-// AtomicU16 (not U32): 8×41×2 B keeps the table small so the RAM-tight
+// AtomicU16 (not U32): 9×54×2 B keeps the table small so the RAM-tight
 // debug build doesn't overflow the stack into adjacent statics.
 #[cfg(feature = "embassy-core")]
 static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
     [const { [const { core::sync::atomic::AtomicU16::new(0) }; AA_MAX] }; PP_MAX];
+
+/// Set once `init` walked the directory to its real end.  A `dir.next()` error
+/// ends the walk without it, and the missing-sprite retirement then stands down.
+#[cfg(feature = "embassy-core")]
+static CATALOGUE_COMPLETE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static TEST_INCOMPLETE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Whether the sprite catalogue is complete.  The simulator has no catalogue
+/// to walk and always is.
+pub fn catalogue_complete() -> bool {
+    #[cfg(test)]
+    if TEST_INCOMPLETE.load(core::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    #[cfg(feature = "embassy-core")]
+    {
+        CATALOGUE_COMPLETE.load(core::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "embassy-core"))]
+    {
+        true
+    }
+}
+
+/// Test hook: pretend the directory walk failed.
+#[cfg(test)]
+pub(crate) fn set_incomplete_for_test(v: bool) {
+    TEST_INCOMPLETE.store(v, core::sync::atomic::Ordering::Relaxed);
+}
 
 #[cfg(not(feature = "simulator"))]
 static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
@@ -82,15 +117,7 @@ static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8:
 /// Decode `b"AB"` (two ASCII hex digits) into a 0..=255 byte.
 #[cfg(feature = "embassy-core")]
 fn parse_hex_pair(hi: u8, lo: u8) -> Option<u8> {
-    fn d(c: u8) -> Option<u8> {
-        match c {
-            b'0'..=b'9' => Some(c - b'0'),
-            b'A'..=b'F' => Some(c - b'A' + 10),
-            b'a'..=b'f' => Some(c - b'a' + 10),
-            _ => None,
-        }
-    }
-    Some((d(hi)? << 4) | d(lo)?)
+    crate::hex::pair(hi, lo)
 }
 
 /// Discover PCX files on the FAT12 partition and record per-animation
@@ -107,7 +134,16 @@ pub async fn init() {
     };
 
     let mut total: u8 = 0;
-    while let Ok(Some((name, _file))) = dir.next().await {
+    let mut walked_to_end = false;
+    loop {
+        let (name, _file) = match dir.next().await {
+            Ok(Some(e)) => e,
+            Ok(None) => {
+                walked_to_end = true;
+                break;
+            }
+            Err(_) => break,
+        };
         if &name[8..11] != b"PCX" {
             continue;
         }
@@ -130,6 +166,7 @@ pub async fn init() {
     }
 
     FRAME_COUNT.store(total, core::sync::atomic::Ordering::Relaxed);
+    CATALOGUE_COMPLETE.store(walked_to_end, core::sync::atomic::Ordering::Relaxed);
     if total == 0 {
         defmt::info!("sprite: no PCX files found on FAT12");
     } else {
@@ -163,47 +200,30 @@ pub fn frame_count() -> u8 {
 }
 
 /// Count the contiguous run of frames available for an animation,
-/// starting at frame `00`.  `prefix` is the 4-byte `PPAA` portion of
-/// the FAT12 8.3 filename.
+/// starting at frame `00`.  `pp` / `aa` are the pet-prefix and animation
+/// bytes of the `PPAAFF` FAT12 8.3 filename.
 ///
 /// Firmware: read directly from the `ANIM_PRESENCE` bitmap built at
 /// boot.  Simulator: probes `assets/to-badge/` directly.
 ///
 /// Frame `00` missing → returns 0 (no animation available).
-pub fn count_anim_frames(prefix: &[u8; 4]) -> u8 {
+pub fn count_anim_frames(pp: u8, aa: u8) -> u8 {
     #[cfg(feature = "embassy-core")]
     {
-        let pp = match parse_hex_pair(prefix[0], prefix[1]) {
-            Some(v) if (v as usize) < PP_MAX => v as usize,
-            _ => return 0,
-        };
-        let aa = match parse_hex_pair(prefix[2], prefix[3]) {
-            Some(v) if (v as usize) < AA_MAX => v as usize,
-            _ => return 0,
-        };
+        let (pp, aa) = (pp as usize, aa as usize);
+        if pp >= PP_MAX || aa >= AA_MAX {
+            return 0;
+        }
         let bitmap = ANIM_PRESENCE[pp][aa].load(core::sync::atomic::Ordering::Relaxed);
         bitmap.trailing_ones().min(FF_MAX as u32) as u8
     }
     #[cfg(all(feature = "simulator", not(feature = "embassy-core")))]
     {
-        const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
         const MAX_ANIM_FRAMES: u8 = 32;
         use std::path::Path;
         let mut count = 0u8;
         while count < MAX_ANIM_FRAMES {
-            let name: [u8; 11] = [
-                prefix[0],
-                prefix[1],
-                prefix[2],
-                prefix[3],
-                HEX_DIGITS[(count >> 4) as usize],
-                HEX_DIGITS[(count & 0xF) as usize],
-                b' ',
-                b' ',
-                b'P',
-                b'C',
-                b'X',
-            ];
+            let name = super::engine::anim_files::pcx_name(pp, aa, count);
             let path = std::format!("{}{}", SIM_ASSET_DIR, fat_name_to_dotted(&name));
             if !Path::new(&path).exists() {
                 break;
@@ -214,7 +234,7 @@ pub fn count_anim_frames(prefix: &[u8; 4]) -> u8 {
     }
     #[cfg(not(any(feature = "embassy-core", feature = "simulator")))]
     {
-        let _ = prefix;
+        let _ = (pp, aa);
         0
     }
 }
@@ -488,6 +508,16 @@ fn fat_name_to_dotted(name: &[u8; 11]) -> std::string::String {
         }
     }
     out
+}
+
+/// Width and height of `assets/to-badge/<name>.PCX`, or `None` when the file
+/// is missing or malformed (host-only, for the guide's sprite export).
+#[cfg(feature = "simulator")]
+pub fn pcx_size_sim(name: &[u8; 11]) -> Option<(u32, u32)> {
+    let path = std::format!("{}{}", SIM_ASSET_DIR, fat_name_to_dotted(name));
+    let bytes = std::fs::read(path).ok()?;
+    let info = parse_pcx_header(bytes.get(..PCX_HEADER_SIZE)?)?;
+    Some((info.width as u32, info.height as u32))
 }
 
 /// Blit a PCX file from `assets/to-badge/<name>.PCX` onto a `DrawTarget`.

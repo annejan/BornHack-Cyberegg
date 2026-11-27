@@ -1,20 +1,22 @@
 //! Tic-tac-toe mini-game.
 //!
 //! The player (X, red) plays against a simple AI (O, black).
-//! Winning awards HAX (when money mode is on) plus this game's cooldown.
+//! A finished game (win, draw or loss) pays HAX (when money mode is on) and
+//! starts this game's cooldown, paid in `close()`.
 //!
 //! State is held in module-level atomics so it integrates with the
 //! existing single-threaded game loop without allocations.
 
+use crate::platform::entropy_byte;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::text::Text;
 
-use crate::{BLACK, TriColor, WHITE, ui};
+use super::minigame::DifficultyPicker;
+use crate::menu::ButtonId;
+use crate::{BLACK, TriColor, ui};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,11 +60,9 @@ static PLAYER_TURN: AtomicBool = AtomicBool::new(true);
 /// Difficulty: 0 = Normal (mistakes possible), 1 = Impossible (perfect
 /// minimax).
 const DIFFICULTY_IMPOSSIBLE: u8 = 1;
-static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
-/// Difficulty-picker overlay open at the start of each game.
-static MENU_OPEN: AtomicBool = AtomicBool::new(false);
-/// Difficulty-picker selection (0 = Normal, 1 = Impossible).
-static MENU_POS: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
+/// Difficulty picker shown at the start of each game (0 = Normal,
+/// 1 = Impossible).
+static PICKER: DifficultyPicker = DifficultyPicker::new(DIFFICULTY_IMPOSSIBLE);
 /// Probability (out of 100) that the Normal AI ignores minimax and
 /// plays a random legal move instead.  35 % gives the player a real
 /// shot at winning without making the AI feel completely braindead.
@@ -83,23 +83,46 @@ pub fn open() {
     RESULT.store(0, Ordering::Relaxed);
     PLAYER_TURN.store(true, Ordering::Relaxed);
     // Difficulty picker first; play starts after Fire confirms.
-    MENU_POS.store(DIFFICULTY_IMPOSSIBLE, Ordering::Relaxed);
-    MENU_OPEN.store(true, Ordering::Relaxed);
+    PICKER.show();
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
 pub fn close() {
-    ACTIVE.store(false, Ordering::Relaxed);
+    // A finished game pays by result, once, however the screen is left.
+    if ACTIVE.swap(false, Ordering::Relaxed) {
+        let grade = match RESULT.load(Ordering::Relaxed) {
+            1 => Some(super::engine::GRADE_WIN),
+            2 => Some(super::engine::GRADE_LOSS),
+            3 => Some(super::engine::GRADE_DRAW),
+            _ => None,
+        };
+        if let Some(grade) = grade {
+            super::minigame::pay_result(super::engine::MiniGame::TicTacToe, grade);
+        }
+    }
+    // Clear ghosting from the many fast LUT refreshes during play.
+    crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
+}
+
+/// Route a button press while this mini-game is active.
+pub fn dispatch(btn: ButtonId) {
+    match btn {
+        ButtonId::Cancel => close(),
+        ButtonId::Up => cursor_up(),
+        ButtonId::Down => cursor_down(),
+        ButtonId::Left => cursor_left(),
+        ButtonId::Right => cursor_right(),
+        ButtonId::Fire | ButtonId::Execute => {
+            place();
+        }
+    }
 }
 
 // ── Input handling ───────────────────────────────────────────────────────────
 
-pub fn cursor_up() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        let p = MENU_POS.load(Ordering::Relaxed);
-        if p > 0 {
-            MENU_POS.store(p - 1, Ordering::Relaxed);
-        }
+fn cursor_up() {
+    if PICKER.is_open() {
+        PICKER.up();
         return;
     }
     let c = CURSOR.load(Ordering::Relaxed);
@@ -108,12 +131,9 @@ pub fn cursor_up() {
     }
 }
 
-pub fn cursor_down() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        let p = MENU_POS.load(Ordering::Relaxed);
-        if p < 1 {
-            MENU_POS.store(p + 1, Ordering::Relaxed);
-        }
+fn cursor_down() {
+    if PICKER.is_open() {
+        PICKER.down(2);
         return;
     }
     let c = CURSOR.load(Ordering::Relaxed);
@@ -122,8 +142,8 @@ pub fn cursor_down() {
     }
 }
 
-pub fn cursor_left() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
+fn cursor_left() {
+    if PICKER.is_open() {
         return;
     }
     let c = CURSOR.load(Ordering::Relaxed);
@@ -132,8 +152,8 @@ pub fn cursor_left() {
     }
 }
 
-pub fn cursor_right() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
+fn cursor_right() {
+    if PICKER.is_open() {
         return;
     }
     let c = CURSOR.load(Ordering::Relaxed);
@@ -143,22 +163,15 @@ pub fn cursor_right() {
 }
 
 /// Player places their mark. Returns true if the game ended (win/draw).
-pub fn place() -> bool {
+fn place() -> bool {
     // Difficulty picker open: confirm selection and start the game.
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        DIFFICULTY.store(MENU_POS.load(Ordering::Relaxed), Ordering::Relaxed);
-        MENU_OPEN.store(false, Ordering::Relaxed);
+    if PICKER.is_open() {
+        PICKER.confirm();
         return false;
     }
 
     // If game is over, any Fire press closes.
     if RESULT.load(Ordering::Relaxed) != 0 {
-        // Award inspiration on win or draw.
-        let r = RESULT.load(Ordering::Relaxed);
-        if r == 1 || r == 3 {
-            super::lifecycle::award_inspiration(super::engine::MiniGame::TicTacToe);
-            super::show_toast(super::Toast::MinigameWin);
-        }
         close();
         return true;
     }
@@ -235,23 +248,9 @@ fn check_board() -> Option<u8> {
 
 /// Pseudo-random byte derived from the current uptime — good enough for
 /// the Normal-mode coin flip; no persistent state needed.
-fn entropy_byte() -> u8 {
-    #[cfg(feature = "embassy-core")]
-    {
-        embassy_time::Instant::now().as_ticks() as u8
-    }
-    #[cfg(not(feature = "embassy-core"))]
-    {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u8)
-            .unwrap_or(0xCB)
-    }
-}
 
 fn ai_move(board: &[u8; 9]) -> Option<usize> {
-    let perfect = DIFFICULTY.load(Ordering::Relaxed) == DIFFICULTY_IMPOSSIBLE;
+    let perfect = PICKER.chosen() == DIFFICULTY_IMPOSSIBLE;
 
     // Normal mode: roll a die.  On a "mistake" outcome, pick a random
     // legal cell instead of the minimax best.  Threats the player has
@@ -355,9 +354,7 @@ where
     let result = RESULT.load(Ordering::Relaxed);
 
     // Background.
-    Rectangle::new(Point::zero(), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    crate::ui::clear_screen(display)?;
 
     // Grid lines (2 horizontal + 2 vertical).
     let grid_style = PrimitiveStyle::with_stroke(BLACK, 3);
@@ -402,11 +399,8 @@ where
     }
 
     // Status text below the grid.
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Center)
-        .build();
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let centered = crate::ui::CENTERED_TOP;
+    let font = crate::ui::TEXT_BOLD_BLACK;
     let msg = match result {
         1 => "You win!",
         2 => "EI wins!",
@@ -415,14 +409,7 @@ where
     };
     Text::with_text_style(msg, Point::new(76, 134), font, centered).draw(display)?;
 
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        ui::draw_picker_menu(
-            display,
-            "Difficulty",
-            &["Normal", "Impossible"],
-            MENU_POS.load(Ordering::Relaxed) as usize,
-        )?;
-    }
+    PICKER.draw(display, "Difficulty", &["Normal", "Impossible"])?;
 
     Ok(())
 }
@@ -460,18 +447,68 @@ fn draw_cursor_ring<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(),
 where
     D: DrawTarget<Color = TriColor>,
 {
-    const THICK: i32 = 3;
-    let pixels = (0..size).flat_map(move |dy| {
-        (0..size).filter_map(move |dx| {
-            let on_border = dx < THICK || dy < THICK || dx >= size - THICK || dy >= size - THICK;
-            if !on_border {
-                return None;
-            }
-            let px = x + dx;
-            let py = y + dy;
-            let color = if (px + py) & 1 == 0 { BLACK } else { WHITE };
-            Some(Pixel(Point::new(px, py), color))
-        })
-    });
-    display.draw_iter(pixels)
+    ui::draw_dither_ring(
+        display,
+        Rectangle::new(Point::new(x, y), Size::new(size as u32, size as u32)),
+        3,
+    )
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_DRAW, MINIGAME_HAX_LOSS, MINIGAME_HAX_REWARD};
+    use crate::game::{current_toast, minigame_pay_read, minigame_pay_setup, Toast};
+
+    const GAME: MiniGame = MiniGame::TicTacToe;
+
+    /// Open the game, put it in the finished state `result`, leave with Cancel.
+    fn finish_and_cancel(result: u8) {
+        open();
+
+        RESULT.store(result, Ordering::Relaxed);
+        dispatch(ButtonId::Cancel);
+    }
+
+    #[test]
+    fn a_won_game_closed_with_cancel_pays_the_win() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(1);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_REWARD, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+        assert!(!is_active());
+    }
+
+    #[test]
+    fn closing_twice_pays_once() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(1);
+        close();
+        close();
+        assert_eq!(minigame_pay_read(GAME).0, MINIGAME_HAX_REWARD);
+    }
+
+    #[test]
+    fn a_game_in_progress_pays_nothing() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(0);
+        assert_eq!(minigame_pay_read(GAME), (0, false));
+        assert_eq!(current_toast(), None);
+    }
+
+    #[test]
+    fn a_lost_game_pays_the_loss() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(2);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_LOSS, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameTry));
+    }
+
+    #[test]
+    fn a_drawn_game_pays_the_draw() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(3);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_DRAW, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+    }
 }

@@ -127,7 +127,7 @@ pub async fn settings_persister_task() {
 /// (hold Execute on plug-in if you need DFU first) and copying any
 /// iCalendar export — the schedule from <https://bornhack.dk/.../program/ics/>
 /// works directly.  Times are taken at face value as local time; if your
-/// ICS is in UTC you'll be off by `TIMEZONE_OFFSET` hours.
+/// ICS is in UTC you'll be off by the `TZ_OFFSET_QH` offset.
 ///
 /// Re-runs on every boot, overwriting whatever was in slots 1..N_ALARMS.
 /// The default melody (`ALARM` beep-beep) is applied; the trigger
@@ -143,10 +143,9 @@ const ICS_READ_BUF_LEN: usize = 16 * 1024;
 
 #[cfg(feature = "embassy-core")]
 pub async fn import_alarms_from_fat12() {
-    use core::sync::atomic::Ordering;
-
     use crate::fw::fat12;
-    use crate::fw::led::{self, LED_BLUE, LedState};
+    use crate::fw::led::{self, Rgb};
+    use embassy_time::Duration;
 
     let Some(name) = fat12::to_8_3("ALARMS.ICS") else {
         return;
@@ -160,7 +159,7 @@ pub async fn import_alarms_from_fat12() {
     // the EPD takes its sweet time to refresh after, so without this
     // the user just sees a frozen pre-import frame.  Blue while we
     // read+parse, off when the slots are populated.
-    led::set_led(&LED_BLUE, LedState::On);
+    led::set_color(Rgb::BLUE, led::FOREVER);
 
     // Boxed onto the heap-equivalent? No heap — keep on stack.  16 KiB
     // is fine on the main task's stack during this brief boot phase.
@@ -168,7 +167,7 @@ pub async fn import_alarms_from_fat12() {
     let n = match fat12::read_file(&file, 0, &mut buf).await {
         Ok(n) => n,
         Err(_) => {
-            led::set_led(&LED_BLUE, LedState::Off);
+            led::off();
             return;
         }
     };
@@ -177,7 +176,7 @@ pub async fn import_alarms_from_fat12() {
     // DTSTART / DTEND carried a `Z` suffix.  The badge has no tzdata,
     // so non-Z timestamps (floating local time, `TZID=...:` values) are
     // taken at face value.
-    let tz_offset = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
+    let tz_offset_min = (crate::tz_offset_secs() / 60) as i32;
 
     let mut slot = 1usize; // slot 0 stays reserved for the manual alarm
     for event in ics::Parser::new(&buf[..n]) {
@@ -191,7 +190,7 @@ pub async fn import_alarms_from_fat12() {
                 event.day,
                 event.hour,
                 event.minute,
-                tz_offset,
+                tz_offset_min,
             )
         } else {
             (event.year, event.month, event.day, event.hour, event.minute)
@@ -203,7 +202,7 @@ pub async fn import_alarms_from_fat12() {
                 event.end_day,
                 event.end_hour,
                 event.end_minute,
-                tz_offset,
+                tz_offset_min,
             )
         } else {
             (
@@ -236,9 +235,10 @@ pub async fn import_alarms_from_fat12() {
 
     // Done — drop the blue "working" indicator and (on success) flash a
     // single green pulse so the user knows events landed in slots.
-    led::set_led(&LED_BLUE, LedState::Off);
     if imported > 0 {
-        led::set_led(&crate::fw::led::LED_GREEN, LedState::Duty50Once);
+        led::set_color(Rgb::GREEN, Duration::from_millis(500));
+    } else {
+        led::off();
     }
 }
 
@@ -254,21 +254,17 @@ fn shift_utc_to_local(
     day: u8,
     hour: u8,
     minute: u8,
-    tz_offset_hours: i8,
+    offset_min: i32,
 ) -> (u16, u8, u8, u8, u8) {
-    let total = hour as i32 + tz_offset_hours as i32;
-    let day_delta = total.div_euclid(24);
-    let new_hour = total.rem_euclid(24) as u8;
+    let total = hour as i32 * 60 + minute as i32 + offset_min;
+    let day_delta = total.div_euclid(24 * 60);
+    let new_hour = (total.rem_euclid(24 * 60) / 60) as u8;
+    let minute = (total.rem_euclid(60)) as u8;
     if day_delta == 0 {
         return (year, month, day, new_hour, minute);
     }
-    match fasttime::Date::from_ymd(year as i32, month, day)
-        .ok()
-        .and_then(|d| d.add_days(day_delta as i64).ok())
-    {
-        Some(d) => (d.year as u16, d.month, d.day, new_hour, minute),
-        None => (year, month, day, new_hour, minute),
-    }
+    let (y, mo, d) = calendar::add_days(year, month, day, day_delta as i64);
+    (y, mo, d, new_hour, minute)
 }
 
 // ── Top-level draw ──────────────────────────────────────────────────────────
@@ -277,7 +273,7 @@ pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let bat = clock::battery_pct();
+    let bat = crate::platform::battery_pct();
     let title = match alarm::current_mode() {
         alarm::WatchMode::AlarmEdit => "Edit Alarm",
         alarm::WatchMode::Normal => "Clock",

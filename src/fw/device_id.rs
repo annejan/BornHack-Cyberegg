@@ -36,6 +36,7 @@ pub fn get_ble_addr() -> [u8; 6] {
 /// Return the device ID as four uppercase ASCII hex bytes, e.g. `b"A3F7"`.
 pub fn get_bytes() -> [u8; 4] {
     let [id0, id1] = get();
-    let h = |n: u8| if n < 10 { b'0' + n } else { b'A' + n - 10 };
-    [h(id0 >> 4), h(id0 & 0xF), h(id1 >> 4), h(id1 & 0xF)]
+    let [a, b] = crate::hex::byte_upper(id0);
+    let [c, d] = crate::hex::byte_upper(id1);
+    [a, b, c, d]
 }

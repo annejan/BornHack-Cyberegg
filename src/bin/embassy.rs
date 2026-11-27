@@ -32,7 +32,7 @@ use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::pac::wdt::vals::{Halt as WdtHalt, Sleep as WdtSleep};
 use embassy_nrf::pwm::SimplePwm;
 use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 use panic_probe as _;
 #[cfg(feature = "ssd1675-driver")]
 use ssd1675::UpdateMode;
@@ -107,28 +107,23 @@ async fn main(spawner: Spawner) {
 
     // ── LEDs ─────────────────────────────────────────────────────────────
     // Hoisted above the mesh stack so the led_task is already running when
-    // ContactStore::init wipes a legacy store; the wipe signals via the
-    // existing fw::led::set_led / LED_GREEN atomics.
-    let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
-    let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
-    let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
-    led_red.set_low();
-    led_green.set_low();
-    led_blue.set_low();
-    Timer::after_millis(200).await;
-    led_red.set_high();
-    led_green.set_high();
-    led_blue.set_high();
-    Timer::after_millis(200).await;
-    spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
+    // ContactStore::init wipes a legacy store and lights the LED.  PWM1 mixes
+    // the three channels (PWM0 is the buzzer).
+    spawner.must_spawn(led::led_task(SimplePwm::new_3ch(
+        p.PWM1,
+        board!(p, led_red),
+        board!(p, led_green),
+        board!(p, led_blue),
+        &led::pwm_config(),
+    )));
+    spawner.must_spawn(led::about_rainbow_task());
+    led::set_color(led::Rgb::WHITE, Duration::from_millis(200));
+    Timer::after_millis(400).await;
 
-    // Boot breadcrumb #1 — ORANGE 50% duty (red + green together).  Orange,
-    // not red, so the boot blink isn't confused with DFU mode's red blink.
-    // Keeps a steady "alive, booting" pulse while the rest of init runs (KV,
-    // watch, sprites, mesh, EPD).  Both colours share the same Duty50 phase so
-    // they're on/off in lockstep → orange.  Cleared at EPD init below.
-    led::set_led(&led::LED_RED, led::LedState::Duty50);
-    led::set_led(&led::LED_GREEN, led::LedState::Duty50);
+    // Boot breadcrumb #1 — steady orange while the rest of init runs (KV,
+    // watch, sprites, mesh, EPD).  Orange, not red, so it isn't confused
+    // with DFU mode's red blink.  Replaced at EPD init below.
+    led::set_color(led::Rgb::ORANGE, led::FOREVER);
 
     // ── Signed-channel CSPRNG seed ───────────────────────────────────────
     // Draw 32 bytes from the on-chip TRNG via direct register access
@@ -168,15 +163,18 @@ async fn main(spawner: Spawner) {
     static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
     #[cfg(feature = "ssd1675-driver")]
     static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    // Boot-time escape hatch for a bad custom LUT: sample Fire (joy_fire =
-    // P1_02, see board.rs) before init_epd. Held → force the safe OTP
+    // Boot-time escape hatch for a bad custom LUT: sample Fire (`joy_fire` in
+    // board.rs) before init_epd. Held → force the safe OTP
     // waveform and ignore LUT.CFG. `steal` is sound here: this is a
     // one-shot read that completes before the button task claims the pin
     // (board!(p, joy_fire) at spawn time below).
     #[cfg(feature = "ssd1675-driver")]
     let force_otp_lut = {
         use embassy_nrf::gpio::{Input, Pull};
-        let fire = Input::new(unsafe { embassy_nrf::peripherals::P1_02::steal() }, Pull::Up);
+        let fire = Input::new(
+            board!(unsafe { embassy_nrf::Peripherals::steal() }, joy_fire),
+            Pull::Up,
+        );
         let held = fire.is_low();
         drop(fire);
         held
@@ -200,9 +198,14 @@ async fn main(spawner: Spawner) {
     .unwrap();
     #[cfg(feature = "ssd1675-driver")]
     defmt::info!("EPD initialized");
-    // EPD tuning is persisted via the mesh settings KV store; non-mesh builds
-    // boot with the compiled-in defaults (LUT speed 100, temp bias 0).
-    #[cfg(all(feature = "ssd1675-driver", feature = "mesh"))]
+    // EPD tuning and the timezone are persisted in the shared "settings" KV
+    // namespace, in every build (mesh or not). Load them synchronously here,
+    // before any task that renders with them starts.
+    bornhack_aegg::TZ_OFFSET_QH.store(
+        bornhack_aegg::fw::settings::get_timezone().await,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+    #[cfg(feature = "ssd1675-driver")]
     {
         bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
         bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
@@ -222,14 +225,23 @@ async fn main(spawner: Spawner) {
     let mut partial_state = bornhack_aegg::fw::epd::partial_state_take(dims.rows, dims.cols);
     #[cfg(feature = "ssd1675-driver")]
     partial_state.clear_to(ssd1675::graphics::Color::White);
+    // Charge-ledger / halo-kick tuning from `EPD.CFG` (FAT12 is formatted at
+    // the top of `main`); no file = the variant's defaults. Clamped by the
+    // driver crate, so a bad file cannot harm the panel.
+    #[cfg(feature = "ssd1675-driver")]
+    {
+        let tuning = bornhack_aegg::fw::epd_cfg::load(ssd1675::EpdTuning::for_variant(
+            display.variant(),
+        ))
+        .await;
+        partial_state.set_tuning(tuning);
+    }
 
     // Boot breadcrumb #2 — switch from orange to blue while the boot
     // tri-color refresh + remaining task spawns finish.  This is the
     // longest dark phase in the original boot, ~13s, so a colour change
     // here gives users a "no, it's not stuck" signal partway through.
-    led::set_led(&led::LED_RED, led::LedState::Off);
-    led::set_led(&led::LED_GREEN, led::LedState::Off);
-    led::set_led(&led::LED_BLUE, led::LedState::Duty50);
+    led::set_color(led::Rgb::BLUE, led::FOREVER);
 
     // Boot-time full blank: clear both planes to white and push with the
     // tri-color waveform so red ink particles get cycled too.  Wipes any
@@ -246,6 +258,9 @@ async fn main(spawner: Spawner) {
         if panel_c10 != i16::MIN {
             display.set_active_temperature(panel_c10);
         }
+        // Frame period of the active band (sets the halo / correction
+        // pulse length: HALO_FRAMES x this).
+        defmt::info!("EPD: frame {=u32} ns", display.frame_ns());
 
         display.clear(Color::White);
         let _ = display.reset().await;
@@ -277,10 +292,15 @@ async fn main(spawner: Spawner) {
     // First-boot interactive sign-off path — only on a virgin badge.
     // Paints test status on `display` via the write-name-then-test
     // pattern so a hang leaves a forensic record on the e-paper.
-    // SSD1675 only (drives the raw `EpdGfx`); the 1680 build skips it.
+    // Both panels run it: the SSD1675 here on the raw `EpdGfx`, the SSD1680 further
+    // down once its unified driver exists (same position relative to the boot clear).
     #[cfg(feature = "ssd1675-driver")]
     if !bornhack_aegg::fw::factory_test::is_passed().await {
-        bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw, &mut display).await;
+        bornhack_aegg::fw::factory_test::run_first_boot_interactive(
+            &hw,
+            &mut bornhack_aegg::fw::epd_1675_driver::FactoryGfx(&mut display),
+        )
+        .await;
     }
 
     #[cfg(feature = "ssd1675-driver")]
@@ -301,17 +321,43 @@ async fn main(spawner: Spawner) {
         use embedded_hal_bus::spi::ExclusiveDevice;
 
         // 152×152 badge panel: 152/8 * 152 = 2888 bytes per plane.
+        //
+        // Every buffer is a zero-initialised `ConstStaticCell` taken in place:
+        // it lives in `.bss` and no copy of the array is ever built on the
+        // stack. (`StaticCell::init([..; N])` materialises its argument in
+        // `main`'s poll frame first; with ~34 KiB of planes that frame alone
+        // grew past 40 KiB and, with flip-link putting the stack under
+        // `.bss`, overflowed the boot stack → HardFault → WDT reset loop, the
+        // flashing white LED.) `Driver::new` fills each plane with its real
+        // starting value.
+        use static_cell::ConstStaticCell;
         const PLANE_N: usize = 2888;
-        static BLACK_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static PREV_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static PREV_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static CODE_BW_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static CODE_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static BLACK_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static RED_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static PREV_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static PREV_RED_1680: ConstStaticCell<[u8; PLANE_N]> =
+            ConstStaticCell::new([0; PLANE_N]);
+        // Damage bitmap: 1 bit per panel pixel, so the same PLANE_N bytes.
+        // Records every pixel a waveform has touched but not confirmed (an
+        // interrupted drive, or a preview awaiting its settle), and is
+        // cleared only when a full-length drive completes — this is what
+        // lets an interrupted refresh be resumed instead of diffed away.
+        static DIRTY_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static CODE_BW_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static CODE_RED_1680: ConstStaticCell<[u8; PLANE_N]> =
+            ConstStaticCell::new([0; PLANE_N]);
+        // Charge ledger: a signed 4-bit V·t value per panel pixel (152·152/2
+        // = 11552 bytes, the size of the old top-up counter). Schedules short
+        // opposite-rail correction pulses for pixels carrying excess charge;
+        // see `ssd1680::ledger`.
+        const LEDGER_N: usize = ssd1680::ChargeLedger::bytes_for(152, 152);
+        static LEDGER_1680: ConstStaticCell<[u8; LEDGER_N]> = ConstStaticCell::new([0; LEDGER_N]);
         // 152×152 UI canvas planes (the driver scales these into the panel).
         use bornhack_aegg::fw::epd_1680_driver::CANVAS_BYTES;
-        static CANVAS_BW_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
-        static CANVAS_RED_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
+        static CANVAS_BW_1680: ConstStaticCell<[u8; CANVAS_BYTES]> =
+            ConstStaticCell::new([0; CANVAS_BYTES]);
+        static CANVAS_RED_1680: ConstStaticCell<[u8; CANVAS_BYTES]> =
+            ConstStaticCell::new([0; CANVAS_BYTES]);
 
         // Read the panel's OWN OTP full waveform back over cmd 0x33 and halve
         // its shake repeats. Runs BEFORE the display Spim is built (it borrows
@@ -347,17 +393,25 @@ async fn main(spawner: Spawner) {
             display,
             152,
             152,
-            CANVAS_BW_1680.init([0xFF; CANVAS_BYTES]),
-            CANVAS_RED_1680.init([0x00; CANVAS_BYTES]),
-            BLACK_1680.init([0xFF; PLANE_N]),
-            RED_1680.init([0x00; PLANE_N]),
-            PREV_1680.init([0xFF; PLANE_N]),
-            PREV_RED_1680.init([0x00; PLANE_N]),
-            CODE_BW_1680.init([0xFF; PLANE_N]),
-            CODE_RED_1680.init([0xFF; PLANE_N]),
+            CANVAS_BW_1680.take(),
+            CANVAS_RED_1680.take(),
+            BLACK_1680.take(),
+            RED_1680.take(),
+            PREV_1680.take(),
+            PREV_RED_1680.take(),
+            DIRTY_1680.take(),
+            CODE_BW_1680.take(),
+            CODE_RED_1680.take(),
+            LEDGER_1680.take(),
             false, // scale_fill: canvas matches the 152×152 panel 1:1
         )
     };
+
+    // Waveform tuning from `EPD.CFG` on the badge volume (FAT12 is formatted
+    // at the top of `main`); no file = built-in defaults. Clamped by the
+    // driver crate, so a bad file cannot harm the panel.
+    #[cfg(feature = "ssd1680-driver")]
+    driver.set_tuning(bornhack_aegg::fw::epd_cfg::load().await);
 
     // Boot paint on the unified driver (SSD1680 only — the SSD1675 boot clear
     // already ran on the raw panel above so the factory-test forensic trail and
@@ -371,6 +425,14 @@ async fn main(spawner: Spawner) {
         let _ = driver.refresh(RefreshMode::Full).await;
         // No deep_sleep: the SSD1680 driver intentionally keeps the controller
         // awake between refreshes (see `Driver::refresh`).
+    }
+
+    // First-boot interactive sign-off on the SSD1680 (see the SSD1675 call
+    // above): only on a badge without the `hwtest:passed` KV flag; halts
+    // forever on fail or on the ship image, exactly like the 1675 path.
+    #[cfg(feature = "ssd1680-driver")]
+    if !bornhack_aegg::fw::factory_test::is_passed().await {
+        bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw, &mut driver).await;
     }
 
     // ── Watch app — load persisted alarm state and start the persister ───
@@ -387,16 +449,16 @@ async fn main(spawner: Spawner) {
 
     // ── BornPets balance — install the active threshold set before any
     //    game tick runs.  Mode comes from the KV `game.mode` setting
-    //    (defaults to Classic on a fresh badge); `BORNPETS.CFG` on the
+    //    (defaults to Classic on a fresh badge); `BPETS_V3.CFG` on the
     //    USB-MSC partition, if present, overrides individual fields on
     //    top of the preset.
     #[cfg(feature = "game")]
     {
         let mode = bornhack_aegg::game::settings::load_mode_from_kv().await;
-        let _ = bornhack_aegg::fw::bornpets_cfg::load_and_install(mode).await;
+        let _ = bornhack_aegg::game::bornpets_cfg::load_and_install(mode).await;
         // Register custom pets from PETS.CFG (if any) before the game reads
         // the roster.  No file → built-in roster only.
-        bornhack_aegg::fw::pets_cfg::load_and_install().await;
+        bornhack_aegg::game::pets_cfg::load_and_install().await;
         spawner.must_spawn(bornhack_aegg::game::settings::persister_task());
         // Apply the persisted "game enabled" flag to the display state so a
         // previously disabled game screen stays hidden across reboot (default
@@ -408,6 +470,11 @@ async fn main(spawner: Spawner) {
         });
     }
 
+    // ── Device settings persister (non-mesh builds) ──────────────────────
+    // Mesh builds persist timezone + EPD tuning from `persister::run`.
+    #[cfg(not(feature = "mesh"))]
+    spawner.must_spawn(bornhack_aegg::fw::settings::persister_task());
+
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
     // Must come before temperature/EPD because it consumes p.RNG, p.RTC0,
     // p.TIMER0, p.TEMP, and PPI channels.
@@ -417,6 +484,7 @@ async fn main(spawner: Spawner) {
         spawner.must_spawn(persister::run());
         spawner.must_spawn(bornhack_aegg::fw::mesh::contacts_screen::refresh_cache_task());
         spawner.must_spawn(bornhack_aegg::fw::mesh::contacts_screen::mutation_persister_task());
+        spawner.must_spawn(bornhack_aegg::fw::mesh::pm_inbox::pm_led_task());
         ContactStore::new().init().await;
 
         // Seed channel KV slots before the meshcore listener or BLE task
@@ -430,19 +498,15 @@ async fn main(spawner: Spawner) {
             channels::count_active().await
         );
 
-        // Load persisted display/runtime settings (timezone, boost-RX) into
-        // their in-RAM atomics SYNCHRONOUSLY here — before any task that
-        // reads them starts rendering. Previously the load lived inside the
-        // BLE task's init block, which races against the display task: on a
-        // quick reboot the display could draw a frame using the static
-        // default (TIMEZONE_OFFSET = 0 → UTC) before the BLE task had a
-        // chance to load the persisted offset.
-        bornhack_aegg::TIMEZONE_OFFSET.store(
-            settings::get_timezone().await,
-            core::sync::atomic::Ordering::Relaxed,
-        );
+        // Load persisted boost-RX into its in-RAM atomic SYNCHRONOUSLY here —
+        // before any task that reads it starts. (The timezone is loaded
+        // earlier, right after EPD init, for all builds.)
         bornhack_aegg::BOOSTED_RX_GAIN.store(
             settings::get_boost_rx().await,
+            core::sync::atomic::Ordering::Relaxed,
+        );
+        bornhack_aegg::RX_POWER_SAVE.store(
+            settings::get_rx_power_save().await,
             core::sync::atomic::Ordering::Relaxed,
         );
 
@@ -458,32 +522,17 @@ async fn main(spawner: Spawner) {
                 None => Some(settings::dk_bornhack_default_scope()),
             };
             bornhack_aegg::fw::mesh::FLOOD_SCOPE_KEY.lock(|c| c.set(scope));
+            bornhack_aegg::fw::mesh::DEFAULT_SCOPE_KEY.lock(|c| c.set(scope));
         }
 
         {
             let rp = settings::get_radio_params_or_default().await;
-            use core::sync::atomic::Ordering::Relaxed;
-            bornhack_aegg::LORA_FREQ_HZ.store(rp.freq_hz, Relaxed);
-            bornhack_aegg::LORA_BW_HZ.store(rp.bw_hz, Relaxed);
-            bornhack_aegg::LORA_SF.store(rp.sf, Relaxed);
-            bornhack_aegg::LORA_CR.store(rp.cr, Relaxed);
-            bornhack_aegg::LORA_TX_POWER.store(rp.tx_power, Relaxed);
-            bornhack_aegg::LORA_CLIENT_REPEAT.store(rp.client_repeat, Relaxed);
+            rp.store_live();
         }
         {
             use core::sync::atomic::Ordering::Relaxed;
             if let Some(op) = settings::get_other_params().await {
-                bornhack_aegg::ADVERT_LOC_POLICY.store(op.advert_loc_policy != 0, Relaxed);
-                // Clamp persisted value into the menu-exposed range (1 or 2).
-                let ma = if op.multi_acks == 0 {
-                    1
-                } else {
-                    op.multi_acks.min(2)
-                };
-                bornhack_aegg::MULTI_ACKS.store(ma, Relaxed);
-                // Only telemetry_mode_base is exposed via the badge UI;
-                // loc/env stay 0 (no GPS, no env sensors).
-                bornhack_aegg::TELEMETRY_MODE_BASE.store(op.telemetry_mode_base.min(2), Relaxed);
+                op.store_live();
             }
             bornhack_aegg::fw::mesh::PATH_HASH_MODE
                 .store(settings::get_path_hash_mode().await.min(2), Relaxed);
@@ -493,6 +542,7 @@ async fn main(spawner: Spawner) {
             bornhack_aegg::ADVERT_INTERVAL_HOURS.store(adv.interval_hours, Relaxed);
 
             bornhack_aegg::IGNORE_BLINK.store(settings::get_ignore_blink().await, Relaxed);
+            bornhack_aegg::REGION_FILTER.store(settings::get_region_filter().await, Relaxed);
             bornhack_aegg::LORA_DISABLED.store(!settings::get_lora_enabled().await, Relaxed);
             bornhack_aegg::BLE_DISABLED.store(!settings::get_ble_enabled().await, Relaxed);
         }
@@ -511,7 +561,7 @@ async fn main(spawner: Spawner) {
         // probe found a working crystal; otherwise log + skip and the
         // rest of the firmware (LoRa, watch, game, display) carries on.
         if hw.hfxo_ok {
-            let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
+            let ble_prng_seed = bornhack_aegg::fw::trng::seed32();
             static SDC_MEM: StaticCell<
                 nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>,
             > = StaticCell::new();
@@ -542,6 +592,7 @@ async fn main(spawner: Spawner) {
                 sdc,
                 CompanionContext {
                     pub_key: identity.pub_key,
+                    sec_key: identity.sec_key,
                 },
                 ble_prng_seed,
             ));
@@ -557,8 +608,18 @@ async fn main(spawner: Spawner) {
     // ── Game engine + sprite loader ─────────────────────────────────────
     #[cfg(feature = "game")]
     {
-        bornhack_aegg::game::lifecycle::init().await;
         bornhack_aegg::game::sprite_loader::init().await;
+        bornhack_aegg::game::pet_registry::drop_without_sprites(|id| {
+            let idle = bornhack_aegg::game::engine::anim_files::anim_id_for(
+                bornhack_aegg::game::engine::DisplayAnim::Idle,
+            );
+            bornhack_aegg::game::sprite_loader::count_anim_frames(id, idle) > 0
+        });
+        bornhack_aegg::game::lifecycle::init().await;
+        defmt::info!(
+            "game: retire hidden pet: {}",
+            bornhack_aegg::game::lifecycle::retire_hidden_pet()
+        );
     }
 
     // ── Temperature ──────────────────────────────────────────────────────
@@ -570,8 +631,8 @@ async fn main(spawner: Spawner) {
     // is in deep_sleep until the display task takes over.)
 
     // LEDs are initialised earlier (above the mesh stack) so the led_task is
-    // already running when the contact store needs to blink the green LED
-    // during a legacy-format wipe.
+    // already running when the contact store lights the green LED during a
+    // legacy-format wipe.
 
     // ── Buttons, NFC, buzzer, battery, clock ─────────────────────────────
     let mut button_rcvr = BTN_WATCH.receiver().unwrap();
@@ -607,12 +668,14 @@ async fn main(spawner: Spawner) {
     };
     spawner.must_spawn(battery_task(battery_monitor));
     // Drives the transient screen-lock padlock (5 s auto-hide, refresh on key).
-    spawner.must_spawn(bornhack_aegg::fw::lock::overlay_task());
+    spawner.must_spawn(bornhack_aegg::lock::overlay_task());
     spawner.must_spawn(minute_tick_task());
     #[cfg(feature = "mesh")]
     spawner.must_spawn(advert_ticker_task());
     #[cfg(all(feature = "mesh", feature = "game"))]
     spawner.must_spawn(pet_beacon_ticker_task());
+    #[cfg(feature = "game")]
+    spawner.must_spawn(battle_timer_task());
 
     // ── USB mass storage ──────────────────────────────────────────────────
     // Spawn BEFORE the sponsor slideshow so the host can mount the FAT
@@ -635,11 +698,9 @@ async fn main(spawner: Spawner) {
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
 
-    // Boot breadcrumb #3 — single green pulse, then idle.  Tells the
+    // Boot breadcrumb #3 — single 500 ms green pulse, then idle.  Tells the
     // user the badge is past init and the screen carousel is live.
-    // `Duty50Once` auto-resets to Off after one 500 ms pulse.
-    led::set_led(&led::LED_BLUE, led::LedState::Off);
-    led::set_led(&led::LED_GREEN, led::LedState::Duty50Once);
+    led::set_color(led::Rgb::GREEN, Duration::from_millis(500));
     // Qwiic I2C bus (external connector, TWISPI0 + P1_10/P1_11).  Owned by a
     // dedicated `keyboard_task` so the optional I2C keyboard can be polled
     // independently of the (slow) e-paper display loop — a wedged I2C read
@@ -700,6 +761,102 @@ static KBD_REDRAW: embassy_sync::signal::Signal<
     (),
 > = embassy_sync::signal::Signal::new();
 
+/// Per-loop sprite animation state shared by both panel loops (empty without
+/// the `game` feature).
+#[cfg(any(feature = "ssd1675-driver", feature = "ssd1680-driver"))]
+struct AnimState {
+    #[cfg(feature = "game")]
+    sprite_frame: u8,
+    // Last animation id observed by the sprite-frame advance.  When
+    // it changes, `sprite_frame` resets to 0 so each new animation
+    // starts at its first frame regardless of where the previous one
+    // left the counter.
+    #[cfg(feature = "game")]
+    last_anim_id: u8,
+    // Absolute deadline of the next idle frame; survives loop re-entries and
+    // redraws so minute ticks and wakes cannot push it back.
+    #[cfg(feature = "game")]
+    pacer: bornhack_aegg::game::pacing::FramePacer,
+}
+
+#[cfg(any(feature = "ssd1675-driver", feature = "ssd1680-driver"))]
+impl AnimState {
+    const fn new() -> Self {
+        Self {
+            #[cfg(feature = "game")]
+            sprite_frame: 0,
+            #[cfg(feature = "game")]
+            last_anim_id: 0xFF,
+            #[cfg(feature = "game")]
+            pacer: bornhack_aegg::game::pacing::FramePacer::new(),
+        }
+    }
+
+    /// Advance the animation frame; call only when the sprite timer fired.
+    /// Anim-change detection lives in `render_frame`, just before the render,
+    /// so the reset is visible on the same frame as the change.
+    fn advance_sprite(&mut self, sprite_advance: bool) {
+        #[cfg(feature = "game")]
+        if sprite_advance {
+            self.pacer.on_frame();
+            let anim = bornhack_aegg::game::lifecycle::display_anim();
+            let kind = bornhack_aegg::game::lifecycle::pet_kind();
+            let count = bornhack_aegg::game::engine::anim_files::frame_count(kind, anim);
+            if count > 0 {
+                // Hatching clamps to the last frame instead of wrapping.
+                self.sprite_frame = bornhack_aegg::game::engine::anim_files::clamp_or_wrap(
+                    self.sprite_frame as u32 + 1,
+                    count,
+                    anim,
+                );
+            }
+        }
+        #[cfg(not(feature = "game"))]
+        let _ = sprite_advance;
+    }
+}
+
+/// Clear the frame, render the game (when active) and the UI into `display`;
+/// returns the active screen.
+#[cfg(any(feature = "ssd1675-driver", feature = "ssd1680-driver"))]
+async fn render_frame<D>(display: &mut D, anim_state: &mut AnimState) -> u8
+where
+    D: embedded_graphics::draw_target::DrawTarget<Color = bornhack_aegg::EpdColor>
+        + bornhack_aegg::epd_driver::PlaneAccess,
+{
+    let _ = display.clear(bornhack_aegg::EpdColor::White);
+    let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
+
+    // ── Game cycle: update engine, render animation ────────────────
+    // Reset the sprite-frame counter on animation change *before*
+    // the render so the new anim shows frame 0 immediately rather
+    // than waiting for the next sprite-tick fire.
+    #[cfg(feature = "game")]
+    if active_screen == bornhack_aegg::SCREEN_GAME {
+        let anim = bornhack_aegg::game::lifecycle::display_anim();
+        let id = bornhack_aegg::game::engine::anim_files::anim_id_for(anim);
+        if id != anim_state.last_anim_id {
+            anim_state.last_anim_id = id;
+            anim_state.sprite_frame = 0;
+        }
+        bornhack_aegg::game::render(display, anim_state.sprite_frame).await;
+    }
+    #[cfg(not(feature = "game"))]
+    let _ = anim_state;
+
+    #[cfg(feature = "mesh")]
+    if active_screen == SCREEN_PM {
+        bornhack_aegg::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    let health_str = with_health!(|f| f.to_string());
+    let bat_str = battery::read_pct();
+    if draw_graphics(display, &health_str, &bat_str).is_err() {
+        health_err!(epd, "Failed to draw graphics");
+    }
+    active_screen
+}
+
 #[cfg(feature = "ssd1675-driver")]
 async fn display_loop(
     driver: &mut bornhack_aegg::fw::epd_1675_driver::Ssd1675Driver<'_>,
@@ -710,17 +867,11 @@ async fn display_loop(
         2,
     >,
 ) {
+    #[cfg(feature = "game")]
     use bornhack_aegg::EpdColor;
     use embassy_futures::select::{Either, select};
 
-    #[cfg(feature = "game")]
-    let mut sprite_frame: u8 = 0;
-    // Last animation id observed by the sprite-frame advance.  When
-    // it changes, `sprite_frame` resets to 0 so each new animation
-    // starts at its first frame regardless of where the previous one
-    // left the counter.
-    #[cfg(feature = "game")]
-    let mut last_anim_id: u8 = 0xFF;
+    let mut anim_state = AnimState::new();
 
     // Track the previously-rendered screen so we can promote the
     // first refresh after a screen switch to a full panel-clearing
@@ -750,6 +901,24 @@ async fn display_loop(
         #[cfg(feature = "game")]
         if bornhack_aegg::game::battle_anim_active() {
             let anim_speed = bornhack_aegg::fw::epd::current_lut_speed();
+            // The challenger's exact chance (the ACCEPT just came in) shows
+            // once, as one refresh, before the animation (spec 12.4).
+            if bornhack_aegg::game::battle_view::take_pre_show() {
+                use embedded_graphics::draw_target::DrawTarget;
+                let _ = driver.clear(EpdColor::White);
+                {
+                    let (display, _ps) = driver.staged_parts_mut();
+                    let _ = display.reset().await;
+                }
+                let _ = bornhack_aegg::game::battle_view::draw_queued_pre(driver);
+                {
+                    let (display, ps) = driver.staged_parts_mut();
+                    let _ = display.update_tc(anim_speed).await;
+                    ps.reset_ledger();
+                    let _ = display.deep_sleep().await;
+                }
+                Timer::after_millis(2_000).await;
+            }
             // Drive the two stages EXPLICITLY, holding each ~5 s after its
             // refresh completes. Deriving the stage from wall-clock elapsed
             // would skip the result frame: a single e-paper refresh takes
@@ -767,8 +936,9 @@ async fn display_loop(
                 }
                 bornhack_aegg::game::battle_view::render_anim(driver, stage).await;
                 {
-                    let (display, _ps) = driver.staged_parts_mut();
+                    let (display, ps) = driver.staged_parts_mut();
                     let _ = display.update_tc(anim_speed).await;
+                    ps.reset_ledger();
                     let _ = display.deep_sleep().await;
                 }
                 Timer::after_millis(5_000).await;
@@ -784,50 +954,20 @@ async fn display_loop(
             let _deghost_boost = bornhack_aegg::fw::power::boost(
                 bornhack_aegg::fw::power::Source::Epd,
             );
-            let (display, _ps) = driver.staged_parts_mut();
+            let (display, ps) = driver.staged_parts_mut();
             display.clear(Color::Black);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
             display.clear(Color::White);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
+            ps.reset_ledger();
             let _ = display.deep_sleep().await;
             drop(_deghost_boost);
             bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
-        {
-            use embedded_graphics::draw_target::DrawTarget;
-            let _ = driver.clear(EpdColor::White);
-        }
-        let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
-
-        // ── Game cycle: update engine, render animation ────────────────
-        // Reset the sprite-frame counter on animation change *before*
-        // the render so the new anim shows frame 0 immediately rather
-        // than waiting for the next sprite-tick fire.
-        #[cfg(feature = "game")]
-        if active_screen == bornhack_aegg::SCREEN_GAME {
-            let anim = bornhack_aegg::game::lifecycle::display_anim();
-            let id = bornhack_aegg::game::engine::anim_files::anim_id_for(anim);
-            if id != last_anim_id {
-                last_anim_id = id;
-                sprite_frame = 0;
-            }
-            bornhack_aegg::game::render(driver, sprite_frame).await;
-        }
-
-        #[cfg(feature = "mesh")]
-        if active_screen == SCREEN_PM {
-            bornhack_aegg::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
-            led::set_led(&led::LED_BLUE, led::LedState::Off);
-        }
-
-        let health_str = with_health!(|f| f.to_string());
-        let bat_str = battery::read_pct();
-        if draw_graphics(driver, &health_str, &bat_str).is_err() {
-            health_err!(epd, "Failed to draw graphics");
-        }
+        let active_screen = render_frame(driver, &mut anim_state).await;
 
         // Screen switches and game menu open/close redraw the WHOLE frame
         // as a partial (mark every pixel dirty) rather than running a full
@@ -835,7 +975,7 @@ async fn display_loop(
         // open and close; we consume it with `swap` so the redraw applies
         // once.  The expensive full refresh is now promoted automatically
         // inside `update_partial` once the cumulative changed-pixel counter
-        // reaches `full_after_screens` (5 screens) — see `should_force_full`.
+        // reaches `full_after_screens` (3 screens, the vendor default) — see `should_force_full`.
         // First iteration after boot (last_screen == 0xFF) skips since boot
         // already drove a clean frame.
         let screen_changed = last_screen != 0xFF && last_screen != active_screen;
@@ -896,7 +1036,7 @@ async fn display_loop(
 
         let sprite_advance = if partial_idle {
             last_screen = active_screen;
-            wait_display_event(button_rcvr, active_screen, true).await
+            wait_display_event(button_rcvr, active_screen, &mut anim_state, true).await
         } else {
             match select(
                 async {
@@ -937,8 +1077,25 @@ async fn display_loop(
                         // `partial_idle` above keeps this from re-flashing once
                         // the message is drawn.
                         #[cfg(feature = "game")]
+                        // A change that leaves the red plane alone (sky switch,
+                        // floor pile under a red line) needs no red seating, so
+                        // it stays on the quiet delta path.
                         let game_status = active_screen == bornhack_aegg::SCREEN_GAME
-                            && bornhack_aegg::game::status_wants_full_refresh();
+                            && bornhack_aegg::game::status_wants_full_refresh()
+                            && partial_state.bbox_of_dirty().is_some_and(|b| {
+                                bornhack_aegg::refresh_decision::touches_red(
+                                    b.x,
+                                    b.y,
+                                    b.w,
+                                    b.h,
+                                    |x, y| {
+                                        partial_state.is_dirty(x, y)
+                                            && (partial_state.pending_color(x, y) == Some(Color::Red)
+                                                || partial_state.shadow_color(x, y)
+                                                    == Some(Color::Red))
+                                    },
+                                )
+                            });
                         #[cfg(not(feature = "game"))]
                         let game_status = false;
                         // Text-entry is a fast-changing overlay on top of
@@ -960,6 +1117,9 @@ async fn display_loop(
                             )
                             .await;
                             partial_state.commit_refresh();
+                            // A full tri-colour drive: start the charge
+                            // ledger from zero, as update_partial's own full does.
+                            partial_state.reset_ledger();
                         } else {
                             let _ = bornhack_aegg::fw::power::boosted(
                                 bornhack_aegg::fw::power::Source::Epd,
@@ -982,7 +1142,7 @@ async fn display_loop(
                 // next `update_partial` resets the controller and re-drives
                 // (see display.rs recovery). Simple case: everything interrupts;
                 // ghosting corner-cases handled later.
-                wait_display_event(button_rcvr, active_screen, true),
+                wait_display_event(button_rcvr, active_screen, &mut anim_state, true),
             )
             .await
             {
@@ -990,7 +1150,7 @@ async fn display_loop(
                     // Refresh finished uninterrupted.  Commit the screen-
                     // transition tracker, then wait the frame timer.
                     last_screen = active_screen;
-                    wait_display_event(button_rcvr, active_screen, true).await
+                    wait_display_event(button_rcvr, active_screen, &mut anim_state, true).await
                 }
                 // Interrupted mid-refresh.  Propagate the waiter's verdict:
                 // sprite-timer fire → advance the frame (true); button/signal
@@ -999,32 +1159,9 @@ async fn display_loop(
             }
         };
 
-        led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
+        led::set_color(led::Rgb::RED, Duration::from_millis(50));
 
-        // Advance animation frame only when the sprite timer fired.
-        // Anim-change detection lives just before `render()` above so
-        // the reset is visible on the same frame as the change.
-        #[cfg(feature = "game")]
-        if sprite_advance {
-            let anim = bornhack_aegg::game::lifecycle::display_anim();
-            let kind = bornhack_aegg::game::lifecycle::pet_kind();
-            let count = bornhack_aegg::game::engine::anim_files::frame_count(kind, anim);
-            if count > 0 {
-                let next = sprite_frame + 1;
-                // During hatching, clamp to the last frame instead of wrapping.
-                let is_hatching = matches!(
-                    anim,
-                    bornhack_aegg::game::engine::DisplayAnim::Hatching { .. }
-                );
-                sprite_frame = if is_hatching {
-                    next.min(count - 1)
-                } else {
-                    next % count
-                };
-            }
-        }
-        #[cfg(not(feature = "game"))]
-        let _ = sprite_advance;
+        anim_state.advance_sprite(sprite_advance);
     }
 }
 
@@ -1033,6 +1170,11 @@ async fn display_loop(
 /// non-blink delta waveform, so every runtime update uses [`RefreshMode::Fast`]
 /// (the boot paint in `main` is the only full refresh) and screen switches ride
 /// the same delta path.
+///
+/// A button or signal arriving mid-drive cancels the refresh rather than
+/// queueing behind it; the controller is recovered by hardware reset on the
+/// next refresh. See the `select` at the bottom of the loop for the mechanism
+/// and its trade-offs.
 #[cfg(feature = "ssd1680-driver")]
 async fn display_loop_1680<D>(
     display: &mut D,
@@ -1048,38 +1190,50 @@ async fn display_loop_1680<D>(
         + embedded_graphics::geometry::OriginDimensions,
 {
     use bornhack_aegg::epd_driver::RefreshMode;
+    use embassy_futures::select::{Either, select};
 
-    #[cfg(feature = "game")]
-    let mut sprite_frame: u8 = 0;
-    #[cfg(feature = "game")]
-    let mut last_anim_id: u8 = 0xFF;
+    let mut anim_state = AnimState::new();
 
     loop {
-        let _ = display.clear(bornhack_aegg::color::EpdColor::White);
-        let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
-
+        // ── Battle animation takeover ──────────────────────────────────
+        // Same two-stage takeover as the SSD1675 loop: standing, then the
+        // won/lost poses, each one uninterrupted refresh held ~5 s, before the
+        // screen underneath (the battle result card) is drawn again.
         #[cfg(feature = "game")]
-        if active_screen == bornhack_aegg::SCREEN_GAME {
-            let anim = bornhack_aegg::game::lifecycle::display_anim();
-            let id = bornhack_aegg::game::engine::anim_files::anim_id_for(anim);
-            if id != last_anim_id {
-                last_anim_id = id;
-                sprite_frame = 0;
+        if bornhack_aegg::game::battle_anim_active() {
+            // The challenger's exact chance shows once before the animation.
+            if bornhack_aegg::game::battle_view::take_pre_show() {
+                let _ = display.clear(bornhack_aegg::color::EpdColor::White);
+                let _ = bornhack_aegg::game::battle_view::draw_queued_pre(display);
+                let _ = display.refresh(RefreshMode::Fast).await;
+                Timer::after_millis(2_000).await;
             }
-            bornhack_aegg::game::render(display, sprite_frame).await;
+            for stage in [
+                bornhack_aegg::game::BattleStage::Standing,
+                bornhack_aegg::game::BattleStage::Result,
+            ] {
+                let _ = display.clear(bornhack_aegg::color::EpdColor::White);
+                bornhack_aegg::game::battle_view::render_anim(display, stage).await;
+                let _ = display.refresh(RefreshMode::Fast).await;
+                Timer::after_millis(5_000).await;
+            }
+            bornhack_aegg::game::clear_battle_anim();
+            continue;
         }
 
-        #[cfg(feature = "mesh")]
-        if active_screen == SCREEN_PM {
-            bornhack_aegg::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
-            led::set_led(&led::LED_BLUE, led::LedState::Off);
+        // Hidden de-ghost combo (`display_flush`): black -> white full-refresh
+        // cycle, then force a whole-frame redraw. Mirrors the SSD1675 loop's
+        // FORCE_FLUSH_PENDING handling, using the driver's `Full` path.
+        if bornhack_aegg::FORCE_FLUSH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            let _ = display.clear(bornhack_aegg::color::EpdColor::Black);
+            let _ = display.refresh(RefreshMode::Full).await;
+            let _ = display.clear(bornhack_aegg::color::EpdColor::White);
+            let _ = display.refresh(RefreshMode::Full).await;
+            let _ = display.deep_sleep().await;
+            bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
         }
 
-        let health_str = with_health!(|f| f.to_string());
-        let bat_str = battery::read_pct();
-        if draw_graphics(display, &health_str, &bat_str).is_err() {
-            health_err!(epd, "Failed to draw graphics");
-        }
+        let active_screen = render_frame(display, &mut anim_state).await;
 
         // The SSD1680 de-ghosts on the non-blink delta, so screen switches use
         // the fast windowed delta too — consume any pending full-refresh request
@@ -1088,36 +1242,76 @@ async fn display_loop_1680<D>(
             .swap(false, core::sync::atomic::Ordering::Relaxed);
         let mode = RefreshMode::Fast;
 
-        // Drive to completion (not wrapped in a cancelling `select` — a dropped
-        // mid-SPI refresh future could desync the controller). A button pressed
-        // during the drive is latched in the watch channel and returns from the
-        // wait below immediately after.
-        let _ = display.refresh(mode).await;
-
-        led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
-
-        let sprite_advance = wait_display_event(button_rcvr, active_screen, true).await;
-
-        #[cfg(feature = "game")]
-        if sprite_advance {
-            let anim = bornhack_aegg::game::lifecycle::display_anim();
-            let kind = bornhack_aegg::game::lifecycle::pet_kind();
-            let count = bornhack_aegg::game::engine::anim_files::frame_count(kind, anim);
-            if count > 0 {
-                let next = sprite_frame + 1;
-                let is_hatching = matches!(
-                    anim,
-                    bornhack_aegg::game::engine::DisplayAnim::Hatching { .. }
-                );
-                sprite_frame = if is_hatching {
-                    next.min(count - 1)
-                } else {
-                    next % count
+        // Interrupt the in-flight LUT on a new draw event instead of waiting the
+        // whole drive out — the SSD1675 path does the same, and it is what makes
+        // button presses feel immediate rather than one refresh behind.
+        //
+        // The SSD1680 has no abort command, so the mechanism is: drop the
+        // refresh future (it parks in `busy_wait_for_completion`), which leaves
+        // `Display::in_flight` set; the next refresh sees the flag and runs
+        // `hw_reset_and_init` — RESET pin, SoftReset, re-init — before driving
+        // the new frame. See the "Cancellation safety" section in
+        // `vendor/ssd1680/src/display.rs`. Losing controller RAM to that reset
+        // costs nothing here because `update_delta` re-uploads both full code
+        // planes every call. The adapter commits `prev`/`prev_red` only after
+        // the await returns, so a cancelled frame's pixels stay dirty and the
+        // next delta re-drives them.
+        //
+        // `allow_sprite = false`: only buttons/signals cut a drive short. If the
+        // animation frame timer could interrupt too, a timer faster than the
+        // refresh would cancel every drive in turn and the panel would never
+        // finish one — the sprite would freeze while the controller thrashed
+        // through resets. Animation ticks therefore wait their turn; user input
+        // does not.
+        let sprite_advance = match select(
+            display.refresh(mode),
+            wait_display_event(button_rcvr, active_screen, &mut anim_state, false),
+        )
+        .await
+        {
+            // Drive completed untouched — wait for the next event. The driver
+            // leaves the analog rails up so a quick follow-up update skips the
+            // booster soft-start; drop them once nothing has happened for
+            // `ANALOG_IDLE_MS`. The power-off runs beside the wait (not before
+            // it) so the sprite timer inside `wait_display_event` keeps its
+            // original deadline. An event during the power-off drops it
+            // mid-command; the next refresh then resets the controller.
+            //
+            // A preview leaves pixels short of saturation: when one is
+            // pending, the settle pass runs first, after `SETTLE_MS` of idle
+            // (rails still up), then the usual power-off delay follows. An
+            // event during the settle cancels it like any refresh; the pixels
+            // stay dirty and the next refresh or idle settles them.
+            Either::First(_) => {
+                const ANALOG_IDLE_MS: u64 = 1000;
+                let idle_power_off = async {
+                    if let Some(ms) = display.settle_due_in_ms() {
+                        Timer::after_millis(ms as u64).await;
+                        let _ = display.settle().await;
+                    }
+                    Timer::after_millis(ANALOG_IDLE_MS).await;
+                    let _ = display.deep_sleep().await;
+                    core::future::pending::<core::convert::Infallible>().await
                 };
+                match select(
+                    wait_display_event(button_rcvr, active_screen, &mut anim_state, true),
+                    idle_power_off,
+                )
+                .await
+                {
+                    Either::First(advance) => advance,
+                    Either::Second(never) => match never {},
+                }
             }
-        }
-        #[cfg(not(feature = "game"))]
-        let _ = sprite_advance;
+            // Interrupted: redraw immediately without advancing the animation
+            // frame (the sprite timer is suppressed above, so this is always a
+            // button or signal).
+            Either::Second(_) => false,
+        };
+
+        led::set_color(led::Rgb::RED, Duration::from_millis(50));
+
+        anim_state.advance_sprite(sprite_advance);
     }
 }
 
@@ -1149,8 +1343,7 @@ fn halve_shake_rp_1680(mut lut: [u8; 153]) -> [u8; 153] {
 /// over cmd `0x33`: `0x33` is clocked out on MOSI (TX), the same data line is
 /// flipped to input (`new_rxonly`) to clock the reply in, then TX-only is
 /// restored — the single-wire read trick used by `fw::epd::probe_lut` on the
-/// SSD1675. Pins are stolen by number (board.rs: sck P0_08, mosi P0_27, busy
-/// P0_14, rst P0_11, dc P0_12, csn P1_09) and the GPIO wrappers `mem::forget`'d
+/// SSD1675. Pins are stolen through the `board!` map and the GPIO wrappers `mem::forget`'d
 /// so the real display Spim re-owns them.
 ///
 /// ⚠ UNVALIDATED on this panel: the raw bytes are logged over defmt so the OTP
@@ -1158,22 +1351,21 @@ fn halve_shake_rp_1680(mut lut: [u8; 153]) -> [u8; 153] {
 /// the reply comes back empty/garbage.
 #[cfg(feature = "ssd1680-driver")]
 async fn probe_otp_full_lut_1680() -> [u8; 153] {
-    use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
-    use embassy_nrf::peripherals;
+    use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
     use embassy_nrf::spim::{Config, Frequency, Spim};
 
-    // board.rs EPD pin numbers (port 1 = 32 + n).
-    const SCK: u8 = 8;
-    const MOSI: u8 = 27;
-    const BUSY: u8 = 14;
-    const RST: u8 = 11;
-    const DC: u8 = 12;
-    const CSN: u8 = 32 + 9;
+    // EPD pins come from the shared `board!` map; each use steals a fresh
+    // handle, as the SPI3 `Spim`s below are built and dropped repeatedly.
+    macro_rules! sp {
+        () => {
+            unsafe { embassy_nrf::Peripherals::steal() }
+        };
+    }
 
-    let mut cs = Output::new(unsafe { AnyPin::steal(CSN) }, Level::High, OutputDrive::Standard);
-    let mut dc = Output::new(unsafe { AnyPin::steal(DC) }, Level::Low, OutputDrive::Standard);
-    let mut rst = Output::new(unsafe { AnyPin::steal(RST) }, Level::Low, OutputDrive::Standard);
-    let busy = Input::new(unsafe { AnyPin::steal(BUSY) }, Pull::Down);
+    let mut cs = Output::new(board!(sp!(), epd_csn), Level::High, OutputDrive::Standard);
+    let mut dc = Output::new(board!(sp!(), epd_dc), Level::Low, OutputDrive::Standard);
+    let mut rst = Output::new(board!(sp!(), epd_reset), Level::Low, OutputDrive::Standard);
+    let busy = Input::new(board!(sp!(), epd_busy), Pull::Down);
 
     let mut cfg = Config::default();
     cfg.frequency = Frequency::M16;
@@ -1187,10 +1379,10 @@ async fn probe_otp_full_lut_1680() -> [u8; 153] {
     cs.set_low();
     {
         let mut tx = Spim::new_txonly(
-            unsafe { peripherals::SPI3::steal() },
+            board!(sp!(), epd_spi),
             Irqs1680,
-            unsafe { AnyPin::steal(SCK) },
-            unsafe { AnyPin::steal(MOSI) },
+            board!(sp!(), epd_sck),
+            board!(sp!(), epd_mosi),
             cfg.clone(),
         );
         dc.set_low();
@@ -1208,10 +1400,10 @@ async fn probe_otp_full_lut_1680() -> [u8; 153] {
     cs.set_low();
     {
         let mut tx = Spim::new_txonly(
-            unsafe { peripherals::SPI3::steal() },
+            board!(sp!(), epd_spi),
             Irqs1680,
-            unsafe { AnyPin::steal(SCK) },
-            unsafe { AnyPin::steal(MOSI) },
+            board!(sp!(), epd_sck),
+            board!(sp!(), epd_mosi),
             cfg.clone(),
         );
         dc.set_low();
@@ -1239,10 +1431,10 @@ async fn probe_otp_full_lut_1680() -> [u8; 153] {
     cs.set_low();
     {
         let mut tx = Spim::new_txonly(
-            unsafe { peripherals::SPI3::steal() },
+            board!(sp!(), epd_spi),
             Irqs1680,
-            unsafe { AnyPin::steal(SCK) },
-            unsafe { AnyPin::steal(MOSI) },
+            board!(sp!(), epd_sck),
+            board!(sp!(), epd_mosi),
             cfg.clone(),
         );
         dc.set_low();
@@ -1253,10 +1445,10 @@ async fn probe_otp_full_lut_1680() -> [u8; 153] {
     {
         // Same data pin, now clocked as input.
         let mut rx = Spim::new_rxonly(
-            unsafe { peripherals::SPI3::steal() },
+            board!(sp!(), epd_spi),
             Irqs1680,
-            unsafe { AnyPin::steal(SCK) },
-            unsafe { AnyPin::steal(MOSI) },
+            board!(sp!(), epd_sck),
+            board!(sp!(), epd_mosi),
             cfg.clone(),
         );
         rx.read(&mut lut).await.ok();
@@ -1267,10 +1459,10 @@ async fn probe_otp_full_lut_1680() -> [u8; 153] {
     // Restore SPI3 to TX-only so the display Spim built next can transmit.
     {
         let restore = Spim::new_txonly(
-            unsafe { peripherals::SPI3::steal() },
+            board!(sp!(), epd_spi),
             Irqs1680,
-            unsafe { AnyPin::steal(SCK) },
-            unsafe { AnyPin::steal(MOSI) },
+            board!(sp!(), epd_sck),
+            board!(sp!(), epd_mosi),
             cfg,
         );
         core::mem::forget(restore);
@@ -1368,6 +1560,7 @@ async fn wait_display_event(
         2,
     >,
     active_screen: u8,
+    anim_state: &mut AnimState,
     // When false the sprite frame timer is suppressed (treated as `pending`)
     // so this waiter only returns on real interrupts (buttons/signals). Used
     // while a refresh is in flight so the frame timer can't cancel it.
@@ -1375,6 +1568,15 @@ async fn wait_display_event(
 ) -> bool {
     use embassy_futures::select::{Either, Either3, select, select3};
 
+    #[cfg(not(feature = "game"))]
+    let _ = &anim_state;
+    // Away from the pet screen the frame deadline lapses; clear it so coming
+    // back does not fire a stale frame (and cancel the refresh) at once. Not
+    // while `allow_sprite` is false: that is a drive in flight.
+    #[cfg(feature = "game")]
+    if allow_sprite && active_screen != bornhack_aegg::SCREEN_GAME {
+        anim_state.pacer.on_frame();
+    }
     #[cfg(feature = "game")]
     let sprite_active = allow_sprite
         && active_screen == bornhack_aegg::SCREEN_GAME
@@ -1384,55 +1586,47 @@ async fn wait_display_event(
     let _ = allow_sprite;
 
     loop {
+        // Idle animations advance one frame per 5 minutes; hatching and
+        // actions spread their frames over their duration. The frame
+        // deadline is absolute (FramePacer), recomputed on every pass, and
+        // the wait always ends at the engine wake or UI deadline too. Pure
+        // reads of the game only: nothing here updates the engine.
+        #[cfg(feature = "game")]
+        let sprite_plan = if sprite_active {
+            use bornhack_aegg::game::{lifecycle, pacing};
+            let anim = lifecycle::display_anim();
+            let kind = lifecycle::pet_kind();
+            let frame_count =
+                bornhack_aegg::game::engine::anim_files::frame_count(kind, anim) as u32;
+            let frame_secs =
+                pacing::frame_interval_secs(anim, frame_count, lifecycle::action_ticks_remaining());
+            let wake_secs = pacing::wake_secs(
+                lifecycle::next_wake_tick(),
+                bornhack_aegg::game::next_ui_deadline_tick(),
+                lifecycle::now_tick(),
+            );
+            let anim_id = bornhack_aegg::game::engine::anim_files::anim_id_for(anim);
+            Some(anim_state.pacer.wait(
+                embassy_time::Instant::now().as_secs(),
+                anim_id,
+                frame_secs,
+                wake_secs,
+            ))
+        } else {
+            None
+        };
         #[cfg(feature = "game")]
         let sprite_tick = async {
-            if sprite_active {
-                // Compute frame interval from the current animation.
-                // Timed animations (hatching, actions) spread frames evenly
-                // over their duration so every frame is shown.
-                // Idle/warning/etc: 10 seconds per frame.
-                let anim = bornhack_aegg::game::lifecycle::display_anim();
-                let kind = bornhack_aegg::game::lifecycle::pet_kind();
-                let frame_count =
-                    bornhack_aegg::game::engine::anim_files::frame_count(kind, anim) as u64;
-                if frame_count <= 1 {
-                    // Single frame — no animation to advance; sleep until
-                    // the game state changes (next wake tick).
-                    let wake = bornhack_aegg::game::lifecycle::next_wake_tick();
-                    let now = bornhack_aegg::game::lifecycle::now_tick();
-                    let wait_ticks = wake.saturating_sub(now).max(1) as u64;
-                    Timer::after_secs(wait_ticks * 10).await;
-                } else {
-                    let interval_secs = match anim {
-                        bornhack_aegg::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
-                            let total_secs = ticks_remaining as u64 * 10;
-                            total_secs / frame_count
-                        }
-                        bornhack_aegg::game::engine::DisplayAnim::Feeding
-                        | bornhack_aegg::game::engine::DisplayAnim::Healing
-                        | bornhack_aegg::game::engine::DisplayAnim::Playing => {
-                            // Spread frames over the remaining action time.
-                            let stats = bornhack_aegg::game::lifecycle::cycle();
-                            let remaining_ticks =
-                                stats.map_or(0, |s| s.action_ticks_remaining as u64);
-                            let total_secs = remaining_ticks * 10;
-                            total_secs / frame_count
-                        }
-                        _ => 3,
-                    };
-                    // Minimum pacing between frames. The refresh itself now
-                    // guarantees the full waveform played (the frame timer no
-                    // longer cancels an in-flight refresh — see the display
-                    // loop), so this only sets idle cadence, not anti-ghost
-                    // timing. Floor 2 s.
-                    Timer::after_secs(interval_secs.max(2)).await;
+            match sprite_plan {
+                Some((wait_secs, frame_due)) => {
+                    Timer::after_secs(wait_secs).await;
+                    frame_due
                 }
-            } else {
-                core::future::pending::<()>().await;
+                None => core::future::pending::<bool>().await,
             }
         };
         #[cfg(not(feature = "game"))]
-        let sprite_tick = core::future::pending::<()>();
+        let sprite_tick = core::future::pending::<bool>();
 
         // Compose button + TOAST_SIGNAL into a single wakeup so the outer
         // select shape stays unchanged.  Both result in a non-sprite
@@ -1474,7 +1668,7 @@ async fn wait_display_event(
             )
             .await
             {
-                Either::Second(Either4::First(_))  => return true,  // sprite timer
+                Either::Second(Either4::First(frame_due)) => return frame_due, // sprite timer; false = wake
                 Either::First(Either3::First(_))   => return false, // button / toast
                 Either::First(Either3::Second(_))  => return false, // BLE pairing
                 Either::First(Either3::Third(_))                    // minute tick
@@ -1506,7 +1700,7 @@ async fn wait_display_event(
         )
         .await
         {
-            Either::Second(_)                  => return true,  // sprite timer
+            Either::Second(frame_due)          => return frame_due, // sprite timer; false = wake
             Either::First(Either3::First(_))   => return false, // button / toast
             Either::First(Either3::Second(_))  => return false, // BLE pairing
             Either::First(Either3::Third(_))                    // minute tick
@@ -1578,12 +1772,12 @@ async fn advert_ticker_task() {
 /// (identity + pet snapshot + current combat stats) as `GrpData` so other
 /// badges on SHDW can record a new/returning friend — see
 /// `game::friends::on_pet_beacon` — and cache combat stats fresh enough
-/// to battle against later (`game::battle::challenge`).
+/// to battle against later (`game::battle_link::challenge`).
 /// Skipped entirely when no pet is active (nothing to announce).
 #[cfg(all(feature = "mesh", feature = "game"))]
 #[embassy_executor::task]
 async fn pet_beacon_ticker_task() {
-    use bornhack_aegg::game::{engine::PET_NAME_MAX, friends, lifecycle};
+    use bornhack_aegg::game::friends;
 
     const PET_BEACON_INTERVAL_SECS: u64 = 15 * 60;
 
@@ -1592,26 +1786,7 @@ async fn pet_beacon_ticker_task() {
     Timer::after(embassy_time::Duration::from_secs(45)).await;
 
     loop {
-        if lifecycle::is_started() {
-            let kind = lifecycle::pet_kind();
-            let name = lifecycle::pet_name();
-            let mut beacon_name = [0u8; PET_NAME_MAX];
-            let n = name.len().min(PET_NAME_MAX);
-            beacon_name[..n].copy_from_slice(&name.as_bytes()[..n]);
-
-            let combat = lifecycle::combat_stats();
-            let beacon = friends::PetBeacon {
-                device_id: bornhack_aegg::fw::device_id::get(),
-                pet_kind: kind.id(),
-                generation: lifecycle::pet_generation(),
-                name: beacon_name,
-                name_len: n as u8,
-                attack: combat.map_or(0, |c| c.attack),
-                defense: combat.map_or(0, |c| c.defense),
-                speed: combat.map_or(0, |c| c.speed),
-                max_hp: combat.map_or(0, |c| c.max_hp),
-            };
-
+        if let Some(beacon) = friends::beacon_now() {
             let mut data: heapless::Vec<u8, { bornhack_aegg::fw::mesh::MAX_CHANNEL_DATA }> =
                 heapless::Vec::new();
             let _ = data.extend_from_slice(&beacon.to_bytes());
@@ -1633,6 +1808,31 @@ async fn pet_beacon_ticker_task() {
         }
 
         Timer::after(embassy_time::Duration::from_secs(PET_BEACON_INTERVAL_SECS)).await;
+    }
+}
+
+/// Sleeps until the challenge Session's own deadline, then lets it act (the
+/// target's window closing, the challenger's fallback fight). A one-shot
+/// timer set to that single instant, re-armed when the deadline moves; with
+/// no challenge pending it waits on the signal and costs nothing.
+#[cfg(feature = "game")]
+#[embassy_executor::task]
+async fn battle_timer_task() {
+    use bornhack_aegg::game::battle_link;
+    use embassy_futures::select::{Either, select};
+
+    loop {
+        match battle_link::deadline_ms() {
+            None => battle_link::DEADLINE_CHANGED.wait().await,
+            Some(t) => {
+                let wait = battle_link::ms_until(t, bornhack_aegg::platform::uptime_ms_u32());
+                let timer = Timer::after(embassy_time::Duration::from_millis(wait as u64));
+                if let Either::First(_) = select(timer, battle_link::DEADLINE_CHANGED.wait()).await
+                {
+                    battle_link::on_deadline();
+                }
+            }
+        }
     }
 }
 
@@ -1664,18 +1864,13 @@ where
     D: bornhack_aegg::epd_driver::EpdDriver,
 {
     use bornhack_aegg::EpdColor as Color;
-    use embedded_graphics::mono_font::MonoTextStyle;
-    use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
     use embedded_graphics::prelude::*;
-    use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+    use embedded_graphics::text::{Text};
 
     let _ = display.clear(Color::White);
 
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+    let centered = bornhack_aegg::ui::CENTERED;
+    let font = bornhack_aegg::ui::TEXT_BOLD_BLACK;
 
     let _ =
         Text::with_text_style("Battery voltage", Point::new(76, 50), font, centered).draw(display);

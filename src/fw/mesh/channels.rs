@@ -12,6 +12,14 @@
 //! ```text
 //! [name: 32 bytes, zero-padded UTF-8][key: 16 bytes AES-128]
 //! ```
+//!
+//! # Per-channel region
+//!
+//! An optional MeshCore region name (e.g. `dk-bornhack`) overriding the
+//! global flood scope for one channel lives in a separate `chrg` namespace
+//! under the same slot key, so the 48-byte slot format above is unchanged.
+//! The value is the bare name (1..=[`REGION_NAME_MAX`] bytes, no `#`); a
+//! missing key means "use the global flood scope".
 
 use crate::fw::kv;
 
@@ -29,7 +37,10 @@ const NAME_LEN: usize = 32;
 const KEY_LEN: usize = 16;
 const SLOT_LEN: usize = NAME_LEN + KEY_LEN; // 48 bytes
 
-/// Format a slot index as a zero-padded 4-digit decimal string.
+/// Longest per-channel region name accepted (bytes, without the `#`).
+pub const REGION_NAME_MAX: usize = 20;
+
+/// Format a slot index as a zero-padded 2-digit decimal string (`{:02}`).
 fn slot_key(idx: usize) -> heapless::String<4> {
     use core::fmt::Write;
     let mut s = heapless::String::new();
@@ -130,13 +141,17 @@ pub async fn get(idx: u8) -> Option<([u8; NAME_LEN], [u8; KEY_LEN])> {
 /// Write `name` and `key` into slot `idx` and persist to KV.
 ///
 /// Passing an all-zero `name` **and** all-zero `key` is treated as a delete
-/// — the slot is written as all-zero bytes.
+/// — the slot is written as all-zero bytes.  The slot's region override is
+/// dropped whenever the key changes (a different channel now lives there).
 ///
 /// Returns `false` if `idx` is out of range.
 pub async fn set(idx: u8, name: &[u8; NAME_LEN], key: &[u8; KEY_LEN]) -> bool {
     let i = idx as usize;
     if i >= NUM_CHANNELS {
         return false;
+    }
+    if get(idx).await.map(|(_, k)| k) != Some(*key) {
+        clear_region(i).await;
     }
     let mut slot = [0u8; SLOT_LEN];
     slot[..NAME_LEN].copy_from_slice(name);
@@ -154,7 +169,55 @@ pub async fn delete(idx: u8) -> bool {
         return false;
     }
     kv_write(i, &[0u8; SLOT_LEN]).await;
+    clear_region(i).await;
     true
+}
+
+/// Region override of slot `idx`, or `None` when it follows the global flood
+/// scope (see the module docs).
+pub async fn get_region(idx: u8) -> Option<heapless::String<REGION_NAME_MAX>> {
+    let mut buf = [0u8; REGION_NAME_MAX];
+    match kv::namespace("chrg")
+        .get(slot_key(idx as usize).as_str(), &mut buf)
+        .await
+    {
+        Ok(n) if n > 0 => {
+            let mut s = heapless::String::new();
+            let _ = s.push_str(core::str::from_utf8(&buf[..n]).ok()?);
+            Some(s)
+        }
+        _ => None,
+    }
+}
+
+/// Set (non-empty `name`) or clear (empty) the region override of slot `idx`.
+pub async fn set_region(idx: u8, name: &str) {
+    let i = idx as usize;
+    if i >= NUM_CHANNELS {
+        return;
+    }
+    if name.is_empty() {
+        clear_region(i).await;
+        return;
+    }
+    let n = &name.as_bytes()[..name.len().min(REGION_NAME_MAX)];
+    if let Err(e) = kv::namespace("chrg")
+        .set(slot_key(i).as_str(), n, true)
+        .await
+    {
+        defmt::warn!("channels: write region {} failed: {:?}", i, e);
+    }
+}
+
+/// Drop slot `i`'s region override.  Checks first so the common no-override
+/// case costs a read, not a flash write.
+async fn clear_region(i: usize) {
+    let kv = kv::namespace("chrg");
+    if kv.exists(slot_key(i).as_str()).await == Ok(true)
+        && let Err(e) = kv.delete(slot_key(i).as_str()).await
+    {
+        defmt::warn!("channels: clear region {} failed: {:?}", i, e);
+    }
 }
 
 /// Fixed slot for the private "SHDW" channel used by the BornPets
@@ -193,6 +256,7 @@ pub async fn ensure_shdw_channel() {
 pub async fn reset() {
     for i in 0..NUM_CHANNELS {
         kv_write(i, &[0u8; SLOT_LEN]).await;
+        clear_region(i).await;
     }
     seed_defaults().await;
     defmt::info!("channels: reset to defaults");

@@ -1,163 +1,174 @@
-//! LED driver — generic blink patterns for the RGB LED.
+//! RGB LED driver — hardware PWM colour mixing.
 //!
-//! Each LED colour has an atomic state that any task can set via
-//! [`set_led`].  A single [`led_task`] reads all three states and drives
-//! the GPIO pins.  All patterns use a fixed 1-second period.
+//! The three LED channels share one PWM instance, so they run off one
+//! counter period and differ only in duty.  Any task sets the colour with
+//! [`set_color`]: the colour holds for `duration`, then the LED turns off.
+//! The latest call always wins and replaces a running one straight away,
+//! so an animation is a series of `set_color` calls, each made before the
+//! previous one's duration runs out (see [`about_rainbow_task`]).
 //!
-//! When all LEDs are off the task sleeps on a signal — no timer ticks,
-//! no wasted CPU.  When active, the task wakes at most 3 times per
-//! second (at 0 ms, 50 ms, and 500 ms within each period).
+//! While the LED is off the PWM peripheral is disabled — no HFCLK request,
+//! no timer wake-ups.  The pins then idle high, which is off for this
+//! active-low LED.
 
-use core::sync::atomic::{AtomicU8, Ordering};
-
-use embassy_nrf::gpio::Output;
+use embassy_futures::select::{Either, select};
+use embassy_nrf::gpio::Level;
+use embassy_nrf::pwm::{DutyCycle, Prescaler, SimpleConfig, SimplePwm};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::Timer;
+use embassy_time::{Duration, Instant, Timer};
 
-/// LED pattern with a fixed 1-second duty cycle.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum LedState {
-    /// LED off.
-    Off = 0,
-    /// LED on continuously.
-    On = 1,
-    /// 50 % duty cycle (500 ms on, 500 ms off), repeating.
-    Duty50 = 2,
-    /// Short blink (50 ms on, 950 ms off), repeating.
-    Blink = 3,
-    /// Single 500 ms pulse, then auto-resets to Off.
-    Duty50Once = 4,
-    /// Single 50 ms blink, then auto-resets to Off.
-    BlinkOnce = 5,
+/// PWM counter top.  10 bits of duty so the gamma curve keeps its low end;
+/// with the Div4 prescaler (4 MHz) this is a ~3.9 kHz PWM.  A short period
+/// also keeps `SimplePwm::set_all_duties` quick: it busy-waits for one
+/// period while the PWM runs.
+const PWM_TOP: u16 = 1023;
+
+/// Hold a colour until the next [`set_color`] call.
+pub const FOREVER: Duration = Duration::MAX;
+
+/// An LED colour, 8 bits per channel.  The driver applies a gamma of 2,
+/// so 128 looks about half as bright as 255.
+#[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
-impl LedState {
-    fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::On,
-            2 => Self::Duty50,
-            3 => Self::Blink,
-            4 => Self::Duty50Once,
-            5 => Self::BlinkOnce,
-            _ => Self::Off,
+impl Rgb {
+    pub const OFF: Self = Self::new(0, 0, 0);
+    pub const RED: Self = Self::new(255, 0, 0);
+    pub const GREEN: Self = Self::new(0, 255, 0);
+    pub const BLUE: Self = Self::new(0, 0, 255);
+    pub const ORANGE: Self = Self::new(255, 96, 0);
+    pub const WHITE: Self = Self::new(255, 255, 255);
+
+    /// Number of steps in one trip round the colour wheel ([`Self::from_hue`]).
+    pub const HUE_STEPS: u16 = 6 * 256;
+
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+
+    /// Fully saturated colour on the wheel red → yellow → green → cyan →
+    /// blue → magenta → red.  `hue` wraps at [`Self::HUE_STEPS`].
+    pub const fn from_hue(hue: u16) -> Self {
+        let h = hue % Self::HUE_STEPS;
+        let x = (h % 256) as u8;
+        match h / 256 {
+            0 => Self::new(255, x, 0),
+            1 => Self::new(255 - x, 255, 0),
+            2 => Self::new(0, 255, x),
+            3 => Self::new(0, 255 - x, 255),
+            4 => Self::new(x, 0, 255),
+            _ => Self::new(255, 0, 255 - x),
         }
     }
 }
 
-// One atomic per colour — writable from any task.
-pub static LED_RED: AtomicU8 = AtomicU8::new(0);
-pub static LED_GREEN: AtomicU8 = AtomicU8::new(0);
-pub static LED_BLUE: AtomicU8 = AtomicU8::new(0);
+/// Latest colour request.  A `Signal` keeps only the newest value, which is
+/// exactly "latest call wins".
+static CMD: Signal<CriticalSectionRawMutex, (Rgb, Duration)> = Signal::new();
 
-/// Signalled by [`set_led`] / [`all_off`] to wake the task from sleep.
-static WAKE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-/// Set a single LED's pattern.
-pub fn set_led(led: &AtomicU8, state: LedState) {
-    led.store(state as u8, Ordering::Relaxed);
-    WAKE.signal(());
+/// Show `color` for `duration`, then turn the LED off.  Replaces any colour
+/// still showing.  Pass [`FOREVER`] to hold until the next call.
+pub fn set_color(color: Rgb, duration: Duration) {
+    CMD.signal((color, duration));
 }
 
-/// Turn all LEDs off.
-pub fn all_off() {
-    LED_RED.store(0, Ordering::Relaxed);
-    LED_GREEN.store(0, Ordering::Relaxed);
-    LED_BLUE.store(0, Ordering::Relaxed);
-    WAKE.signal(());
+/// Turn the LED off now.
+pub fn off() {
+    set_color(Rgb::OFF, Duration::from_ticks(0));
 }
 
-fn any_active() -> bool {
-    LED_RED.load(Ordering::Relaxed) != 0
-        || LED_GREEN.load(Ordering::Relaxed) != 0
-        || LED_BLUE.load(Ordering::Relaxed) != 0
+/// PWM configuration for the LED: pins idle high (LED off) while the PWM is
+/// disabled.
+pub fn pwm_config() -> SimpleConfig {
+    let mut config = SimpleConfig::default();
+    config.max_duty = PWM_TOP;
+    config.prescaler = Prescaler::Div4;
+    config.ch0_idle_level = Level::High;
+    config.ch1_idle_level = Level::High;
+    config.ch2_idle_level = Level::High;
+    config.ch3_idle_level = Level::High;
+    config
 }
 
-/// Drive three LED pins according to their state.
-///
-/// Spawned once from main.  LEDs are active-low (set_low = on).
-///
-/// The 1-second period is split into three phases to minimise wake-ups:
-///   Phase 0 (0–50 ms):   Blink + Duty50 + On are on.
-///   Phase 1 (50–500 ms): Duty50 + On stay on, Blink turns off.
-///   Phase 2 (500–1000 ms): Only On stays on, Duty50 turns off.
+/// Gamma-2 duty for an 8-bit channel value.  Normal polarity drives the pin
+/// low while the counter is below the duty, and low is on for this LED, so
+/// the on-time is `duty / PWM_TOP`.
+fn duty(v: u8) -> DutyCycle {
+    let v = v as u32;
+    let d = (v * v * PWM_TOP as u32 + 255 * 255 / 2) / (255 * 255);
+    DutyCycle::normal(d as u16)
+}
+
+/// Drive the LED PWM.  Spawned once from main with the PWM built from
+/// [`pwm_config`], channels 0/1/2 = red/green/blue.
 #[embassy_executor::task]
-pub async fn led_task(
-    mut red: Output<'static>,
-    mut green: Output<'static>,
-    mut blue: Output<'static>,
-) -> ! {
-    use embassy_futures::select::{Either, select};
+pub async fn led_task(mut pwm: SimplePwm<'static>) -> ! {
+    pwm.disable();
+    let mut cmd = CMD.wait().await;
+    loop {
+        let (color, duration) = cmd;
+        if color == Rgb::OFF || duration == Duration::from_ticks(0) {
+            pwm.disable();
+            cmd = CMD.wait().await;
+            continue;
+        }
+
+        if !pwm.is_enabled() {
+            pwm.enable();
+        }
+        pwm.set_all_duties([
+            duty(color.r),
+            duty(color.g),
+            duty(color.b),
+            DutyCycle::normal(0),
+        ]);
+
+        cmd = match Instant::now().checked_add(duration) {
+            Some(deadline) => match select(Timer::at(deadline), CMD.wait()).await {
+                Either::First(()) => (Rgb::OFF, Duration::from_ticks(0)),
+                Either::Second(next) => next,
+            },
+            // FOREVER (or anything past the end of time): hold until the
+            // next call.
+            None => CMD.wait().await,
+        };
+    }
+}
+
+/// Signalled each time the About screen is drawn.
+pub static ABOUT_RAINBOW: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fade the LED round the colour wheel while the About screen is open.
+///
+/// Updates the colour at 50 Hz.  Each call holds for three steps, so a late
+/// tick never blanks the LED, and the LED goes dark by itself if this task
+/// stops calling.
+#[embassy_executor::task]
+pub async fn about_rainbow_task() -> ! {
+    const STEP_MS: u64 = 20;
+    // 1536 / 5 steps × 20 ms ≈ 6 s per trip round the wheel.
+    const HUE_STEP: u16 = 5;
 
     loop {
-        if !any_active() {
-            red.set_high();
-            green.set_high();
-            blue.set_high();
-            WAKE.wait().await;
-            continue;
+        ABOUT_RAINBOW.wait().await;
+        let mut hue = 0u16;
+        let mut ran = false;
+        while crate::about_active() {
+            ran = true;
+            set_color(Rgb::from_hue(hue), Duration::from_millis(3 * STEP_MS));
+            hue = (hue + HUE_STEP) % Rgb::HUE_STEPS;
+            Timer::after_millis(STEP_MS).await;
         }
-
-        // Phase 0: Blink/BlinkOnce + Duty50/Duty50Once + On turn on.
-        drive(&mut red, &LED_RED, 0);
-        drive(&mut green, &LED_GREEN, 0);
-        drive(&mut blue, &LED_BLUE, 0);
-        if matches!(
-            select(Timer::after_millis(50), WAKE.wait()).await,
-            Either::Second(_)
-        ) {
-            continue; // new state arrived — restart cycle
+        // Drop the signal from the last About redraw so it doesn't restart
+        // the loop just to find About closed.
+        ABOUT_RAINBOW.reset();
+        if ran {
+            off();
         }
-
-        // Phase 1: Blink variants turn off; BlinkOnce auto-resets.
-        auto_reset(&LED_RED, LedState::BlinkOnce);
-        auto_reset(&LED_GREEN, LedState::BlinkOnce);
-        auto_reset(&LED_BLUE, LedState::BlinkOnce);
-        drive(&mut red, &LED_RED, 1);
-        drive(&mut green, &LED_GREEN, 1);
-        drive(&mut blue, &LED_BLUE, 1);
-        if matches!(
-            select(Timer::after_millis(450), WAKE.wait()).await,
-            Either::Second(_)
-        ) {
-            continue;
-        }
-
-        // Phase 2: Duty50 variants turn off; Duty50Once auto-resets.
-        auto_reset(&LED_RED, LedState::Duty50Once);
-        auto_reset(&LED_GREEN, LedState::Duty50Once);
-        auto_reset(&LED_BLUE, LedState::Duty50Once);
-        drive(&mut red, &LED_RED, 2);
-        drive(&mut green, &LED_GREEN, 2);
-        drive(&mut blue, &LED_BLUE, 2);
-        if matches!(
-            select(Timer::after_millis(500), WAKE.wait()).await,
-            Either::Second(_)
-        ) {
-            continue;
-        }
-    }
-}
-
-/// Set pin for the given phase.  Active-low: set_low = on.
-fn drive(pin: &mut Output<'_>, state: &AtomicU8, phase: u8) {
-    let on = match LedState::from_u8(state.load(Ordering::Relaxed)) {
-        LedState::Off => false,
-        LedState::On => true,
-        LedState::Duty50 | LedState::Duty50Once => phase < 2,
-        LedState::Blink | LedState::BlinkOnce => phase == 0,
-    };
-    if on {
-        pin.set_low();
-    } else {
-        pin.set_high();
-    }
-}
-
-/// If the LED is in `target` state, reset it to Off.
-fn auto_reset(led: &AtomicU8, target: LedState) {
-    if LedState::from_u8(led.load(Ordering::Relaxed)) == target {
-        led.store(0, Ordering::Relaxed);
     }
 }

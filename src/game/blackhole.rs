@@ -17,10 +17,12 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+use embedded_graphics::primitives::{Circle, PrimitiveStyle};
+use embedded_graphics::text::Text;
 
-use crate::{BLACK, TriColor, WHITE, ui};
+use super::minigame::DifficultyPicker;
+use crate::menu::ButtonId;
+use crate::{BLACK, TriColor, WHITE};
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -60,11 +62,8 @@ static RNG: AtomicU32 = AtomicU32::new(0xDEAD_BEEF);
 
 /// Difficulty: 0 = Easy (positional only), 1 = Hard (full heuristic).
 const DIFFICULTY_HARD: u8 = 1;
-static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_HARD);
-/// Difficulty-picker overlay open at the start of each game.
-static MENU_OPEN: AtomicBool = AtomicBool::new(false);
-/// Difficulty-picker selection (0 = Easy, 1 = Hard).
-static MENU_POS: AtomicU8 = AtomicU8::new(DIFFICULTY_HARD);
+/// Difficulty picker shown at the start of each game (0 = Easy, 1 = Hard).
+static PICKER: DifficultyPicker = DifficultyPicker::new(DIFFICULTY_HARD);
 
 // ── Public API
 // ────────────────────────────────────────────────────────────────
@@ -83,15 +82,25 @@ pub fn open() {
     BLACK_HOLE.store(0, Ordering::Relaxed);
     SCORE_A.store(0, Ordering::Relaxed);
     SCORE_B.store(0, Ordering::Relaxed);
-    RNG.store(seed(), Ordering::Relaxed);
+    RNG.store(crate::platform::seed_ticks_or_fixed(), Ordering::Relaxed);
     // Show the difficulty picker first; play starts after Fire.
-    MENU_POS.store(DIFFICULTY_HARD, Ordering::Relaxed);
-    MENU_OPEN.store(true, Ordering::Relaxed);
+    PICKER.show();
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
 pub fn close() {
-    ACTIVE.store(false, Ordering::Relaxed);
+    // A finished game pays by result, once, however the screen is left.
+    if ACTIVE.swap(false, Ordering::Relaxed) {
+        let grade = match RESULT.load(Ordering::Relaxed) {
+            1 => Some(super::engine::GRADE_WIN),
+            2 => Some(super::engine::GRADE_LOSS),
+            3 => Some(super::engine::GRADE_DRAW),
+            _ => None,
+        };
+        if let Some(grade) = grade {
+            super::minigame::pay_result(super::engine::MiniGame::BlackHole, grade);
+        }
+    }
     // Clear ghosting from the many fast LUT refreshes during play.
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
@@ -125,11 +134,25 @@ fn cell_centre(idx: u8) -> Point {
     Point::new(x, y)
 }
 
+/// Route a button press while this mini-game is active.
+pub fn dispatch(btn: ButtonId) {
+    match btn {
+        ButtonId::Cancel => close(),
+        ButtonId::Up => cursor_up(),
+        ButtonId::Down => cursor_down(),
+        ButtonId::Left => cursor_left(),
+        ButtonId::Right => cursor_right(),
+        ButtonId::Fire | ButtonId::Execute => {
+            activate();
+        }
+    }
+}
+
 // ── Cursor navigation
 // ─────────────────────────────────────────────────────────
 
-pub fn cursor_left() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
+fn cursor_left() {
+    if PICKER.is_open() {
         return;
     }
     let i = CURSOR.load(Ordering::Relaxed);
@@ -139,8 +162,8 @@ pub fn cursor_left() {
     }
 }
 
-pub fn cursor_right() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
+fn cursor_right() {
+    if PICKER.is_open() {
         return;
     }
     let i = CURSOR.load(Ordering::Relaxed);
@@ -151,12 +174,9 @@ pub fn cursor_right() {
     }
 }
 
-pub fn cursor_up() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        let p = MENU_POS.load(Ordering::Relaxed);
-        if p > 0 {
-            MENU_POS.store(p - 1, Ordering::Relaxed);
-        }
+fn cursor_up() {
+    if PICKER.is_open() {
+        PICKER.up();
         return;
     }
     let i = CURSOR.load(Ordering::Relaxed);
@@ -172,12 +192,9 @@ pub fn cursor_up() {
     CURSOR.store(idx_of(new_r, new_c), Ordering::Relaxed);
 }
 
-pub fn cursor_down() {
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        let p = MENU_POS.load(Ordering::Relaxed);
-        if p < 1 {
-            MENU_POS.store(p + 1, Ordering::Relaxed);
-        }
+fn cursor_down() {
+    if PICKER.is_open() {
+        PICKER.down(2);
         return;
     }
     let i = CURSOR.load(Ordering::Relaxed);
@@ -192,21 +209,16 @@ pub fn cursor_down() {
 // ── Activate (Fire)
 // ───────────────────────────────────────────────────────────
 
-pub fn activate() {
+fn activate() {
     // Difficulty picker open: confirm selection and start the game.
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        DIFFICULTY.store(MENU_POS.load(Ordering::Relaxed), Ordering::Relaxed);
-        MENU_OPEN.store(false, Ordering::Relaxed);
+    if PICKER.is_open() {
+        PICKER.confirm();
         return;
     }
 
     let result = RESULT.load(Ordering::Relaxed);
     if result != 0 {
-        // Game over: any Fire closes.  Award inspiration on win or tie.
-        if result == 1 || result == 3 {
-            super::lifecycle::award_inspiration(super::engine::MiniGame::BlackHole);
-            super::show_toast(super::Toast::MinigameWin);
-        }
+        // Game over: any Fire closes (`close` pays the result).
         close();
         return;
     }
@@ -369,24 +381,6 @@ const CONNECTIVITY_BONUS: i32 = 60;
 /// black hole, so a big AI number is safe there.
 const TERRITORY_BONUS: i32 = 2;
 
-fn xorshift(mut x: u32) -> u32 {
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    x
-}
-
-fn seed() -> u32 {
-    #[cfg(feature = "embassy-core")]
-    {
-        embassy_time::Instant::now().as_ticks() as u32
-    }
-    #[cfg(not(feature = "embassy-core"))]
-    {
-        0xCAFE_BABE
-    }
-}
-
 /// AI places number `m/2 + 1` on the board.  `m` must be odd (B's turn).
 ///
 /// Heuristic: simulate placing B's number on each empty candidate cell
@@ -397,7 +391,7 @@ fn seed() -> u32 {
 fn ai_play(m: u8) {
     let n = m / 2 + 1;
     let board = read_board();
-    let hard = DIFFICULTY.load(Ordering::Relaxed) == DIFFICULTY_HARD;
+    let hard = PICKER.chosen() == DIFFICULTY_HARD;
 
     let mut best_score: i32 = i32::MIN;
     let mut best_cells = [0u8; CELLS];
@@ -466,7 +460,7 @@ fn ai_play(m: u8) {
     }
 
     let mut rng = RNG.load(Ordering::Relaxed);
-    rng = xorshift(rng | 1);
+    rng = crate::platform::xorshift32(rng | 1);
     RNG.store(rng, Ordering::Relaxed);
     let pick = if best_count > 0 {
         best_cells[(rng as usize) % best_count] as usize
@@ -492,9 +486,7 @@ where
     let hole = BLACK_HOLE.load(Ordering::Relaxed);
 
     // Background.
-    Rectangle::new(Point::zero(), Size::new(152, 152))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    crate::ui::clear_screen(display)?;
 
     let dia = (CELL_R * 2 + 1) as u32;
 
@@ -545,10 +537,7 @@ where
     }
 
     // Status line(s).
-    let centred_top = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Center)
-        .build();
+    let centred_top = crate::ui::CENTERED_TOP;
     let footer_font = MonoTextStyle::new(&FONT_6X10, BLACK);
 
     let sa = SCORE_A.load(Ordering::Relaxed);
@@ -589,14 +578,7 @@ where
         }
     }
 
-    if MENU_OPEN.load(Ordering::Relaxed) {
-        ui::draw_picker_menu(
-            display,
-            "Difficulty",
-            &["Easy", "Hard"],
-            MENU_POS.load(Ordering::Relaxed) as usize,
-        )?;
-    }
+    PICKER.draw(display, "Difficulty", &["Easy", "Hard"])?;
 
     Ok(())
 }
@@ -628,20 +610,73 @@ where
     Ok(())
 }
 
-/// Render a number with a fake-bold effect (FONT_6X10 has no bold
-/// variant in `mono_font::ascii`).  Draws the digit twice, second pass
-/// shifted 1 px right, so vertical strokes thicken — easier to read on
-/// a low-contrast EPD.
+/// Render a number in FONT_6X10 with the shared fake-bold effect
+/// ([`crate::ui::draw_text_fake_bold`]) — easier to read on a
+/// low-contrast EPD.
 fn draw_bold_number<D>(display: &mut D, s: &str, p: Point, color: TriColor) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
     let style = MonoTextStyle::new(&FONT_6X10, color);
-    let centred = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    Text::with_text_style(s, p, style, centred).draw(display)?;
-    Text::with_text_style(s, Point::new(p.x + 1, p.y), style, centred).draw(display)?;
-    Ok(())
+    let centred = crate::ui::CENTERED;
+    crate::ui::draw_text_fake_bold(display, s, p, style, centred)
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_DRAW, MINIGAME_HAX_LOSS, MINIGAME_HAX_REWARD};
+    use crate::game::{current_toast, minigame_pay_read, minigame_pay_setup, Toast};
+
+    const GAME: MiniGame = MiniGame::BlackHole;
+
+    /// Open the game, put it in the finished state `result`, leave with Cancel.
+    fn finish_and_cancel(result: u8) {
+        open();
+
+        RESULT.store(result, Ordering::Relaxed);
+        dispatch(ButtonId::Cancel);
+    }
+
+    #[test]
+    fn a_won_game_closed_with_cancel_pays_the_win() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(1);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_REWARD, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+        assert!(!is_active());
+    }
+
+    #[test]
+    fn closing_twice_pays_once() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(1);
+        close();
+        close();
+        assert_eq!(minigame_pay_read(GAME).0, MINIGAME_HAX_REWARD);
+    }
+
+    #[test]
+    fn a_game_in_progress_pays_nothing() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(0);
+        assert_eq!(minigame_pay_read(GAME), (0, false));
+        assert_eq!(current_toast(), None);
+    }
+
+    #[test]
+    fn a_lost_game_pays_the_loss() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(2);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_LOSS, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameTry));
+    }
+
+    #[test]
+    fn a_drawn_game_pays_the_draw() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(3);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_DRAW, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+    }
 }

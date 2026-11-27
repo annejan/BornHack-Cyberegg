@@ -17,6 +17,8 @@ u8g2-fonts = { version = "0.8", default-features = false }
 
 # Simulator libraries go here
 embedded-graphics-simulator = { version = "0.8", optional = true }
+# Host-only: the guide's sprite export writes cropped PNGs with a clear ground.
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 defmt = { version = "1.1.1", optional = true }
 
 # Embassy dependencies (only when embassy feature is enabled)
@@ -113,7 +115,10 @@ uf2conv = "0.1"
 [profile.dev]
 debug = 2
 opt-level = "z"
-lto = "thin"
+# Fat LTO keeps the debug SSD1680 image (embassy-1680-full) inside the 960 KiB
+# FLASH region; with thin LTO it overflowed by about 9.6 KiB. Debug info and
+# debug-assertions stay; debug info does not go to flash.
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 overflow-checks = false
@@ -175,6 +180,7 @@ mesh = [
 usb-storage = ["embassy-usb"]
 simulator = [
     "embedded-graphics-simulator",
+    "image",
     "heapless",
     "game",
     "watch",
@@ -251,6 +257,31 @@ name = "simulator"
 path = "src/bin/simulator.rs"
 required-features = ["simulator"]
 
+
+[[test]]
+name = "guide_data"
+path = "tests/guide_data.rs"
+required-features = ["simulator"]
+
+[[test]]
+name = "guide_data_casual"
+path = "tests/guide_data_casual.rs"
+required-features = ["simulator"]
+
+[[test]]
+name = "guide_words"
+path = "tests/guide_words.rs"
+required-features = ["simulator"]
+
+[[test]]
+name = "guide_shots"
+path = "tests/guide_shots.rs"
+required-features = ["simulator"]
+
+[[bin]]
+name = "guide"
+path = "src/bin/guide.rs"
+required-features = ["simulator"]
 
 [[bin]]
 name = "simulate_game"

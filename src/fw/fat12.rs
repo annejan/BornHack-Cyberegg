@@ -518,6 +518,55 @@ pub async fn read_file(file: &FileRef, offset: u32, buf: &mut [u8]) -> Result<us
     Ok(bytes_read)
 }
 
+/// Read the start of a root-directory file named `name` (any case, `NAME.EXT`
+/// form) into `buf`. Returns the bytes read; `FileNotFound` if the name is not
+/// a valid 8.3 name or the file is absent.
+pub async fn read_named(name: &str, buf: &mut [u8]) -> Result<usize, FatError> {
+    let name_8_3 = to_8_3(name).ok_or(FatError::FileNotFound)?;
+    let file = find_file(&name_8_3).await?;
+    read_file(&file, 0, buf).await
+}
+
+/// Stream `file` through `scratch` line by line, invoking `f` once per
+/// text line (without its `\n`). Lines may span read-chunk boundaries —
+/// the partial tail is carried over between reads — so the file itself
+/// can be (much) larger than `scratch`. Errors on a read failure, a `f`
+/// parse error, or a single line longer than the whole scratch buffer.
+pub async fn for_each_line<E, F>(
+    file: &FileRef,
+    scratch: &mut [u8],
+    mut f: F,
+) -> Result<(), ()>
+where
+    F: FnMut(&[u8]) -> Result<(), E>,
+{
+    let mut offset: u32 = 0;
+    let mut carry: usize = 0;
+    loop {
+        let n = match read_file(file, offset, &mut scratch[carry..]).await {
+            Ok(n) => n,
+            Err(_) => return Err(()),
+        };
+        offset = offset.saturating_add(n as u32);
+        let filled = carry + n;
+        let eof = n == 0 || offset >= file.size;
+
+        let consumed = crate::lut_file::drain_lines(&scratch[..filled], &mut f).map_err(|_| ())?;
+        if eof {
+            if consumed < filled {
+                // Final line without a trailing newline.
+                f(&scratch[consumed..filled]).map_err(|_| ())?;
+            }
+            return Ok(());
+        }
+        carry = filled - consumed;
+        if carry == scratch.len() {
+            return Err(()); // one line larger than the whole scratch buffer
+        }
+        scratch.copy_within(consumed..filled, 0);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Format — create a fresh FAT12 filesystem
 // ---------------------------------------------------------------------------

@@ -183,26 +183,7 @@ mod csprng {
         /// Safety: register addresses are valid for the nRF52840, and
         /// startup is single-threaded so concurrent access is impossible.
         pub fn seed_from_hardware() {
-            const RNG_BASE: u32 = 0x4000_D000;
-            const TASKS_START: u32 = RNG_BASE;
-            const TASKS_STOP: u32 = RNG_BASE + 0x004;
-            const EVENTS_VALRDY: u32 = RNG_BASE + 0x100;
-            const CONFIG: u32 = RNG_BASE + 0x504; // bit 0: DERCEN
-            const VALUE: u32 = RNG_BASE + 0x508;
-
-            let mut seed = [0u8; 32];
-            unsafe {
-                (CONFIG as *mut u32).write_volatile(1); // DERCEN = 1
-                (TASKS_START as *mut u32).write_volatile(1);
-
-                for byte in &mut seed {
-                    while (EVENTS_VALRDY as *const u32).read_volatile() == 0 {}
-                    *byte = (VALUE as *const u32).read_volatile() as u8;
-                    (EVENTS_VALRDY as *mut u32).write_volatile(0);
-                }
-
-                (TASKS_STOP as *mut u32).write_volatile(1);
-            }
+            let seed = crate::fw::trng::seed32();
             Self::seed(seed);
         }
 

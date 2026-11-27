@@ -83,6 +83,20 @@ local changes are picked up immediately — no need to bump the pin
 during the edit/test loop.  Only commit the new pin in the parent
 once the upstream change has actually landed somewhere durable.
 
+## MeshCore conformance tests
+
+`vendor/meshcore` and `vendor/meshcore-companion` are checked against
+upstream MeshCore C++ with differential test vectors: a small harness
+compiles the upstream sources, records what they produce, and both
+crates' `cargo test` replay the JSON vectors.  How it works, what is
+covered, and the documented exceptions are in
+[`vendor/meshcore/conformance/README.md`](vendor/meshcore/conformance/README.md).
+To regenerate the vectors after an upstream bump:
+
+```sh
+cd vendor/meshcore/conformance && MESHCORE_SRC=~/work/radio/lora/MeshCore ./build.sh
+```
+
 ## Interesting branches
 
 `vendor/ssd1675` has a **`slow-but-clear`** branch with a refresh

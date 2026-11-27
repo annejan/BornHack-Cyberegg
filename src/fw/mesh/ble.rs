@@ -51,6 +51,7 @@ use trouble_host::prelude::*;
 
 use super::bonds::{BOND_CMD_CHANNEL, BondCmd, INITIAL_BONDS};
 use super::{channels, contacts, msg_queue, settings};
+use crate::mesh_cli as cli;
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG
@@ -221,7 +222,14 @@ pub struct NusServer {
 pub struct CompanionContext {
     /// Ed25519 public key (32 bytes).
     pub pub_key: [u8; 32],
+    /// Ed25519 secret key (seed || public key). Used only to sign our own
+    /// advert for `CMD_EXPORT_CONTACT` and data for `CMD_SIGN_FINISH`; it is
+    /// never sent.
+    pub sec_key: [u8; ::meshcore::PRV_KEY_SIZE],
 }
+
+/// Largest `CMD_SIGN_DATA` total accepted, upstream's `MAX_SIGN_DATA_LEN`.
+const SIGN_DATA_MAX: usize = 8 * 1024;
 
 /// Outbox capacity for pending BLE notifications.
 ///
@@ -256,6 +264,28 @@ fn outbox_push(
         outbox.pop_front();
         let _ = outbox.push_back(entry);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Flood send scope (SET_FLOOD_SCOPE 0x36 / SET_DEFAULT_FLOOD_SCOPE 0x3F)
+// ---------------------------------------------------------------------------
+
+/// `true` while no `SET_FLOOD_SCOPE` override or un-scoped request is active,
+/// so [`crate::FLOOD_SCOPE_KEY`] tracks the default scope. Together with that
+/// key this models the reference companion's `send_scope` / `send_unscoped`
+/// (`MyMesh::sendFloodScoped`); like those it is runtime-only and resets to
+/// the default scope at boot.
+static SCOPE_FOLLOWS_DEFAULT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(true);
+
+/// Live flood key when following the default scope: the persisted
+/// `def_scope`, else the dk-bornhack fallback (the same rule boot applies).
+/// An all-zero key is the reference's null `TransportKey`, i.e. un-scoped.
+fn default_scope_key(def: Option<settings::DefaultFloodScope>) -> Option<[u8; 16]> {
+    let key = def
+        .map(|s| s.key)
+        .unwrap_or_else(settings::dk_bornhack_default_scope);
+    (key != [0u8; 16]).then_some(key)
 }
 
 /// Events pushed to the BLE task from the radio and system channels.
@@ -530,16 +560,22 @@ async fn nus_peripheral_loop<C>(
     };
     crate::update_node_name(&node_name[..node_name_len]);
 
-    // Note: the persisted `TIMEZONE_OFFSET` and `BOOSTED_RX_GAIN` atomics are
+    // Note: the persisted `TZ_OFFSET_QH` and `BOOSTED_RX_GAIN` atomics are
     // loaded from flash in the top-level `embassy.rs` boot sequence before any
     // task is spawned, so by the time we get here they already hold the
     // correct values. Don't duplicate the load — we'd just redo the flash
     // read and race with any edit the menu made while the BLE task was
     // starting up.
 
-    // Load the persisted radio parameters (set via CMD_SET_RADIO_PARAMS 0x0B /
-    // CMD_SET_RADIO_TX_POWER 0x0C).  Falls back to EU/UK narrow band defaults.
-    let mut radio_params = settings::get_radio_params_or_default().await;
+    // Radio parameters (set via CMD_SET_RADIO_PARAMS 0x0B /
+    // CMD_SET_RADIO_TX_POWER 0x0C).  Seeded from the live atomics at the top
+    // of the loop below; boot already loaded flash (or the EU/UK narrow band
+    // default) into them.
+    let mut radio_params: crate::RadioParams;
+
+    // CMD_SIGN_START … CMD_SIGN_FINISH buffer; `None` outside such a run,
+    // like upstream's `sign_data` pointer.
+    let mut sign_data: Option<heapless::Vec<u8, SIGN_DATA_MAX>> = None;
 
     // Load the persisted GPS position (set via CMD_SET_ADVERT_LATLON 0x0E).
     // Falls back to (0, 0) on first boot (meaning "no position set").
@@ -568,18 +604,8 @@ async fn nus_peripheral_loop<C>(
         // is reflected in subsequent companion BLE responses.  Same
         // visibility window as before — the previous code refreshed
         // these locals at the top of this same loop too.
-        {
-            use core::sync::atomic::Ordering::Relaxed;
-            radio_params.freq_hz = crate::LORA_FREQ_HZ.load(Relaxed);
-            radio_params.bw_hz = crate::LORA_BW_HZ.load(Relaxed);
-            radio_params.sf = crate::LORA_SF.load(Relaxed);
-            radio_params.cr = crate::LORA_CR.load(Relaxed);
-            radio_params.tx_power = crate::LORA_TX_POWER.load(Relaxed);
-            radio_params.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
-            other_params.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
-            other_params.multi_acks = crate::MULTI_ACKS.load(Relaxed);
-            other_params.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
-        }
+        radio_params = crate::RadioParams::load_live();
+        other_params.overlay_live();
 
         // When BLE is disabled, stop advertising and wait until re-enabled.
         // The persister task takes care of saving the flag; here we just
@@ -687,21 +713,9 @@ async fn nus_peripheral_loop<C>(
                         if c.lastmod > *most_recent_lastmod {
                             *most_recent_lastmod = c.lastmod;
                         }
-                        let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
                         outbox_push(
                             outbox,
-                            &companion::Response::ContactDetails(companion::response::NewAdvert {
-                                pub_key: &c.pub_key,
-                                adv_type: c.node_type,
-                                flags: c.flags,
-                                out_path_len: c.out_path_len,
-                                out_path: &c.out_path,
-                                name: &c.name[..name_end],
-                                last_advert_timestamp: c.last_advert_ts,
-                                gps_lat: c.gps_lat,
-                                gps_lon: c.gps_lon,
-                                lastmod: c.lastmod,
-                            }),
+                            &companion::Response::ContactDetails(c.as_companion()),
                         );
                         *remaining = remaining.saturating_sub(1);
                     }
@@ -894,14 +908,20 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_default_scope: Option<
                                 settings::DefaultFloodScope,
                             > = None;
+                            // RUN_CLI_COMMAND reply text, borrowed by the encoded response.
+                            let mut cli_reply = cli::Reply::new();
                             // Self-telemetry LPP buffer: voltage (4B) + temperature (4B).
                             let mut self_telem_lpp: [u8; 8] = [0u8; 8];
                             let mut self_telem_lpp_len: usize;
                             let mut self_telem_prefix: [u8; 6] = [0u8; 6];
+                            // CMD_EXPORT_CONTACT packet / CMD_SIGN_FINISH signature,
+                            // borrowed by the encoded response.
+                            let mut export_buf = [0u8; ::meshcore::MAX_TRANS_UNIT];
+                            let mut signature = [0u8; ::meshcore::SIGNATURE_SIZE];
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
                                     defmt::warn!("companion: empty write");
-                                    companion::Response::Error(companion::ErrorCode::Generic)
+                                    companion::Response::Error(companion::ErrorCode::UnsupportedCmd)
                                 }
 
                                 Ok(companion::cmd::Command::AppStart) => {
@@ -927,12 +947,11 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::DeviceQuery(ver)) => {
                                     defmt::debug!("companion: DEVICE_QUERY ver={=u8}", ver);
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
-                                        // FIRMWARE_VER_CODE bumped 10 → 11 in MeshCore 1.15.0
-                                        // (commit d2fdd6fa).  Advertises support for the
-                                        // PAYLOAD_TYPE_GRP_DATA codec with the 1.15 wire
-                                        // format (no timestamp, u16 data_type, explicit
-                                        // data_len byte).
-                                        fw_version: 11,
+                                        // FIRMWARE_VER_CODE 14 = MeshCore 1.18: 11 (1.15)
+                                        // GRP_DATA codec, 12 SET_FLOOD_SCOPE un-scoped
+                                        // variant, 13 non-contact SEND_ANON_REQ (plus
+                                        // SEND_RAW_PACKET), 14 RUN_CLI_COMMAND.
+                                        fw_version: cli::FIRMWARE_VER_CODE,
                                         // Protocol encodes capacity as (actual ÷ 2); u8 max = 255
                                         // so we saturate at 510 (255 × 2) as the reported limit.
                                         max_contacts_raw: (contacts::MAX_CONTACTS / 2)
@@ -943,9 +962,9 @@ async fn nus_peripheral_loop<C>(
                                             let v = crate::BLE_PASSKEY.load(Ordering::Relaxed);
                                             if v == u32::MAX { 0 } else { v }
                                         },
-                                        fw_build: b"dev",
-                                        model: b"BornHack Cyber\xC3\x86gg",
-                                        version: b"v1.15.0",
+                                        fw_build: cli::FIRMWARE_BUILD.as_bytes(),
+                                        model: cli::BOARD_NAME.as_bytes(),
+                                        version: cli::FIRMWARE_VERSION.as_bytes(),
                                         client_repeat: false,
                                         // Report the current `PATH_HASH_MODE` so the
                                         // companion app reflects the value the user just
@@ -1083,27 +1102,12 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::GetContactByKey(_key)) => {
                                     match contact_by_key {
                                         Some(ref c) => {
-                                            let name_end =
-                                                c.name.iter().position(|&b| b == 0).unwrap_or(32);
-                                            companion::Response::ContactDetails(
-                                                companion::response::NewAdvert {
-                                                    pub_key: &c.pub_key,
-                                                    adv_type: c.node_type,
-                                                    flags: c.flags,
-                                                    out_path_len: c.out_path_len,
-                                                    out_path: &c.out_path,
-                                                    name: &c.name[..name_end],
-                                                    last_advert_timestamp: c.last_advert_ts,
-                                                    gps_lat: c.gps_lat,
-                                                    gps_lon: c.gps_lon,
-                                                    lastmod: c.lastmod,
-                                                },
-                                            )
+                                            companion::Response::ContactDetails(c.as_companion())
                                         }
                                         None => {
                                             defmt::warn!("companion: GET_CONTACT_BY_KEY not found");
                                             companion::Response::Error(
-                                                companion::ErrorCode::InvalidParameter,
+                                                companion::ErrorCode::NotFound,
                                             )
                                         }
                                     }
@@ -1138,6 +1142,12 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
+                                // Upstream CMD_RESET_PATH: unknown contact → NOT_FOUND.
+                                Ok(companion::cmd::Command::ResetPath(key))
+                                    if contacts::ContactStore::new().find_by_key(key).await.is_none() =>
+                                {
+                                    companion::Response::Error(companion::ErrorCode::NotFound)
+                                }
                                 Ok(companion::cmd::Command::ResetPath(key)) => {
                                     defmt::info!(
                                         "companion: RESET_PATH key={=[u8]:02x}",
@@ -1162,7 +1172,7 @@ async fn nus_peripheral_loop<C>(
                                         Err(e) => {
                                             defmt::warn!("companion: RESET_PATH failed: {:?}", e);
                                             companion::Response::Error(
-                                                companion::ErrorCode::Generic,
+                                                companion::ErrorCode::FileIoError,
                                             )
                                         }
                                     }
@@ -1180,7 +1190,7 @@ async fn nus_peripheral_loop<C>(
                                         Ok(false) => {
                                             defmt::warn!("companion: REMOVE_CONTACT not found");
                                             companion::Response::Error(
-                                                companion::ErrorCode::InvalidParameter,
+                                                companion::ErrorCode::NotFound,
                                             )
                                         }
                                         Err(e) => {
@@ -1189,7 +1199,7 @@ async fn nus_peripheral_loop<C>(
                                                 e
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::Generic,
+                                                companion::ErrorCode::FileIoError,
                                             )
                                         }
                                     }
@@ -1212,7 +1222,7 @@ async fn nus_peripheral_loop<C>(
                                                 "companion: ADD_UPDATE_CONTACT payload too short"
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::InvalidParameter,
+                                                companion::ErrorCode::IllegalArg,
                                             )
                                         }
                                     }
@@ -1224,6 +1234,18 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
+                                // Upstream refuses to move the RTC backwards
+                                // (ERR_CODE_ILLEGAL_ARG). EXCEPTION: only once the
+                                // phone itself set the clock — a clock seeded from
+                                // mesh timestamps may be wrong and the phone must
+                                // be able to correct it.
+                                Ok(companion::cmd::Command::SetDeviceTime(ts))
+                                    if crate::BLE_TIME_LOCKED.load(core::sync::atomic::Ordering::Relaxed)
+                                        && crate::unix_now().is_some_and(|now| ts < now) =>
+                                {
+                                    defmt::warn!("companion: SET_DEVICE_TIME {=u32} is in the past", ts);
+                                    companion::Response::Error(companion::ErrorCode::IllegalArg)
+                                }
                                 Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
                                     crate::set_wall_clock(ts);
                                     crate::BLE_TIME_LOCKED
@@ -1250,7 +1272,7 @@ async fn nus_peripheral_loop<C>(
                                             index
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::IndexOutOfRange,
+                                            companion::ErrorCode::NotFound,
                                         )
                                     }
                                 }
@@ -1263,17 +1285,52 @@ async fn nus_peripheral_loop<C>(
                                     text,
                                 }) => {
                                     // Look up the full pub_key by prefix scan.
+                                    use meshcore::payload::txt_msg;
                                     let recipient = contacts::ContactStore::new()
                                         .find_by_prefix(&pub_key_prefix)
                                         .await;
+                                    // CLI types (reference MyMesh.cpp CMD_SEND_TXT_MSG): stamped
+                                    // with our own unique clock so the receiver's replay check
+                                    // never trips, and never ACKed (expected_ack = 0).
+                                    let is_cli = txt_type == txt_msg::TXT_TYPE_CLI_DATA
+                                        || txt_type == txt_msg::TXT_TYPE_CLI_COMMAND;
+                                    let timestamp = if is_cli {
+                                        crate::unix_now_unique().unwrap_or(timestamp)
+                                    } else {
+                                        timestamp
+                                    };
                                     match recipient {
                                         None => {
                                             defmt::warn!(
                                                 "companion: SEND_TXT_MSG recipient not found for prefix {=[u8]:02x}",
                                                 pub_key_prefix
                                             );
+                                            // Reference ERR_CODE_NOT_FOUND (2).
                                             companion::Response::Error(
-                                                companion::ErrorCode::InvalidParameter,
+                                                companion::ErrorCode::NotFound,
+                                            )
+                                        }
+                                        Some(_) if !is_cli && txt_type != txt_msg::TXT_TYPE_PLAIN => {
+                                            // Reference ERR_CODE_UNSUPPORTED_CMD (1).
+                                            companion::Response::Error(
+                                                companion::ErrorCode::UnsupportedCmd,
+                                            )
+                                        }
+                                        // composeMsgPacket / sendCommandData refuse
+                                        // text over MAX_TEXT_LEN (158 with the
+                                        // extended attempt tail); sendMessage then
+                                        // fails and upstream answers TABLE_FULL.
+                                        Some(_)
+                                            if text.len() > txt_msg::MAX_TEXT_LEN
+                                                || (attempt > 3
+                                                    && text.len() > txt_msg::MAX_TEXT_LEN - 2) =>
+                                        {
+                                            defmt::warn!(
+                                                "companion: SEND_TXT_MSG text too long ({=usize}B)",
+                                                text.len()
+                                            );
+                                            companion::Response::Error(
+                                                companion::ErrorCode::TableFull,
                                             )
                                         }
                                         Some(c) => {
@@ -1287,8 +1344,10 @@ async fn nus_peripheral_loop<C>(
                                             // Mirror phone-originated PMs into the
                                             // on-device inbox so the user can see
                                             // their own messages alongside replies.
-                                            if let Ok(s) = core::str::from_utf8(&v) {
-                                                super::pm_inbox::note_outgoing(&c.pub_key, s);
+                                            if !is_cli {
+                                                if let Ok(s) = core::str::from_utf8(&v) {
+                                                    super::pm_inbox::note_outgoing(&c.pub_key, s);
+                                                }
                                             }
                                             match crate::tx_send(crate::TxRequest::PrivateMsg(
                                                 crate::TxPrivateMsg {
@@ -1311,10 +1370,14 @@ async fn nus_peripheral_loop<C>(
                                                     pfx[4] = flags;
                                                     pfx[5..5 + text_len]
                                                         .copy_from_slice(&text[..text_len]);
-                                                    let expected_ack = meshcore::payload::txt_msg::compute_ack_hash(
-                                                        &pfx[..5 + text_len],
-                                                        &ctx.pub_key,
-                                                    );
+                                                    let expected_ack = if is_cli {
+                                                        0
+                                                    } else {
+                                                        txt_msg::compute_ack_hash(
+                                                            &pfx[..5 + text_len],
+                                                            &ctx.pub_key,
+                                                        )
+                                                    };
                                                     let est_timeout_ms = if is_flood {
                                                         30_000u32
                                                     } else {
@@ -1337,7 +1400,7 @@ async fn nus_peripheral_loop<C>(
                                                         "companion: SEND_TXT_MSG TX queue full"
                                                     );
                                                     companion::Response::Error(
-                                                        companion::ErrorCode::InsufficientStorage,
+                                                        companion::ErrorCode::TableFull,
                                                     )
                                                 }
                                             }
@@ -1345,6 +1408,16 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
+                                // Upstream answers ERR_CODE_NOT_FOUND when getChannel()
+                                // fails (index >= MAX_GROUP_CHANNELS).
+                                // EXCEPTION: upstream still sends on an empty slot
+                                // (all-zero key); the badge refuses it as NOT_FOUND.
+                                Ok(companion::cmd::Command::SendChannelMessage { channel, .. })
+                                    if channels::get(channel).await.is_none() =>
+                                {
+                                    defmt::warn!("companion: SEND_CHANNEL_MSG ch={=u8} not found", channel);
+                                    companion::Response::Error(companion::ErrorCode::NotFound)
+                                }
                                 Ok(companion::cmd::Command::SendChannelMessage {
                                     channel,
                                     timestamp,
@@ -1360,6 +1433,7 @@ async fn nus_peripheral_loop<C>(
                                             channel_idx: channel,
                                             timestamp,
                                             text: v,
+                                            channel_region: false,
                                         },
                                     )) {
                                         Ok(()) => {
@@ -1375,25 +1449,55 @@ async fn nus_peripheral_loop<C>(
                                                 channel
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::InsufficientStorage,
+                                                companion::ErrorCode::TableFull,
                                             )
                                         }
                                     }
                                 }
 
-                                // Pre-MeshCore-1.15 `SET_FLOOD_SCOPE` (0x36).
-                                // Older phone-app builds still send this.
-                                // Apply at runtime so they aren't broken,
-                                // but don't persist — `SET_DEFAULT_FLOOD_SCOPE`
-                                // (0x3F) is the persistent path on 1.15+.
+                                // `SET_FLOOD_SCOPE` (0x36 0x00) — runtime send-scope
+                                // override, not persisted. Like the reference, a
+                                // missing (or all-zero) key drops the override and
+                                // falls back to the default scope; either form
+                                // also ends a 0x36 0x01 un-scoped period.
                                 Ok(companion::cmd::Command::SetFloodScope(key)) => {
-                                    crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(key));
+                                    let key = key.filter(|k| *k != [0u8; 16]);
+                                    let live = match key {
+                                        Some(k) => Some(k),
+                                        None => default_scope_key(
+                                            settings::get_default_flood_scope().await,
+                                        ),
+                                    };
+                                    SCOPE_FOLLOWS_DEFAULT.store(key.is_none(), Ordering::Relaxed);
+                                    crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(live));
                                     defmt::debug!(
-                                        "companion: SET_FLOOD_SCOPE (legacy) → applied, not persisted"
+                                        "companion: SET_FLOOD_SCOPE override={=bool} scoped={=bool}",
+                                        key.is_some(),
+                                        live.is_some(),
                                     );
                                     companion::Response::Ok
                                 }
 
+                                // `SET_FLOOD_SCOPE` (0x36 0x01, v12+) — send floods
+                                // un-scoped until the next 0x36 0x00.
+                                Ok(companion::cmd::Command::SetFloodUnscoped) => {
+                                    SCOPE_FOLLOWS_DEFAULT.store(false, Ordering::Relaxed);
+                                    crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(None));
+                                    defmt::debug!("companion: SET_FLOOD_SCOPE un-scoped");
+                                    companion::Response::Ok
+                                }
+
+                                // Upstream order: getChannel() fails → NOT_FOUND,
+                                // then reserved type / oversize → ILLEGAL_ARG.
+                                // (Short frames and bad path_len are Rejected by
+                                // the parser.) EXCEPTION: upstream sends on an
+                                // empty slot (all-zero key); we answer NOT_FOUND.
+                                Ok(companion::cmd::Command::SendChannelData { channel_idx, .. })
+                                    if channels::get(channel_idx).await.is_none() =>
+                                {
+                                    defmt::warn!("companion: SEND_CHANNEL_DATA ch={=u8} not found", channel_idx);
+                                    companion::Response::Error(companion::ErrorCode::NotFound)
+                                }
                                 Ok(companion::cmd::Command::SendChannelData {
                                     data_type,
                                     channel_idx,
@@ -1401,14 +1505,19 @@ async fn nus_peripheral_loop<C>(
                                     path,
                                     payload,
                                 }) => {
-                                    if payload.len() > crate::MAX_CHANNEL_DATA {
+                                    // Validate up front like upstream (ILLEGAL_ARG)
+                                    // so the app gets an error, not OK-then-drop:
+                                    // DATA_TYPE_RESERVED (0), or a blob over
+                                    // MAX_GROUP_DATA_LENGTH (#3386).
+                                    if data_type == 0 || payload.len() > crate::MAX_CHANNEL_DATA {
                                         defmt::warn!(
-                                            "companion: SEND_CHANNEL_DATA payload too long ({=usize}B > {=usize}B)",
+                                            "companion: SEND_CHANNEL_DATA rejected: type={=u16:#06x} payload={=usize}B (max {=usize}B)",
+                                            data_type,
                                             payload.len(),
                                             crate::MAX_CHANNEL_DATA,
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::InvalidParameter,
+                                            companion::ErrorCode::IllegalArg,
                                         )
                                     } else {
                                         let mut data: heapless::Vec<
@@ -1446,7 +1555,7 @@ async fn nus_peripheral_loop<C>(
                                                     "companion: SEND_CHANNEL_DATA → TX queue full",
                                                 );
                                                 companion::Response::Error(
-                                                    companion::ErrorCode::InsufficientStorage,
+                                                    companion::ErrorCode::TableFull,
                                                 )
                                             }
                                         }
@@ -1471,7 +1580,7 @@ async fn nus_peripheral_loop<C>(
                                             "companion: SET_DEFAULT_FLOOD_SCOPE empty name → ERR",
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::InvalidParameter,
+                                            companion::ErrorCode::IllegalArg,
                                         )
                                     } else {
                                         if let Err(e) =
@@ -1481,6 +1590,14 @@ async fn nus_peripheral_loop<C>(
                                                 "settings: default_flood_scope persist failed: {:?}",
                                                 e
                                             );
+                                        }
+                                        // The reference reads the default at send
+                                        // time, so a new default takes effect at once
+                                        // unless a 0x36 override / un-scoped is active.
+                                        let live = default_scope_key(value);
+                                        crate::DEFAULT_SCOPE_KEY.lock(|cell| cell.set(live));
+                                        if SCOPE_FOLLOWS_DEFAULT.load(Ordering::Relaxed) {
+                                            crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(live));
                                         }
                                         match value {
                                             Some(v) => defmt::info!(
@@ -1530,8 +1647,9 @@ async fn nus_peripheral_loop<C>(
                                     cr,
                                     client_repeat,
                                 }) => {
-                                    // Validate ranges per MeshCore reference firmware.
-                                    if (300_000..=2_500_000).contains(&freq_khz)
+                                    // Validate ranges per MeshCore reference firmware
+                                    // (MyMesh.cpp CMD_SET_RADIO_PARAMS: freq 150000..=2500000 kHz).
+                                    if (150_000..=2_500_000).contains(&freq_khz)
                                         && (7_000..=500_000).contains(&bw_hz)
                                         && (5..=12).contains(&sf)
                                         && (5..=8).contains(&cr)
@@ -1557,7 +1675,7 @@ async fn nus_peripheral_loop<C>(
                                             "companion: SET_RADIO_PARAMS out of range → ERROR"
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::InvalidParameter,
+                                            companion::ErrorCode::IllegalArg,
                                         )
                                     }
                                 }
@@ -1579,7 +1697,7 @@ async fn nus_peripheral_loop<C>(
                                             power
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::InvalidParameter,
+                                            companion::ErrorCode::IllegalArg,
                                         )
                                     }
                                 }
@@ -1592,7 +1710,7 @@ async fn nus_peripheral_loop<C>(
                                             mode,
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::InvalidParameter,
+                                            companion::ErrorCode::IllegalArg,
                                         )
                                     } else {
                                         defmt::info!(
@@ -1616,7 +1734,7 @@ async fn nus_peripheral_loop<C>(
                                                     e
                                                 );
                                                 companion::Response::Error(
-                                                    companion::ErrorCode::Generic,
+                                                    companion::ErrorCode::FileIoError,
                                                 )
                                             }
                                         }
@@ -1643,7 +1761,7 @@ async fn nus_peripheral_loop<C>(
                                                 e
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::Generic,
+                                                companion::ErrorCode::FileIoError,
                                             )
                                         }
                                     }
@@ -1676,21 +1794,26 @@ async fn nus_peripheral_loop<C>(
                                     advert_loc_policy,
                                     multi_acks,
                                 }) => {
-                                    defmt::info!(
-                                        "companion: SET_OTHER_PARAMS manual={=u8} tele={=u8} loc={=u8} macks={=u8} → OK",
-                                        manual_add_contacts,
-                                        telemetry,
-                                        advert_loc_policy,
-                                        multi_acks
-                                    );
-                                    pending_other = Some(settings::OtherParams {
+                                    // Upstream CMD_SET_OTHER_PARAMS leaves fields the
+                                    // frame does not carry unchanged.
+                                    let new_other = settings::OtherParams {
                                         manual_add_contacts,
                                         // loc/env bits (telemetry >> 2/4) ignored
                                         // — no GPS / environment sensors on this device.
-                                        telemetry_mode_base: telemetry & 0x03,
-                                        advert_loc_policy,
-                                        multi_acks,
-                                    });
+                                        telemetry_mode_base: telemetry
+                                            .map_or(other_params.telemetry_mode_base, |t| t & 0x03),
+                                        advert_loc_policy: advert_loc_policy
+                                            .unwrap_or(other_params.advert_loc_policy),
+                                        multi_acks: multi_acks.unwrap_or(other_params.multi_acks),
+                                    };
+                                    defmt::info!(
+                                        "companion: SET_OTHER_PARAMS manual={=u8} tele={=u8} loc={=u8} macks={=u8} → OK",
+                                        new_other.manual_add_contacts,
+                                        new_other.telemetry_mode_base,
+                                        new_other.advert_loc_policy,
+                                        new_other.multi_acks
+                                    );
+                                    pending_other = Some(new_other);
                                     companion::Response::Ok
                                 }
 
@@ -1712,7 +1835,7 @@ async fn nus_peripheral_loop<C>(
                                             lon
                                         );
                                         companion::Response::Error(
-                                            companion::ErrorCode::InvalidParameter,
+                                            companion::ErrorCode::IllegalArg,
                                         )
                                     }
                                 }
@@ -1759,6 +1882,226 @@ async fn nus_peripheral_loop<C>(
                                         &_s[.._sl]
                                     );
                                     sent_resp
+                                }
+
+                                // SEND_ANON_REQ (0x39) — the app's "Discover
+                                // Regions" transport. No login needed; the
+                                // repeater answers ANON_REQ_TYPE_REGIONS only on
+                                // a DIRECT route, so a contact with no known path
+                                // will get silence (send_anon_request logs it).
+                                // Since FIRMWARE_VER_CODE 13 the target may be a
+                                // non-contact, sent zero-hop direct like the
+                                // reference's transient contact.
+                                Ok(companion::cmd::Command::SendAnonReq { data, .. })
+                                    if data.len() > crate::MAX_ANON_REQ_DATA =>
+                                {
+                                    defmt::warn!(
+                                        "companion: SEND_ANON_REQ body too long ({=usize}B > {=usize}B)",
+                                        data.len(),
+                                        crate::MAX_ANON_REQ_DATA,
+                                    );
+                                    companion::Response::Error(
+                                        companion::ErrorCode::TableFull,
+                                    )
+                                }
+                                Ok(companion::cmd::Command::SendAnonReq { pub_key, data }) => {
+                                    let tag = crate::unix_now().unwrap_or(0);
+                                    let mut d: heapless::Vec<u8, { crate::MAX_ANON_REQ_DATA }> =
+                                        heapless::Vec::new();
+                                    let _ = d.extend_from_slice(data);
+                                    let contact =
+                                        contacts::ContactStore::new().find_by_key(pub_key).await;
+                                    let is_flood = contact
+                                        .as_ref()
+                                        .map(|c| c.out_path_len == contacts::OUT_PATH_UNKNOWN)
+                                        .unwrap_or(false);
+                                    let est_timeout_ms =
+                                        if is_flood { 30_000u32 } else { 15_000u32 };
+                                    defmt::info!(
+                                        "companion: SEND_ANON_REQ key={=[u8]:02x} tag={=u32:#010x} anon_type={=u8:#04x} ({=usize}B) contact={=bool} flood={=bool}",
+                                        &pub_key[..6],
+                                        tag,
+                                        d.first().copied().unwrap_or(0),
+                                        d.len(),
+                                        contact.is_some(),
+                                        is_flood,
+                                    );
+                                    match crate::tx_send(crate::TxRequest::AnonReq(
+                                        crate::TxAnonReq {
+                                            pub_key: *pub_key,
+                                            tag,
+                                            data: d,
+                                        },
+                                    )) {
+                                        Ok(()) => companion::Response::SentWithTag {
+                                            is_flood,
+                                            tag,
+                                            est_timeout_ms,
+                                        },
+                                        Err(_) => {
+                                            defmt::warn!(
+                                                "companion: SEND_ANON_REQ → TX queue full"
+                                            );
+                                            companion::Response::Error(
+                                                companion::ErrorCode::TableFull,
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // SEND_RAW_PACKET (0x41, v13+) — the reference
+                                // validates the frame with `tryParsePacket()` and
+                                // queues it untouched. `priority` picks a slot in
+                                // the reference's TX queue; ours is FIFO, so it
+                                // is logged and otherwise ignored.
+                                Ok(companion::cmd::Command::SendRawPacket { priority, packet }) => {
+                                    let valid = ::meshcore::packet::deserialize(packet)
+                                        .is_ok_and(|m| m.version == 0);
+                                    if !valid {
+                                        defmt::warn!(
+                                            "companion: SEND_RAW_PACKET unparseable ({=usize}B) → ERROR",
+                                            packet.len(),
+                                        );
+                                        companion::Response::Error(
+                                            companion::ErrorCode::IllegalArg,
+                                        )
+                                    } else {
+                                        let mut frame = [0u8; ::meshcore::MAX_TRANS_UNIT];
+                                        frame[..packet.len()].copy_from_slice(packet);
+                                        match crate::tx_send(crate::TxRequest::RawFrame {
+                                            data: frame,
+                                            len: packet.len(),
+                                        }) {
+                                            Ok(()) => {
+                                                defmt::info!(
+                                                    "companion: SEND_RAW_PACKET pri={=u8} ({=usize}B) → queued",
+                                                    priority,
+                                                    packet.len(),
+                                                );
+                                                companion::Response::Ok
+                                            }
+                                            Err(_) => {
+                                                defmt::warn!(
+                                                    "companion: SEND_RAW_PACKET → TX queue full"
+                                                );
+                                                companion::Response::Error(
+                                                    companion::ErrorCode::TableFull,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // GET_DEVICE_TIME (0x05) — upstream replies
+                                // RESP_CODE_CURR_TIME with the RTC; 0 while the
+                                // badge has no wall clock yet.
+                                Ok(companion::cmd::Command::GetDeviceTime) => {
+                                    companion::Response::CurrentTime(crate::unix_now().unwrap_or(0))
+                                }
+
+                                // Frames upstream refuses before touching any
+                                // state; the parser carries upstream's ERR code.
+                                Ok(companion::cmd::Command::Rejected { cmd, error }) => {
+                                    defmt::info!(
+                                        "companion: cmd {=u8:#04x} rejected (err {=u8})",
+                                        cmd,
+                                        error as u8,
+                                    );
+                                    companion::Response::Error(error)
+                                }
+
+                                // SEND_RAW_DATA (0x19) — upstream createRawData +
+                                // sendDirect: a PAYLOAD_TYPE_RAW_CUSTOM packet
+                                // DIRECT along the given path (encoded path_len,
+                                // validated by the parser). TABLE_FULL when the
+                                // payload does not fit or the TX queue is full.
+                                Ok(companion::cmd::Command::SendRawData { path_len, path, payload }) => {
+                                    let mut pv: heapless::Vec<u8, { ::meshcore::MAX_PATH_SIZE }> =
+                                        heapless::Vec::new();
+                                    let mut pl: heapless::Vec<u8, { ::meshcore::MAX_PAYLOAD_SIZE }> =
+                                        heapless::Vec::new();
+                                    let msg = (pv.extend_from_slice(path).is_ok()
+                                        && pl.extend_from_slice(payload).is_ok())
+                                    .then(|| ::meshcore::packet::Message {
+                                        payload_type: ::meshcore::packet::PayloadType::RawCustom,
+                                        route: ::meshcore::packet::RouteType::Direct,
+                                        version: 0,
+                                        transport_code: 0,
+                                        transport_code_2: 0,
+                                        path_len_byte: path_len,
+                                        path: pv,
+                                        payload: pl,
+                                    });
+                                    let mut frame = [0u8; ::meshcore::MAX_TRANS_UNIT];
+                                    let len = msg.and_then(|m| ::meshcore::packet::serialize(&m, &mut frame).ok());
+                                    match len.map(|len| crate::tx_send(crate::TxRequest::RawFrame { data: frame, len })) {
+                                        Some(Ok(())) => {
+                                            defmt::info!(
+                                                "companion: SEND_RAW_DATA path_len={=u8:#04x} ({=usize}B) → queued",
+                                                path_len,
+                                                payload.len(),
+                                            );
+                                            companion::Response::Ok
+                                        }
+                                        _ => {
+                                            defmt::warn!("companion: SEND_RAW_DATA not queued");
+                                            companion::Response::Error(companion::ErrorCode::TableFull)
+                                        }
+                                    }
+                                }
+
+                                // RUN_CLI_COMMAND (0x42, v14+) — text CLI, see
+                                // `cli.rs`. Setting changes reuse the pending_*
+                                // paths so they apply after the reply is sent.
+                                Ok(companion::cmd::Command::RunCli(line)) => {
+                                    let cur = cli::Settings {
+                                        name: &node_name[..node_name_len],
+                                        freq_hz: radio_params.freq_hz,
+                                        bw_hz: radio_params.bw_hz,
+                                        sf: radio_params.sf,
+                                        cr: radio_params.cr,
+                                        tx_power: radio_params.tx_power,
+                                        tz_offset_qh: crate::TZ_OFFSET_QH.load(Ordering::Relaxed),
+                                    };
+                                    match cli::run(line, &cur, &mut cli_reply) {
+                                        cli::Action::None => {}
+                                        cli::Action::SetName(name) => {
+                                            let mut new_name = [0u8; settings::MAX_NODE_NAME];
+                                            new_name[..name.len()].copy_from_slice(name);
+                                            pending_name = Some((new_name, name.len()));
+                                        }
+                                        cli::Action::SetRadio {
+                                            freq_hz,
+                                            bw_hz,
+                                            sf,
+                                            cr,
+                                        } => {
+                                            pending_radio = Some(settings::RadioParams {
+                                                freq_hz,
+                                                bw_hz,
+                                                sf,
+                                                cr,
+                                                ..radio_params
+                                            });
+                                        }
+                                        cli::Action::SetTxPower(tx_power) => {
+                                            pending_radio = Some(settings::RadioParams {
+                                                tx_power,
+                                                ..radio_params
+                                            });
+                                        }
+                                        cli::Action::SetTzOffset(tz) => {
+                                            crate::TZ_OFFSET_QH.store(tz, Ordering::Relaxed);
+                                            crate::TZ_CHANGED_SIGNAL.signal(());
+                                        }
+                                        cli::Action::Reboot => pending_reboot = true,
+                                    }
+                                    defmt::info!(
+                                        "companion: RUN_CLI {=[u8]:a} → {=str}",
+                                        line,
+                                        cli_reply.as_str(),
+                                    );
+                                    companion::Response::CliReply(cli_reply.as_bytes())
                                 }
 
                                 Ok(companion::cmd::Command::SendBinaryReq {
@@ -1867,7 +2210,7 @@ async fn nus_peripheral_loop<C>(
                                                 &pub_key[..6]
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::InvalidParameter,
+                                                companion::ErrorCode::NotFound,
                                             )
                                         }
                                     }
@@ -1898,7 +2241,7 @@ async fn nus_peripheral_loop<C>(
                                                 e
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::Generic,
+                                                companion::ErrorCode::FileIoError,
                                             )
                                         }
                                     }
@@ -2022,13 +2365,35 @@ async fn nus_peripheral_loop<C>(
                                                 rx_air_secs: s.rx_air_secs,
                                             }
                                         }
+                                        0x00 => companion::Response::StatsCore {
+                                            battery_mv: crate::fw::battery::read_mv(),
+                                            uptime_secs: embassy_time::Instant::now().as_secs()
+                                                as u32,
+                                            // Upstream `_err_flags`; the badge raises none.
+                                            err_flags: 0,
+                                            queue_len: crate::TX_CHANNEL.len() as u8,
+                                        },
+                                        0x02 => {
+                                            use core::sync::atomic::Ordering::Relaxed;
+                                            let p = &crate::PACKET_STATS;
+                                            companion::Response::StatsPackets {
+                                                recv: p.recv.load(Relaxed),
+                                                sent: p.sent.load(Relaxed),
+                                                sent_flood: p.sent_flood.load(Relaxed),
+                                                sent_direct: p.sent_direct.load(Relaxed),
+                                                recv_flood: p.recv_flood.load(Relaxed),
+                                                recv_direct: p.recv_direct.load(Relaxed),
+                                                recv_errors: p.recv_errors.load(Relaxed),
+                                            }
+                                        }
+                                        // Upstream: unknown stats type → ILLEGAL_ARG.
                                         other => {
                                             defmt::warn!(
-                                                "companion: GET_STATS unsupported type={=u8:#04x}",
+                                                "companion: GET_STATS unknown type={=u8:#04x}",
                                                 other
                                             );
                                             companion::Response::Error(
-                                                companion::ErrorCode::InvalidParameter,
+                                                companion::ErrorCode::IllegalArg,
                                             )
                                         }
                                     }
@@ -2048,6 +2413,67 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
+                                Ok(companion::cmd::Command::ExportContact(None)) => {
+                                    match super::meshcore::export_self_advert(
+                                        &ctx.sec_key,
+                                        &node_name[..node_name_len],
+                                        crate::unix_now_unique().unwrap_or(0),
+                                        &mut export_buf,
+                                    ) {
+                                        Some(n) => companion::Response::ExportContact(&export_buf[..n]),
+                                        // Upstream: createSelfAdvert failed → TABLE_FULL.
+                                        None => companion::Response::Error(
+                                            companion::ErrorCode::TableFull,
+                                        ),
+                                    }
+                                }
+                                // The badge keeps no received advert packets, which is
+                                // what upstream exports for another contact, so this is
+                                // its "no exportable advert" answer.
+                                Ok(companion::cmd::Command::ExportContact(Some(_))) => {
+                                    companion::Response::Error(companion::ErrorCode::NotFound)
+                                }
+
+                                // The badge holds no keep-alive connections, so there is
+                                // never one to report or drop.
+                                Ok(companion::cmd::Command::HasConnection(_)) => {
+                                    companion::Response::Error(companion::ErrorCode::NotFound)
+                                }
+                                Ok(companion::cmd::Command::Logout(_)) => companion::Response::Ok,
+
+                                Ok(companion::cmd::Command::SignStart) => {
+                                    sign_data = Some(heapless::Vec::new());
+                                    companion::Response::SignStart { max_len: SIGN_DATA_MAX as u32 }
+                                }
+                                Ok(companion::cmd::Command::SignData(chunk)) => match sign_data {
+                                    None => companion::Response::Error(companion::ErrorCode::BadState),
+                                    Some(ref mut buf) => match buf.extend_from_slice(chunk) {
+                                        Ok(()) => companion::Response::Ok,
+                                        Err(_) => companion::Response::Error(
+                                            companion::ErrorCode::TableFull,
+                                        ),
+                                    },
+                                },
+                                Ok(companion::cmd::Command::SignFinish) => match sign_data.take() {
+                                    None => companion::Response::Error(companion::ErrorCode::BadState),
+                                    Some(buf) => {
+                                        match ed25519_compact::SecretKey::from_slice(&ctx.sec_key) {
+                                            Ok(sk) => {
+                                                signature.copy_from_slice(sk.sign(&buf, None).as_ref());
+                                                companion::Response::Signature(&signature)
+                                            }
+                                            Err(_) => companion::Response::Error(
+                                                companion::ErrorCode::BadState,
+                                            ),
+                                        }
+                                    }
+                                },
+
+                                // No sensors, so no settings: an empty `name:value` list.
+                                Ok(companion::cmd::Command::GetCustomVars) => {
+                                    companion::Response::CustomVars(&[])
+                                }
+
                                 Ok(companion::cmd::Command::Unknown(b)) => {
                                     defmt::warn!(
                                         "companion: unknown command 0x{:02X} len={=usize} data={=[u8]:02x} → ERROR",
@@ -2055,7 +2481,7 @@ async fn nus_peripheral_loop<C>(
                                         data.len(),
                                         data,
                                     );
-                                    companion::Response::Error(companion::ErrorCode::InvalidCommand)
+                                    companion::Response::Error(companion::ErrorCode::UnsupportedCmd)
                                 }
                             };
 
@@ -2108,14 +2534,7 @@ async fn nus_peripheral_loop<C>(
                             }
                             if let Some(new_radio) = pending_radio {
                                 radio_params = new_radio;
-                                use core::sync::atomic::Ordering::Relaxed;
-                                crate::LORA_FREQ_HZ.store(radio_params.freq_hz, Relaxed);
-                                crate::LORA_BW_HZ.store(radio_params.bw_hz, Relaxed);
-                                crate::LORA_SF.store(radio_params.sf, Relaxed);
-                                crate::LORA_CR.store(radio_params.cr, Relaxed);
-                                crate::LORA_TX_POWER.store(radio_params.tx_power, Relaxed);
-                                crate::LORA_CLIENT_REPEAT
-                                    .store(radio_params.client_repeat, Relaxed);
+                                radio_params.store_live();
                                 // Fire CHANGED so the persister writes the
                                 // new atomics to flash and then signals
                                 // APPLY → listener reprograms the SX1262
@@ -2137,15 +2556,7 @@ async fn nus_peripheral_loop<C>(
                             }
                             if let Some(new_other) = pending_other {
                                 other_params = new_other;
-                                use core::sync::atomic::Ordering::Relaxed;
-                                crate::ADVERT_LOC_POLICY
-                                    .store(other_params.advert_loc_policy != 0, Relaxed);
-                                let ma = if other_params.multi_acks == 0 {
-                                    1
-                                } else {
-                                    other_params.multi_acks.min(2)
-                                };
-                                crate::MULTI_ACKS.store(ma, Relaxed);
+                                other_params.store_live();
                                 match settings::set_other_params(other_params).await {
                                     Ok(()) => defmt::debug!("companion: other params persisted"),
                                     Err(e) => defmt::warn!(
@@ -2180,38 +2591,14 @@ async fn nus_peripheral_loop<C>(
                                 crate::fw::kv::wipe_and_reset().await;
                             }
 
-                            // Persist an ADD_UPDATE_CONTACT payload to flash and push
-                            // ContactStart/Contact/ContactEnd back into the outbox.
+                            // Persist an ADD_UPDATE_CONTACT payload to flash. Upstream
+                            // answers the command with PACKET_OK only (already sent);
+                            // it pushes no contact frames.
                             if let Some(ref contact) = pending_contact {
                                 let store = contacts::ContactStore::new();
                                 match store.add_or_update(contact).await {
                                     Ok(r) => {
                                         defmt::info!("companion: ADD_UPDATE_CONTACT → {:?}", r);
-                                        let mut prefix = [0u8; 6];
-                                        prefix.copy_from_slice(&contact.pub_key[..6]);
-                                        let name_end =
-                                            contact.name.iter().position(|&b| b == 0).unwrap_or(32);
-                                        outbox_push(
-                                            outbox,
-                                            &companion::Response::ContactStart { count: 1 },
-                                        );
-                                        outbox_push(
-                                            outbox,
-                                            &companion::Response::Contact(
-                                                companion::response::Contact {
-                                                    pub_key_prefix: prefix,
-                                                    flags: contact.flags,
-                                                    last_seen: contact.last_advert_ts,
-                                                    name: &contact.name[..name_end],
-                                                },
-                                            ),
-                                        );
-                                        outbox_push(
-                                            outbox,
-                                            &companion::Response::ContactEnd {
-                                                lastmod: contact.lastmod,
-                                            },
-                                        );
                                     }
                                     Err(e) => defmt::warn!(
                                         "companion: ADD_UPDATE_CONTACT store failed: {:?}",

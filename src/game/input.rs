@@ -23,27 +23,31 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return false;
     }
 
+    // ── Battle screen: owns its own input logic across its states. It is
+    // ahead of the other views, so a challenge's Fire and Cancel reach it. ──
+    if super::battle_view::is_active() {
+        super::battle_view::handle_input(btn);
+        return true;
+    }
+
     // ── Rolled-stats view: any button closes it ────────────────────────
     if super::traits_view::is_active() {
         super::traits_view::close();
         return true;
     }
 
-    // ── Health status view: any button closes it ────────────────────────
-    if super::health_view::is_active() {
-        super::health_view::close();
+    // ── Diary: Left / Right flip the page, any other button closes ──────
+    if super::diary_view::is_active() {
+        match btn {
+            ButtonId::Left | ButtonId::Right => super::diary_view::flip(),
+            _ => super::diary_view::close(),
+        }
         return true;
     }
 
     // ── Friends view: owns its own input logic across its two states ────
     if super::friends_view::is_active() {
         super::friends_view::handle_input(btn);
-        return true;
-    }
-
-    // ── Battle screen: owns its own input logic across its two states ───
-    if super::battle_view::is_active() {
-        super::battle_view::handle_input(btn);
         return true;
     }
 
@@ -61,17 +65,17 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
-    // ── Not started: Fire opens pet selection ────────────────────────
+    // ── Not started: Fire or Execute opens pet selection ─────────────
+    // Execute used to be swallowed here without doing anything, which
+    // left the start screen looking frozen for anyone reaching for the
+    // button the rest of the UI uses to confirm.
     if !lifecycle::is_started() {
-        if btn == ButtonId::Fire {
+        if btn == ButtonId::Fire || btn == ButtonId::Execute {
             super::pet_select::open_new_game();
             return true;
         }
         // Let Left/Right pass through to switch screens.
-        return matches!(
-            btn,
-            ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Execute
-        );
+        return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel);
     }
 
     // ── Hatching: block game input but allow screen navigation ─────
@@ -101,72 +105,36 @@ pub fn dispatch(btn: ButtonId) -> bool {
 
     // ── Lights Out mini-game ──────────────────────────────────────────
     if super::lightsout::is_active() {
-        match btn {
-            ButtonId::Cancel => super::lightsout::close(),
-            ButtonId::Up => super::lightsout::cursor_up(),
-            ButtonId::Down => super::lightsout::cursor_down(),
-            ButtonId::Left => super::lightsout::cursor_left(),
-            ButtonId::Right => super::lightsout::cursor_right(),
-            ButtonId::Fire | ButtonId::Execute => {
-                super::lightsout::activate();
-            }
-        }
+        super::lightsout::dispatch(btn);
         return true;
     }
 
     // ── Black Hole mini-game ──────────────────────────────────────────
     if super::blackhole::is_active() {
-        match btn {
-            ButtonId::Cancel => super::blackhole::close(),
-            ButtonId::Up => super::blackhole::cursor_up(),
-            ButtonId::Down => super::blackhole::cursor_down(),
-            ButtonId::Left => super::blackhole::cursor_left(),
-            ButtonId::Right => super::blackhole::cursor_right(),
-            ButtonId::Fire | ButtonId::Execute => {
-                super::blackhole::activate();
-            }
-        }
-        return true;
-    }
-
-    // ── Nim mini-game ──────────────────────────────────────────────────
-    if super::nim::is_active() {
-        match btn {
-            ButtonId::Cancel => super::nim::close(),
-            ButtonId::Up => super::nim::cursor_up(),
-            ButtonId::Down => super::nim::cursor_down(),
-            ButtonId::Left => super::nim::cursor_left(),
-            ButtonId::Right => super::nim::cursor_right(),
-            ButtonId::Fire | ButtonId::Execute => {
-                super::nim::activate();
-            }
-        }
+        super::blackhole::dispatch(btn);
         return true;
     }
 
     // ── Tic-tac-toe mini-game ──────────────────────────────────────────
     if super::tictactoe::is_active() {
-        match btn {
-            ButtonId::Cancel => super::tictactoe::close(),
-            ButtonId::Up => super::tictactoe::cursor_up(),
-            ButtonId::Down => super::tictactoe::cursor_down(),
-            ButtonId::Left => super::tictactoe::cursor_left(),
-            ButtonId::Right => super::tictactoe::cursor_right(),
-            ButtonId::Fire | ButtonId::Execute => {
-                super::tictactoe::place();
-            }
-        }
+        super::tictactoe::dispatch(btn);
         return true;
     }
 
     // ── Active: modal or icon navigation ─────────────────────────────
     if modal::is_open() {
         match btn {
-            ButtonId::Cancel => modal::close(),
+            // On the hint view Cancel steps back to the list; a second one
+            // closes the modal, as on every popover view.
+            ButtonId::Cancel => {
+                if !modal::dismiss_hint() {
+                    modal::close();
+                }
+            }
             ButtonId::Up => modal::cursor_up(),
             ButtonId::Down => modal::cursor_down(),
             ButtonId::Fire | ButtonId::Execute => modal::activate(),
-            ButtonId::Left | ButtonId::Right => {}
+            ButtonId::Left | ButtonId::Right => modal::flip_page(),
         }
         true
     } else {

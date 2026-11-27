@@ -14,7 +14,7 @@
 //!   * The parser detects the trailing `Z` and reports `is_utc` per timestamp.
 //!     All time values are returned verbatim (no offset applied).
 //!   * The caller (`watch::import_alarms_from_fat12`) applies
-//!     `crate::TIMEZONE_OFFSET` to UTC timestamps before storing them in alarm
+//!     `crate::TZ_OFFSET_QH` to UTC timestamps before storing them in alarm
 //!     slots.  TZID parameters are stripped at parse time and the accompanying
 //!     value is treated as floating local — we don't ship a tzdata table.
 //!
@@ -233,7 +233,7 @@ fn digits(bytes: &[u8]) -> Option<u32> {
     Some(n)
 }
 
-fn copy_ascii(dst: &mut [u8; SUMMARY_LEN], src: &[u8]) {
+pub(super) fn copy_ascii(dst: &mut [u8; SUMMARY_LEN], src: &[u8]) {
     let mut i = 0;
     for &b in src {
         if i >= dst.len() {

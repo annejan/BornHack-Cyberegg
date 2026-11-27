@@ -122,6 +122,8 @@ pub static CHANNEL_MSG_RING: Mutex<CriticalSectionRawMutex, RefCell<ChannelMsgRi
 pub struct CachedChannel {
     pub slot_idx: u8,
     pub name: heapless::String<20>,
+    /// Per-channel region override; empty = global flood scope.
+    pub region: heapless::String<{ channels::REGION_NAME_MAX }>,
 }
 
 pub static CACHED_CHANNELS: Mutex<
@@ -197,12 +199,24 @@ pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 /// persist it.
 pub static BOOST_RX_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Fired by the menu when the RX power-save mode changes so the persister
+/// writes it and the listener re-arms receive with the new timings.
+pub static RX_POWER_SAVE_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// Fired by the menu to request the BLE task to clear all stored contacts.
 pub static CONTACT_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired after a `SET_CHANNEL` or channel reset so the meshcore task reloads
 /// channels.
 pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Set (non-empty) or clear (empty) a channel slot's region override from the
+/// on-device channel browser. The meshcore task persists it and reloads its
+/// channel table; senders also fire `TX_WAKEUP` so that happens promptly.
+pub static CHANNEL_REGION_SIGNAL: Signal<
+    CriticalSectionRawMutex,
+    (u8, heapless::String<{ channels::REGION_NAME_MAX }>),
+> = Signal::new();
 
 /// Signals the meshcore task that tuning params changed; carries the new
 /// airtime_factor_x1000.
@@ -217,13 +231,81 @@ pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal:
 /// signal only exists to break the receive call so the loop iterates.
 pub static TX_WAKEUP: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// 16-byte transport key for region-scoped flood packets.
+/// 16-byte transport key for region-scoped flood packets — the companion
+/// app's live send scope (`SET_FLOOD_SCOPE` override / un-scoped, else the
+/// default). Only app-originated floods use it.
 pub static FLOOD_SCOPE_KEY: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<[u8; 16]>>> =
+    Mutex::new(core::cell::Cell::new(None));
+
+/// The badge's global region key: persisted `def_scope`, else dk-bornhack.
+/// Unlike [`FLOOD_SCOPE_KEY`] a session `SET_FLOOD_SCOPE` never changes it,
+/// mirroring the reference's `default_scope_key` vs `send_scope`. Channels
+/// without a region override send and filter against it.
+pub static DEFAULT_SCOPE_KEY: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<[u8; 16]>>> =
     Mutex::new(core::cell::Cell::new(None));
 
 // ---------------------------------------------------------------------------
 // Radio stats
 // ---------------------------------------------------------------------------
+
+/// Packet counters for `CMD_GET_STATS` / `STATS_TYPE_PACKETS`, counted the
+/// way upstream's Dispatcher does: every packet the radio sends or receives
+/// intact, split flood/direct by its route type, plus CRC failures. Counts
+/// wrap at `u32` like upstream's.
+pub struct PacketStats {
+    pub recv: core::sync::atomic::AtomicU32,
+    pub sent: core::sync::atomic::AtomicU32,
+    pub sent_flood: core::sync::atomic::AtomicU32,
+    pub sent_direct: core::sync::atomic::AtomicU32,
+    pub recv_flood: core::sync::atomic::AtomicU32,
+    pub recv_direct: core::sync::atomic::AtomicU32,
+    pub recv_errors: core::sync::atomic::AtomicU32,
+}
+
+impl PacketStats {
+    const fn new() -> Self {
+        use core::sync::atomic::AtomicU32;
+        Self {
+            recv: AtomicU32::new(0),
+            sent: AtomicU32::new(0),
+            sent_flood: AtomicU32::new(0),
+            sent_direct: AtomicU32::new(0),
+            recv_flood: AtomicU32::new(0),
+            recv_direct: AtomicU32::new(0),
+            recv_errors: AtomicU32::new(0),
+        }
+    }
+
+    /// `true` for the two flood route types (bits 0-1 of the header byte:
+    /// 0 = transport flood, 1 = flood).
+    fn is_flood(header: u8) -> bool {
+        header & 0x03 <= 1
+    }
+
+    /// Count one packet sent; `header` is its first byte.
+    pub fn count_sent(&self, header: u8) {
+        use core::sync::atomic::Ordering::Relaxed;
+        self.sent.fetch_add(1, Relaxed);
+        if Self::is_flood(header) {
+            self.sent_flood.fetch_add(1, Relaxed);
+        } else {
+            self.sent_direct.fetch_add(1, Relaxed);
+        }
+    }
+
+    /// Count one packet received intact; `header` is its first byte.
+    pub fn count_recv(&self, header: u8) {
+        use core::sync::atomic::Ordering::Relaxed;
+        self.recv.fetch_add(1, Relaxed);
+        if Self::is_flood(header) {
+            self.recv_flood.fetch_add(1, Relaxed);
+        } else {
+            self.recv_direct.fetch_add(1, Relaxed);
+        }
+    }
+}
+
+pub static PACKET_STATS: PacketStats = PacketStats::new();
 
 #[derive(Clone, Copy)]
 pub struct RadioStats {
@@ -282,12 +364,16 @@ pub struct TxChannelMsg {
     pub channel_idx: u8,
     pub timestamp: u32,
     pub text: heapless::Vec<u8, { msg_queue::MAX_TEXT }>,
+    /// Flood with the channel's effective region (its override, else the
+    /// global scope) — badge-originated sends. `false` keeps the
+    /// app-controlled `FLOOD_SCOPE_KEY` for companion-app sends.
+    pub channel_region: bool,
 }
 
 /// Maximum binary blob carried in a `CMD_SEND_CHANNEL_DATA`
-/// (PAYLOAD_TYPE_GRP_DATA). MeshCore 1.15 caps `data_len` at one byte, so the
-/// blob is at most 255 B.
-pub const MAX_CHANNEL_DATA: usize = 255;
+/// (PAYLOAD_TYPE_GRP_DATA): upstream `MAX_GROUP_DATA_LENGTH` = 184 - 16 - 3 =
+/// 165 B (#3386) — the most that still fits one encrypted payload.
+pub const MAX_CHANNEL_DATA: usize = ::meshcore::MAX_GROUP_DATA_LENGTH;
 
 pub struct TxChannelData {
     pub channel_idx: u8,
@@ -335,6 +421,31 @@ pub struct TxBinaryReq {
     pub req_data: heapless::Vec<u8, MAX_BINARY_REQ_PARAMS>,
 }
 
+/// Maximum body carried in a `CMD_SEND_ANON_REQ`.
+///
+/// The ANON_REQ payload is `[dest_hash:1][sender_pk:32][mac:2][ciphertext]`
+/// and must fit `MAX_PAYLOAD_SIZE`; the ciphertext is the AES-padded
+/// `[tag:4][body...]`. That leaves 140 body bytes — enough for a REGIONS /
+/// OWNER request carrying a full 3-byte-hash reply path, which the 15-byte
+/// login-password slot of `anon_req::encrypt` was not.
+pub const MAX_ANON_REQ_DATA: usize =
+    (::meshcore::MAX_PAYLOAD_SIZE - 1 - ::meshcore::PUB_KEY_SIZE - ::meshcore::CIPHER_MAC_SIZE)
+        / ::meshcore::CIPHER_BLOCK_SIZE
+        * ::meshcore::CIPHER_BLOCK_SIZE
+        - 4;
+
+/// Unauthenticated `PAYLOAD_TYPE_ANON_REQ` with an opaque
+/// `[anon_req_type:1][params...]` body — the app's **Discover Regions**
+/// (`ANON_REQ_TYPE_REGIONS = 0x01`) transport.
+///
+/// Unlike [`TxBinaryReq`] this needs no prior login: the repeater derives the
+/// shared secret from the sender identity carried in the packet itself.
+pub struct TxAnonReq {
+    pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
+    pub tag: u32,
+    pub data: heapless::Vec<u8, MAX_ANON_REQ_DATA>,
+}
+
 pub struct TxTelemReq {
     pub pub_key: [u8; 32],
     pub tag: u32,
@@ -360,6 +471,7 @@ pub enum TxRequest {
     Login(TxLogin),
     AdminStatusReq(TxAdminStatusReq),
     BinaryReq(TxBinaryReq),
+    AnonReq(TxAnonReq),
     TelemReq(TxTelemReq),
     DiscoveryReq(TxDiscoveryReq),
     ControlData(TxControlData),
@@ -618,6 +730,18 @@ pub static PENDING_ADMIN_STATUS_TAG: PendingTag = PendingTag::new();
 /// Tag of the in-flight generic `CMD_SEND_BINARY_REQ` request. Tag-based
 /// routing delivers the echoed-timestamp response to `BINARY_RESULT_CHANNEL`.
 pub static PENDING_BINARY_REQ_TAG: PendingTag = PendingTag::new();
+
+/// Target of the in-flight login (`CMD_SEND_LOGIN`), keyed like upstream's
+/// `pending_login`: the first 4 pub-key bytes as a LE u32 (see [`login_tag`]).
+/// A Response/Path reply is only a login result when it comes from this
+/// contact; any other unmatched response goes to the app as
+/// `PUSH_CODE_BINARY_RESPONSE` (MeshCore 1.18, e.g. sensor telemetry pushes).
+pub static PENDING_LOGIN: PendingTag = PendingTag::new();
+
+/// [`PENDING_LOGIN`] key for a contact's pub_key.
+pub fn login_tag(pub_key: &[u8; ::meshcore::PUB_KEY_SIZE]) -> u32 {
+    u32::from_le_bytes([pub_key[0], pub_key[1], pub_key[2], pub_key[3]])
+}
 
 /// Fast-path hint for the contact-scan loops in the receive handlers.
 ///
